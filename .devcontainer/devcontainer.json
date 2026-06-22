@@ -1,0 +1,38 @@
+{
+  // Dev container for the Selective Disclosure App.
+  // Reuses the same toolchain-only image as docker/dev.sh (built from the repo
+  // Dockerfile). The repo is bind-mounted at /workspace; you edit and build
+  // entirely inside the container, with full clangd IntelliSense and lldb.
+  "name": "sda-dev",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+
+  // Mirror docker/dev.sh: mount the repo at /workspace and grant the caps that
+  // CCF's sandbox.sh needs to set up its local network (and attach a debugger).
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW",
+    "--cap-add=SYS_PTRACE"
+  ],
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-vscode.cmake-tools"
+      ],
+      "settings": {
+        "clangd.path": "/usr/bin/clangd",
+        "clangd.arguments": [
+          "--background-index",
+          "--header-insertion=never",
+          "--clang-tidy"
+        ]
+      }
+    }
+  }
+}

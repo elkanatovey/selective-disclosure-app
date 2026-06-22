@@ -1,0 +1,154 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
+// App-local common helpers
+#include "default_on_commit.h"
+
+// CCF
+#include "ccf/app_interface.h"
+#include "ccf/common_auth_policies.h"
+#include "ccf/ds/hash.h"
+#include "ccf/http_query.h"
+#include "ccf/json_handler.h"
+#include "ccf/version.h"
+
+#include <charconv>
+#define FMT_HEADER_ONLY
+#include <fmt/format.h>
+
+using namespace std;
+using namespace nlohmann;
+
+namespace selectivedisclosure
+{
+  using RecordsMap = ccf::kv::Map<string, std::vector<uint8_t>>;
+  static constexpr auto PRIVATE_RECORDS = "records";
+
+  class BasicHandlers : public ccf::UserEndpointRegistry
+  {
+  public:
+    BasicHandlers(ccf::AbstractNodeContext& context) :
+      ccf::UserEndpointRegistry(context)
+    {
+      openapi_info.title = "Selective Disclosure App";
+      openapi_info.description =
+        "CCF application exploring COSE tokens and selective disclosure";
+      openapi_info.document_version = "0.0.1";
+    }
+
+    void init_handlers() override
+    {
+      CommonEndpointRegistry::init_handlers();
+
+      auto put = [this](ccf::endpoints::EndpointContext& ctx) {
+        std::string key;
+        std::string error;
+        if (!get_path_param(
+              ctx.rpc_ctx->get_request_path_params(), "key", key, error))
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_NO_CONTENT,
+            ccf::errors::InvalidResourceName,
+            "Missing key");
+          return;
+        }
+
+        auto* records_handle = ctx.tx.template rw<RecordsMap>(PRIVATE_RECORDS);
+        records_handle->put(key, ctx.rpc_ctx->get_request_body());
+        ctx.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
+      };
+      make_endpoint(
+        "/records/{key}", HTTP_PUT, put, {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
+
+      auto blocking_put = [put](ccf::endpoints::EndpointContext& ctx) {
+        ctx.rpc_ctx->set_consensus_committed_function(
+          ccf::samples::default_respond_on_commit);
+        put(ctx);
+      };
+      make_endpoint(
+        "/records/blocking/{key}",
+        HTTP_PUT,
+        blocking_put,
+        {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
+
+      auto get = [this](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+        std::string key;
+        std::string error;
+        if (!get_path_param(
+              ctx.rpc_ctx->get_request_path_params(), "key", key, error))
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_NO_CONTENT,
+            ccf::errors::InvalidResourceName,
+            "Missing key");
+          return;
+        }
+
+        auto* records_handle = ctx.tx.template ro<RecordsMap>(PRIVATE_RECORDS);
+        auto record = records_handle->get(key);
+
+        if (record.has_value())
+        {
+          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+          ctx.rpc_ctx->set_response_header(
+            ccf::http::headers::CONTENT_TYPE,
+            ccf::http::headervalues::contenttype::TEXT);
+          ctx.rpc_ctx->set_response_body(record.value());
+          return;
+        }
+
+        ctx.rpc_ctx->set_error(
+          HTTP_STATUS_NOT_FOUND,
+          ccf::errors::InvalidResourceName,
+          "No such key");
+      };
+      make_read_only_endpoint(
+        "/records/{key}", HTTP_GET, get, {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
+
+      auto blocking_get = [get](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+        ctx.rpc_ctx->set_consensus_committed_function(
+          ccf::samples::default_respond_on_commit);
+        get(ctx);
+      };
+      make_read_only_endpoint(
+        "/records/blocking/{key}",
+        HTTP_GET,
+        blocking_get,
+        {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
+
+      auto post = [](ccf::endpoints::EndpointContext& ctx) {
+        const nlohmann::json body =
+          ccf::parse_json_safe(ctx.rpc_ctx->get_request_body());
+
+        const auto records = body.get<std::map<std::string, std::string>>();
+
+        auto* records_handle = ctx.tx.template rw<RecordsMap>(PRIVATE_RECORDS);
+        for (const auto& [key, value] : records)
+        {
+          const std::vector<uint8_t> value_vec(value.begin(), value.end());
+          records_handle->put(key, value_vec);
+        }
+        ctx.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
+      };
+      make_endpoint("/records", HTTP_POST, post, {ccf::user_cert_auth_policy})
+        .install();
+    }
+  };
+}
+
+namespace ccf
+{
+  std::unique_ptr<ccf::endpoints::EndpointRegistry> make_user_endpoints(
+    ccf::AbstractNodeContext& context)
+  {
+    return std::make_unique<selectivedisclosure::BasicHandlers>(context);
+  }
+}

@@ -1,0 +1,11 @@
+# Build outputs (live in the bind mount, but never commit them)
+/.ccf-install/
+third_party/CCF/build/
+app/build/
+*.o
+*.so
+
+# Sandbox run artifacts (created by sandbox.sh / start_network.py)
+/.venv_ccf_sandbox/
+/workspace/
+/sandbox.log

@@ -1,0 +1,7 @@
+{
+  "recommendations": [
+    "ms-vscode-remote.remote-containers",
+    "llvm-vs-code-extensions.vscode-clangd",
+    "ms-vscode.cmake-tools"
+  ]
+}
