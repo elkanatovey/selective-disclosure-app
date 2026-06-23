@@ -2,6 +2,7 @@
 /.ccf-install/
 third_party/CCF/build/
 app/build/
+app/build-debug/
 *.o
 *.so
 
@@ -9,3 +10,6 @@ app/build/
 /.venv_ccf_sandbox/
 /workspace/
 /sandbox.log
+
+# clangd background index cache
+.cache/
