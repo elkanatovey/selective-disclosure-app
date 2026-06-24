@@ -1,9 +1,9 @@
 # Selective Disclosure App — Design & Plan
 
-A confidential, append-only **bug-report ledger** for MSRC built on CCF (from
+A confidential, append-only **bug-report ledger** built on CCF (from
 source). Reports are registered in a TEE-backed transparency service so that
 their existence/ordering is provable, their contents stay hidden by default, and
-MSFT can **selectively reveal** specific fields to prove a new submission is a
+The Operator can **selectively reveal** specific fields to prove a new submission is a
 **duplicate** — without exposing the rest.
 
 Status: design agreed; implementation starts from the in-repo `basic` sample
@@ -14,7 +14,7 @@ Status: design agreed; implementation starts from the in-repo `basic` sample
 ## 1. Goal / use case
 - Registration is **provable & tamper-evident** via monotonic **seqno** ordering.
 - Report contents are **hidden by default**.
-- MSFT can **selectively disclose** chosen fields to a researcher to **prove a
+- the Operator can **selectively disclose** chosen fields to a researcher to **prove a
   duplicate**, revealing nothing else.
 
 A report is a multi-field object: `report_text` (+ time), optional
@@ -26,11 +26,11 @@ A **report** and a **note/follow-up** are the **same kind of object** — an SD-
 statement with fields + the always-full `parent_report`. They differ only by role:
 - **report** = a *root* statement (original submission, typically by a
   **researcher**; `parent_report` = none/garbage).
-- **note / follow-up** = a *child* statement (later addition by **MSFT**:
+- **note / follow-up** = a *child* statement (later addition by **the Operator**:
   classification, patch, detail; `parent_report` = a real report).
 
 Recommended: **one unified "statement" schema**, with root-vs-child distinguished
-purely by `parent_report`. ("Notes" always means MSFT follow-ups, never the
+purely by `parent_report`. ("Notes" always means the Operator follow-ups, never the
 original report.)
 
 ### TODO: define the statement schema  (todo: define-report-fields)
@@ -46,7 +46,7 @@ SD labels. Prerequisite for Phase 2.
   garbage when there is no real parent.**
 - `parent_report` is **selectively-disclosable and redacted by
   default** — in a stored/redacted token it appears only as a Redacted Claim
-  Hash, leaking nothing (not even *whether* a parent exists). MSFT discloses the
+  Hash, leaking nothing (not even *whether* a parent exists). The Operator discloses the
   linkage only when it wants to prove it.
 - **Principle: a redacted token must leak no metadata.** The token *shape* (which
   claims appear, the count of redacted entries) should be **uniform** across
@@ -56,34 +56,34 @@ SD labels. Prerequisite for Phase 2.
 | Role | Who | Notes |
 |---|---|---|
 | Reporter / Issuer (originals) | **Researchers** | sign and submit reports **directly** to the service |
-| Issuer (follow-ups) | **MSFT** | submits follow-up notes referencing a report |
-| Notary / Transparency service | **CCF service in a TEE** | registers statements, assigns **seqno**, issues **signed receipts**, forwards report to MSFT; trust domain **separate** from MSFT-the-operator |
-| Holder of disclosures | **MSFT (self-custody)**; optional service backup | only the holder of salt/value can disclose |
+| Issuer (follow-ups) | **the Operator** | submits follow-up notes referencing a report |
+| Notary / Transparency service | **CCF service in a TEE** | registers statements, assigns **seqno**, issues **signed receipts**, forwards report to the Operator; trust domain **separate** from the Operator |
+| Holder of disclosures | **the Operator (self-custody)**; optional service backup | only the holder of salt/value can disclose |
 | Verifier | a **researcher** | verifies **offline** |
 
-**Core flow:** reports go **researcher → service → MSFT**, never MSFT → service.
-This blocks MSFT **front-running** (it only sees a report after the service has
-already assigned a seqno). MSFT enriches the record afterward via **follow-ups**
+**Core flow:** reports go **researcher → service → the Operator**, never the Operator → service.
+This blocks the Operator **front-running** (it only sees a report after the service has
+already assigned a seqno). The Operator enriches the record afterward via **follow-ups**
 to make later duplicate-proofs easier.
 
 ## 4. Authentication / registration model (notary)
 The service is a **notary**, not an identity authority.
-- **No issuer key enrollment.** Researcher/MSFT keys are NOT CCF users. The
+- **No issuer key enrollment.** Researcher/Operator keys are NOT CCF users. The
   receipt proves "this blob existed at seqno T," nothing about who signed.
 - **Signature trust is the verifier's job, offline**, against well-known pubkeys
-  (MSFT anchor; reporter's claimed key).
+  (the Operator anchor; reporter's claimed key).
 - Submission-time check = **sanity check**: parse the COSE_Sign1 and verify
   its signature against the key **carried in the statement** (`kid`/`x5chain`).
   Rejects malformed/garbage; does **not** enforce *who*; needs **no registration**.
-- MSFT-follow-up authorization (optional, later): a **config-pinned MSFT pubkey**
+- Operator-follow-up authorization (optional, later): a **config-pinned Operator pubkey**
   (governance-set), or leave to the offline verifier.
 - Optional anti-spam access control (rate-limit/JWT) is orthogonal.
 
 ## 5. Threat model
 **Defended:**
-- **MSFT front-running researchers** — direct researcher→service submission
-  anchors precedence (seqno) before MSFT sees the report.
-- **MSFT backdating / fabricating precedence** — TEE-signed receipt + monotonic
+- **Operator front-running researchers** — direct researcher→service submission
+  anchors precedence (seqno) before the Operator sees the report.
+- **Operator backdating / fabricating precedence** — TEE-signed receipt + monotonic
   seqno; a fabricated "earlier" statement can only get a *current* seqno.
 - **Log tampering** — append-only Merkle ledger, service-signed.
 - **Over-disclosure** — selective disclosure reveals only matching field(s);
@@ -97,11 +97,11 @@ The service is a **notary**, not an identity authority.
 
 **Assumptions / trusted:** TEE attestation holds (only attested code wields the
 service key / sees confidential state — strength is deployment-dependent); issuer
-keys secure; verifiers hold MSFT pubkey + service cert/endorsements as
+keys secure; verifiers hold Operator pubkey + service cert/endorsements as
 out-of-band trust anchors; salts high-entropy.
 
 ## 6. Cryptographic building blocks
-- **COSE_Sign1** — researcher/MSFT-signed statements; verifying key may ride in
+- **COSE_Sign1** — researcher/Operator-signed statements; verifying key may ride in
   the statement.
 - **SD-CWT** (draft-ietf-spice-sd-cwt-08) — salted-hash redaction: disclosable
   fields → Redacted Claim Hashes in the signed payload (`redacted_claim_keys =
@@ -126,7 +126,7 @@ object carrying a standard *combination* of SD-CWT + transparency receipt; no
 single spec names the combo, so no off-the-shelf tool validates it as one unit).
 
 ```
-COSE_Sign1 (issuer-signed: researcher or MSFT):
+COSE_Sign1 (issuer-signed: researcher or the Operator):
   protected   : { alg, sd_alg(SHA-256), typ }
   payload     : { clear fields,
                   redacted_claim_keys:[hashes incl. always-present parent_report] }
@@ -141,7 +141,7 @@ COSE_Sign1 (issuer-signed: researcher or MSFT):
 | `NotesIndex` | public | report id → [follow-up seqnos] |
 | `DisclosuresTable` | private (encrypted) | id → `[salt,value,key]` tuples — **OPTIONAL, feature-flagged backup** |
 
-- MSFT **self-custodies** its follow-up disclosures; `DisclosuresTable` is an
+- the Operator **self-custodies** its follow-up disclosures; `DisclosuresTable` is an
   optional service-side backup (durability/availability), default off.
 - Follow-ups reference parent **by hash** (the always-full field); ordering /
   precedence **by seqno**.
@@ -149,23 +149,23 @@ COSE_Sign1 (issuer-signed: researcher or MSFT):
 ## 9. Endpoints & off-chain tooling
 **Service endpoints:**
 - `submit_report` (researchers, direct): L2 sanity check → store redacted token,
-  set claims digest → return **seqno + receipt**; make content available to MSFT;
+  set claims digest → return **seqno + receipt**; make content available to the Operator;
   (optional) back up disclosures.
-- `append_follow_up` (MSFT): store redacted follow-up (`parent_report` set),
+- `append_follow_up` (the Operator): store redacted follow-up (`parent_report` set),
   set claims digest → return receipt; index under parent.
-- read helpers: `get_report` (MSFT pulls content), `get_receipt`, `list_notes`.
+- read helpers: `get_report` (the Operator pulls content), `get_receipt`, `list_notes`.
 
 **Off-chain (NOT endpoints):**
-- `make_disclosure(id, fields)` — **MSFT-side, offline.** Only the disclosure
+- `make_disclosure(id, fields)` — **Operator-side, offline.** Only the disclosure
   holder can run it; assembles `{ redacted token, receipt, selected disclosures }`.
 - `verify` — **researcher-side, offline.** issuer sig over payload → service sig
   over claims digest → hash-match disclosures.
 
-**Duplicate proof:** MSFT runs `make_disclosure` on the **earlier** matching
+**Duplicate proof:** The Operator runs `make_disclosure` on the **earlier** matching
 follow-up; verifier checks **seqno M < their seqno N** and that the disclosed
 field matches their bug.
 
-OPEN: confidential delivery of report content service→MSFT (encrypt-to-MSFT vs
+OPEN: confidential delivery of report content service→Operator (encrypt-to-Operator vs
 TEE-mediated forwarding) while the public ledger holds only the redacted form.
 
 ## 10. Phased build order (from today's `basic` app)
@@ -180,7 +180,7 @@ TEE-mediated forwarding) while the public ledger holds only the redacted form.
    `NotesIndex`, seqno ordering.
 4. **Disclosure & duplicate proof** — offline `make_disclosure` + `verify`;
    end-to-end demo.
-5. **(optional) hardening** — service→MSFT delivery mechanism, optional
+5. **(optional) hardening** — service→Operator delivery mechanism, optional
    `DisclosuresTable` backup, redact linkage, config-pinned issuer authorization,
    anti-spam controls, KBT for external subjects.
 
@@ -189,5 +189,5 @@ TEE-mediated forwarding) while the public ledger holds only the redacted form.
 - RESOLVED: `parent_report` is redacted by default + always present (no metadata leak).
 - Principle: redacted tokens leak no metadata; keep token shape uniform.
 - "Operator can't read confidential state" is deployment/attestation-dependent.
-- OPEN: confidential report delivery service→MSFT.
+- OPEN: confidential report delivery service→Operator.
 - Each layer is standard; only the embedded *combination* is non-standard.
