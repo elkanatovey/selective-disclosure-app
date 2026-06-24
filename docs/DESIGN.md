@@ -44,7 +44,7 @@ SD labels. Prerequisite for Phase 2.
 - Multi-field object; one field is **`parent_report`**.
 - **`parent_report` is mandatory and constant-shape — always present, padded with
   garbage when there is no real parent.**
-- RESOLVED: `parent_report` is **selectively-disclosable and redacted by
+- `parent_report` is **selectively-disclosable and redacted by
   default** — in a stored/redacted token it appears only as a Redacted Claim
   Hash, leaking nothing (not even *whether* a parent exists). MSFT discloses the
   linkage only when it wants to prove it.
@@ -72,12 +72,9 @@ The service is a **notary**, not an identity authority.
   receipt proves "this blob existed at seqno T," nothing about who signed.
 - **Signature trust is the verifier's job, offline**, against well-known pubkeys
   (MSFT anchor; reporter's claimed key).
-- Submission-time check = **L2 sanity check**: parse the COSE_Sign1 and verify
+- Submission-time check = **sanity check**: parse the COSE_Sign1 and verify
   its signature against the key **carried in the statement** (`kid`/`x5chain`).
   Rejects malformed/garbage; does **not** enforce *who*; needs **no registration**.
-  (L1 = structure only; L3 = authorized-signer via root cert / governance-set
-  allow-list / config-pinned key — only if/when we want "only X may sign";
-  not user enrollment.)
 - MSFT-follow-up authorization (optional, later): a **config-pinned MSFT pubkey**
   (governance-set), or leave to the offline verifier.
 - Optional anti-spam access control (rate-limit/JWT) is orthogonal.
@@ -102,10 +99,6 @@ The service is a **notary**, not an identity authority.
 service key / sees confidential state — strength is deployment-dependent); issuer
 keys secure; verifiers hold MSFT pubkey + service cert/endorsements as
 out-of-band trust anchors; salts high-entropy.
-
-**Out of scope (now):** arbitrary external issuers beyond researchers + MSFT;
-SD-CWT holder key-binding (KBT) — dropped, receipt provides binding; full graph
-anonymity beyond linkage-existence masking.
 
 ## 6. Cryptographic building blocks
 - **COSE_Sign1** — researcher/MSFT-signed statements; verifying key may ride in
@@ -179,7 +172,7 @@ TEE-mediated forwarding) while the public ledger holds only the redacted form.
 0. **Define the statement schema** (todo: define-report-fields) — unified
    report/note fields, clear vs SD per field, always-full `parent_report`.
    Prerequisite for Phase 2.
-1. **COSE submit + receipt** — researcher-direct submission; L2 check; store the
+1. **COSE submit + receipt** — researcher-direct submission; check not malformed; store the
    signed statement (blob); bind claims digest; return a receipt. (Transparency
    core; minimal selective disclosure.)
 2. **SD-CWT redaction** — build/parse redacted payload + disclosures.
