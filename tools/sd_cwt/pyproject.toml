@@ -9,7 +9,9 @@ description = "Minimal Selective Disclosure CBOR Web Token (SD-CWT) — custom p
 requires-python = ">=3.10"
 dependencies = [
     "pycose>=1.1.0",
-    "cbor2>=5.6",
+    # pycose 1.1.0 needs cbor2 to decode tag values as lists; cbor2 >= 5.6
+    # returns tuples and breaks pycose's decode. Pin to a compatible release.
+    "cbor2>=5.4.6,<5.6",
 ]
 
 [project.optional-dependencies]
