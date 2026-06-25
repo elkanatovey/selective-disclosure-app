@@ -1,23 +1,25 @@
 """Minimal Selective Disclosure CBOR Web Token (SD-CWT) — custom profile.
 
-Based on draft-ietf-spice-sd-cwt-08, implementing only the subset we need.
+Based on draft-ietf-spice-sd-cwt-08, covering the subset used by this project.
 
 Implemented:
   * COSE_Sign1 issuer-signed CWT (via pycose).
-  * Map-entry redaction      -> Redacted Claim Hash in `redacted_claim_keys`
-                                (CBOR simple(59)).
-  * Array-element redaction  -> Redacted Claim Hash wrapped in CBOR tag 60.
-  * Disclosures `[salt, value, key]` (map) / `[salt, value]` (array element) in
-    the unprotected header (`sd_claims`, label 17).
-  * Hash-alg agility driven by the protected `sd_alg` header (SHA-256/384/512).
-  * Decoy padding via `pad_to=N` (uniform token shape).
-  * Nesting/recursion (designed for; flat first).
+  * Flat (top-level) map-entry redaction: Redacted Claim Hash in
+    `redacted_claim_keys` (CBOR simple(59)); disclosures `[salt, value, key]`
+    in the unprotected header (`sd_claims`, label 17).
+  * Hash-algorithm agility driven by the protected `sd_alg` header
+    (SHA-256/384/512).
+  * Decoy padding via `pad_to=N` for a uniform token shape.
 
-Deliberately omitted:
-  * Key Binding Token / `cnf` (the transparency-service receipt replaces it).
+Not implemented:
+  * Array-element redaction (CBOR tag 60).
+  * Nested / recursive redaction.
+
+Out of scope by design:
+  * Key Binding Token / `cnf` (the transparency-service receipt covers it).
   * Temporal (`exp`/`nbf`) enforcement (time comes from the ledger receipt/seqno).
 
-Security: ALL cryptographic randomness (salts, decoys) uses a CSPRNG (`secrets`).
+Security: all cryptographic randomness (salts, decoys) uses a CSPRNG (`secrets`).
 """
 
 from __future__ import annotations

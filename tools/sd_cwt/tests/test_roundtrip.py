@@ -1,8 +1,5 @@
-"""Round-trip tests for sd_cwt (TDD).
-
-These define the intended behaviour of the API before it is implemented, so
-they currently FAIL (the core functions raise NotImplementedError). Implement
-`issue`/`present`/`verify`/`validate` to turn them green.
+"""Round-trip tests for the flat (top-level) map redaction path:
+issue -> present -> verify -> validate.
 """
 
 import pytest
@@ -52,13 +49,13 @@ def test_redacted_token_hides_values_before_disclosure(signer):
     assert b"RCE" not in token
 
 
-def test_decoy_padding_fixes_redacted_slot_count(signer):
+def test_decoy_padding_keeps_token_verifiable(signer):
+    # Decoy count is asserted precisely in test_features; here just confirm a
+    # padded token still verifies and discloses correctly.
     claims = {1: "iss", 501: "RCE"}
 
-    token, _ = sd_cwt.issue(claims, redact={501}, signer=signer, pad_to=8)
-    v = sd_cwt.verify(token, signer)
+    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, pad_to=8)
+    presented = sd_cwt.present(token, discs)
+    out = sd_cwt.validate(presented, signer)
 
-    # With pad_to=8 the redacted_claim_keys list should hold 8 digests
-    # (1 real + 7 decoys), regardless of how many claims are really redacted.
-    # Exact assertion to be refined once the payload accessor exists.
-    assert v is not None
+    assert out.disclosed[501] == "RCE"

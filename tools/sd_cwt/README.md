@@ -5,7 +5,7 @@ implementation (custom profile of
 [draft-ietf-spice-sd-cwt-08](https://datatracker.ietf.org/doc/draft-ietf-spice-sd-cwt/)),
 wrapping [`pycose`](https://pypi.org/project/pycose/) + `cbor2` + `hashlib`.
 
-It implements only the subset this project needs (see `docs/DESIGN.md` §13):
+It implements the subset of SD-CWT used by this project (see `docs/DESIGN.md` §13):
 map + array-element redaction, disclosures in the unprotected header, hash-alg
 agility via the `sd_alg` header, decoy padding, and CSPRNG randomness. Key
 Binding (KBT/`cnf`) and temporal (`exp`/`nbf`) enforcement are deliberately out
