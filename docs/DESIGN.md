@@ -111,9 +111,12 @@ out-of-band trust anchors; salts high-entropy.
 - **CCF receipt** — service-signed inclusion proof binding the **claims digest**;
   offline-verifiable with the service cert.
 - **SHA-256** + **CBOR**.
-- Already present in the built CCF: COSE sign/verify, `ccf::cose::edit::
-  set_unprotected_header`, CBOR (`libevercbor`), SHA-256. CCF-source modification
-  is **last resort**.
+- Present in the built CCF (call directly): COSE sign/verify, `ccf::cose::edit::
+  set_unprotected_header`, receipt APIs (`describe_merkle_proof_v1`,
+  `describe_cose_signature_v1`, `build_receipt_for_committed_tx`), SHA-256.
+- **CBOR encode/decode is NOT exposed by CCF** for general use — we vendor
+  **QCBOR** via CMake `FetchContent` (as SCITT does) to build/parse token bytes.
+- CCF-source modification is **last resort**.
 
 ## 7. The disclosure artifact
 Prefer **(b) separate standard bundle**: hand the verifier three standard
@@ -169,18 +172,26 @@ OPEN: confidential delivery of report content service→Operator (encrypt-to-Ope
 TEE-mediated forwarding) while the public ledger holds only the redacted form.
 
 ## 10. Phased build order (from today's `basic` app)
+**Build the off-chain token layer first, then the on-chain service on top.**
+Token creation (CBOR/COSE/SD-CWT) is a prerequisite layer; receipts and seqno
+are chain logic that *consumes* those tokens.
+
 0. **Define the statement schema** (todo: define-report-fields) — unified
-   report/note fields, clear vs SD per field, always-full `parent_report`.
-   Prerequisite for Phase 2.
-1. **COSE submit + receipt** — researcher-direct submission; check not malformed; store the
-   signed statement (blob); bind claims digest; return a receipt. (Transparency
-   core; minimal selective disclosure.)
-2. **SD-CWT redaction** — build/parse redacted payload + disclosures.
-3. **Follow-ups & linkage** — `append_follow_up`, always-full `parent_report`,
+   report/note fields, clear vs SD per field, redacted-always-present
+   `parent_report`. Prerequisite for everything.
+1. **Off-chain: build + sign a plain CWT** — schema-valid CBOR claims set wrapped
+   in COSE_Sign1; verify round-trip. Standalone lib + CLI + unit tests, no chain.
+   (Nails the QCBOR + COSE + signing pipeline.)
+2. **Off-chain: SD-CWT redaction** — add salts / disclosures / Redacted Claim
+   Hashes; round-trip: build → redact → disclose subset → verify. Still no chain.
+3. **On-chain: submit + receipt** — `submit_report` consumes a token: sanity
+   check, store the blob, bind claims digest, return **seqno + receipt**.
+   (Receipt/seqno are chain logic layered on top of steps 1–2.)
+4. **Follow-ups & linkage** — `append_follow_up`, redacted `parent_report`,
    `NotesIndex`, seqno ordering.
-4. **Disclosure & duplicate proof** — offline `make_disclosure` + `verify`;
+5. **Disclosure & duplicate proof** — offline `make_disclosure` + `verify`;
    end-to-end demo.
-5. **(optional) hardening** — service→Operator delivery mechanism, optional
+6. **(optional) hardening** — service→Operator delivery mechanism, optional
    `DisclosuresTable` backup, redact linkage, config-pinned issuer authorization,
    anti-spam controls, KBT for external subjects.
 
@@ -191,3 +202,38 @@ TEE-mediated forwarding) while the public ledger holds only the redacted form.
 - "Operator can't read confidential state" is deployment/attestation-dependent.
 - OPEN: confidential report delivery service→Operator.
 - Each layer is standard; only the embedded *combination* is non-standard.
+
+## 12. Implementation: reuse map & layering
+**Two layers, built in order:**
+1. **Off-chain token layer (build first):** create + sign + redact + verify the
+   COSE_Sign1 / SD-CWT tokens. Pure client-side crypto (CBOR + COSE + SHA-256),
+   no chain — fast unit-test iteration.
+2. **On-chain service layer (on top):** registration, **seqno**, **receipts**,
+   storage — chain logic that *consumes* tokens from layer 1. Token creation is
+   therefore a **prerequisite** to receipt generation.
+
+**Reuse from CCF (call directly, already installed):**
+- `ccf::cose::edit::set_unprotected_header` (+ `desc::Value/Empty`, `pos::AtKey`)
+- receipt APIs: `describe_merkle_proof_v1`, `describe_cose_signature_v1`,
+  `build_receipt_for_committed_tx`
+- COSE verify, SHA-256, KV (`Map`/`Value`/`RawCopySerialisedValue`), seqno indexing.
+
+**Reuse from SCITT (copy & adapt into `app/`, Apache-2.0):**
+- `cbor.h` (QCBOR helpers) — ~as-is
+- `cose.h` (COSE_Sign1 decode, header/COSE_Key parse, hash) — strip TSS/DID bits
+- `get_cose_receipt()` (CCF receipt → COSE receipt) — directly
+- register / local-commit flow → template for `submit_report`
+- `historical_queries_adapter.h` + `SeqnosForValue` indexing → seqno lookup
+- the QCBOR `FetchContent` block in `app/CMakeLists.txt`
+- optional: `configurable_auth.h` (empty/JWT) if we add access control
+
+**Not reused:** `verifier.h` (did:x509 / JWKS) → replaced by a ~50-line
+self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
+
+**New code (the novel parts):**
+- `sd_cwt` library — redaction core (salts, disclosures, Redacted Claim Hashes,
+  `redacted_claim_keys` / tag 60). Built as a **shared library** that compiles
+  into both a standalone CLI + unit tests **and** the CCF app.
+- statement schema; `make_disclosure` / `verify` off-chain tooling.
+
+**Dependency:** vendor **QCBOR** via CMake `FetchContent`.
