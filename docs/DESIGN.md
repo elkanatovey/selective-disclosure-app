@@ -237,3 +237,39 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
 - statement schema; `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
+
+## 13. Off-chain token tooling: `sd_cwt` (Python)
+**Decision:** the off-chain token tooling (issue/sign/redact/present/verify/validate)
+is **Python**, wrapping **pycose** (as SCITT's `pyscitt` does, `pycose==1.1.0`) +
+`cbor2` + `hashlib`. The in-TEE C++ app only does **verify + store** (reuse CCF's
+`make_cose_verifier_from_key`). Token *creation/redaction* is client-side, matching
+SCITT's "sign client-side, verify in C++" split.
+
+**`sd_cwt` is our own minimal, domain-agnostic package** (in-repo at `tools/sd_cwt/`,
+src-layout, own `pytest` suite). It operates on arbitrary CBOR claims; the
+report/note schema + `parent_report` rules live in the app/issuer layer on top.
+
+**Implemented subset (our custom profile):**
+- COSE_Sign1 issuer-signed CWT via pycose.
+- **Map-entry** redaction (`redacted_claim_keys` = `simple(59)`) **and**
+  **array-element** redaction (tag `60`).
+- Disclosures `[salt,value,key]` / `[salt,value]` in the unprotected header
+  (`sd_claims`, label 17).
+- **Hash-alg agility** driven by the protected `sd_alg` header (SHA-256/384/512;
+  default SHA-256) — `validate` reads `sd_alg` from the header.
+- **Decoy padding:** `issue(..., pad_to=N)` pads the redacted-slot count to N with
+  random decoy digests → supports the uniform-token-shape principle.
+- **Nesting/recursion:** design for it; implement flat first, then recursive
+  (ancestor-disclosure rule).
+- **CSPRNG for all crypto randomness** (salts, decoys) via `secrets`/`os.urandom`.
+
+**Deliberately omitted:** KBT / `cnf` key binding (receipt replaces it); temporal
+(`exp`/`nbf`) enforcement (time comes from the ledger receipt/seqno).
+
+**API (what tests target):**
+```
+issue(claims, redact, signer, *, sd_alg=SHA256, pad_to=None) -> (token, [Disclosure])
+present(token, selected: [Disclosure])                       -> token
+verify(token, pubkey)                                        -> VerifiedToken
+validate(token, pubkey)                                      -> ValidatedClaims{clear, disclosed}
+```

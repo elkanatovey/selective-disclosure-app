@@ -13,3 +13,10 @@ app/build-debug/
 
 # clangd background index cache
 .cache/
+
+# Python tooling
+**/.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
