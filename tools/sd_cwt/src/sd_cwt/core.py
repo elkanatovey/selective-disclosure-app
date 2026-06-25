@@ -39,13 +39,13 @@ from pycose.messages import CoseMessage, Sign1Message
 
 # --- COSE / CWT / SD-CWT labels (draft-ietf-spice-sd-cwt-08) ---
 TYP_LABEL = 16
-SD_CLAIMS_LABEL = 17          # unprotected header: array of disclosures
-SD_ALG_LABEL = 170           # protected header: redaction hash algorithm
-SD_CWT_TYP = 293             # application/sd-cwt
-REDACTED_CLAIM_KEYS = 59     # CBOR simple(59): marks redacted map keys
-REDACTED_ELEMENT_TAG = 60    # CBOR tag: marks a redacted array element
+SD_CLAIMS_LABEL = 17  # unprotected header: array of disclosures
+SD_ALG_LABEL = 170  # protected header: redaction hash algorithm
+SD_CWT_TYP = 293  # application/sd-cwt
+REDACTED_CLAIM_KEYS = 59  # CBOR simple(59): marks redacted map keys
+REDACTED_ELEMENT_TAG = 60  # CBOR tag: marks a redacted array element
 
-SALT_LEN = 16                # 128-bit salt, CSPRNG
+SALT_LEN = 16  # 128-bit salt, CSPRNG
 
 
 class HashAlg(IntEnum):
@@ -66,8 +66,8 @@ class Disclosure:
     salt: bytes
     value: Any
     key: Optional[ClaimKey] = None
-    encoded: bytes = b""      # cbor([salt, value, key]) or cbor([salt, value])
-    digest: bytes = b""       # sd_alg(encoded)
+    encoded: bytes = b""  # cbor([salt, value, key]) or cbor([salt, value])
+    digest: bytes = b""  # sd_alg(encoded)
 
 
 @dataclass
@@ -182,6 +182,8 @@ def present(token: bytes, selected: list[Disclosure]) -> bytes:
 def verify(token: bytes, pubkey: Any) -> VerifiedToken:
     """Verify the COSE_Sign1 signature; return header + redacted payload."""
     msg = CoseMessage.decode(token)
+    if not isinstance(msg, Sign1Message):
+        raise ValueError("not a COSE_Sign1 message")
     msg.key = pubkey
     if not msg.verify_signature():
         raise ValueError("COSE signature verification failed")

@@ -16,9 +16,17 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
+lint = ["black>=24", "isort>=5", "mypy>=1.8", "pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.isort]
+profile = "black"
+known_first_party = ["sd_cwt"]
+
+[tool.mypy]
+ignore_missing_imports = true
