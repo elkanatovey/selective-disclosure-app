@@ -23,6 +23,6 @@ else
   black --check src tests scripts
   isort --check src tests scripts
 fi
-python scripts/notice_check.py
+python "$(git rev-parse --show-toplevel)/scripts/notice-check.py"
 mypy src/sd_cwt
 pytest -q
