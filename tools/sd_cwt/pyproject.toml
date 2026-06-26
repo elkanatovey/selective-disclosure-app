@@ -30,3 +30,11 @@ known_first_party = ["sd_cwt"]
 
 [tool.mypy]
 ignore_missing_imports = true
+
+# cbor2/pycose decode to dynamic CBOR; treat them as untyped (as SCITT's
+# pyscitt does) so decoded values are Any, avoiding cast() noise. Safety comes
+# from runtime checks, not from the libraries' partial type hints.
+[[tool.mypy.overrides]]
+module = ["cbor2", "cbor2.*", "pycose", "pycose.*"]
+follow_imports = "skip"
+ignore_missing_imports = true

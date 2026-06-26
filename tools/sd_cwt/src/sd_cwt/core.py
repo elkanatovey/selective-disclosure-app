@@ -113,6 +113,11 @@ def _sign_alg(signer: Any):
     return _CRV_ALG.get(getattr(signer, "crv", P256), Es256)
 
 
+def _cose_array(token: bytes) -> list:
+    """Decode a tagged COSE_Sign1 into its [protected, unprotected, payload, sig] list."""
+    return list(cbor2.loads(token).value)
+
+
 def issue(
     claims: dict[ClaimKey, Any],
     redact: set[ClaimKey],
@@ -188,7 +193,7 @@ def verify(token: bytes, pubkey: Any) -> VerifiedToken:
     if not msg.verify_signature():
         raise ValueError("COSE signature verification failed")
 
-    arr = cbor2.loads(token).value
+    arr = _cose_array(token)
     protected = cbor2.loads(arr[0]) if arr[0] else {}
     sd_alg = HashAlg(protected.get(SD_ALG_LABEL, int(HashAlg.SHA_256)))
     payload = cbor2.loads(msg.payload)
@@ -199,7 +204,7 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
     """Verify, then hash-match presented disclosures into clear/disclosed claims."""
     verified = verify(token, pubkey)
 
-    arr = cbor2.loads(token).value
+    arr = _cose_array(token)
     uhdr = arr[1] if len(arr) > 1 and arr[1] else {}
     presented = uhdr.get(SD_CLAIMS_LABEL, [])
 
