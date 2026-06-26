@@ -1,52 +1,64 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Check that source files under this package carry the required notice header.
+"""Check that source files in the sd_cwt package carry the required notice header.
 
-Scoped to the sd_cwt package so it does not affect the CCF-derived scaffold
-files elsewhere in the repo (which keep their original Apache-2.0 headers).
+Enumerates tracked files with ``git ls-files`` (as CCF/SCITT do), scoped to this
+package so the CCF-derived scaffold elsewhere keeps its own Apache-2.0 headers.
 """
 
 import os
+import subprocess
 import sys
 
 NOTICE_LINES = [
     "Copyright (c) Microsoft Corporation.",
     "Licensed under the MIT License.",
 ]
-_HEADER = "\n".join("# " + line for line in NOTICE_LINES)
+HASH_PREFIXED = "\n".join("# " + line for line in NOTICE_LINES)
+
+# Accepted header forms per file type (a shebang may precede the notice).
+PREFIX_BY_SUFFIX = {
+    ".py": [HASH_PREFIXED],
+    ".sh": [HASH_PREFIXED],
+}
 
 PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXCLUDE_DIRS = {".venv", "__pycache__", ".mypy_cache", ".pytest_cache", "build"}
-SUFFIXES = (".py", ".sh")
 
 
-def has_notice(path: str) -> bool:
+def has_notice(path, prefixes):
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
     if text.startswith("#!"):  # allow a shebang before the notice
         text = text.split("\n", 1)[1] if "\n" in text else ""
-    return text.startswith(_HEADER)
+    return any(text.startswith(p) for p in prefixes)
 
 
-def main() -> int:
+def tracked_files():
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=PKG_ROOT, capture_output=True, check=True
+    ).stdout.decode()
+    return out.splitlines()
+
+
+def main():
     missing = []
-    for dirpath, dirnames, filenames in os.walk(PKG_ROOT):
-        dirnames[:] = [
-            d for d in dirnames if d not in EXCLUDE_DIRS and not d.endswith(".egg-info")
-        ]
-        for name in filenames:
-            if name.endswith(SUFFIXES):
-                path = os.path.join(dirpath, name)
-                if not has_notice(path):
-                    missing.append(os.path.relpath(path, PKG_ROOT))
-    if missing:
-        print("Missing notice header in:")
-        for m in sorted(missing):
-            print("  " + m)
-        return 1
-    print("All files carry the notice header.")
-    return 0
+    count = 0
+    for rel in tracked_files():
+        prefixes = PREFIX_BY_SUFFIX.get(os.path.splitext(rel)[1])
+        if not prefixes:
+            continue
+        path = os.path.join(PKG_ROOT, rel)
+        if not os.path.isfile(path):  # ignore moved/deleted entries
+            continue
+        count += 1
+        if not has_notice(path, prefixes):
+            missing.append(rel)
+
+    print(f"Checked {count} files for notice headers.")
+    for rel in sorted(missing):
+        print(f"  missing: {rel}")
+    return 1 if missing else 0
 
 
 if __name__ == "__main__":
