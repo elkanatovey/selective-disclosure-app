@@ -19,8 +19,8 @@ of scope — the transparency-service receipt/seqno covers those concerns.
 ```bash
 cd tools/sd_cwt
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e .[test]
-pytest -q
+pip install -e .[lint]      # pycose + cbor2 (pinned) + pytest + black/isort/mypy
+./scripts/checks.sh         # format + types + tests (pass -f to auto-fix)
 ```
 
 ## API
