@@ -42,6 +42,8 @@ jobs:
         run: isort --check src tests
       - name: mypy
         run: mypy src/sd_cwt
+      - name: License headers
+        run: python scripts/notice_check.py
 
   test:
     name: Tests (pytest)

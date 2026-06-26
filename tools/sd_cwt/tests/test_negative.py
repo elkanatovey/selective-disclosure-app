@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Negative tests: verification must reject tampered or malformed tokens."""
 
 import cbor2

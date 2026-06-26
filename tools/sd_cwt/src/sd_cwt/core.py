@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Minimal Selective Disclosure CBOR Web Token (SD-CWT) — custom profile.
 
 Based on draft-ietf-spice-sd-cwt-08, covering the subset used by this project.

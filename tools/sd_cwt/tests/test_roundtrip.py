@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Round-trip tests for the flat (top-level) map redaction path:
 issue -> present -> verify -> validate.
 """

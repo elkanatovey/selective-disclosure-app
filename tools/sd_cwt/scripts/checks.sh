@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Run the sd_cwt format / type / test checks (mirrors the CI jobs).
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Run the sd_cwt format / type / notice / test checks (mirrors the CI jobs).
 # Pass -f to auto-fix formatting and import order.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,11 +17,12 @@ FIX=0
 [ "${1:-}" = "-f" ] && FIX=1
 
 if [ "$FIX" -ne 0 ]; then
-  black src tests
-  isort src tests
+  black src tests scripts
+  isort src tests scripts
 else
-  black --check src tests
-  isort --check src tests
+  black --check src tests scripts
+  isort --check src tests scripts
 fi
+python scripts/notice_check.py
 mypy src/sd_cwt
 pytest -q

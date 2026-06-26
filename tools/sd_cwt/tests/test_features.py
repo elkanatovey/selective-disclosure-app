@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Feature tests for sd_cwt: hash-alg agility, decoys, tamper rejection,
 and COSE-compatibility (a plain COSE verifier can check the signature)."""
 
