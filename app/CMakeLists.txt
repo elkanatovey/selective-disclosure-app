@@ -1,5 +1,5 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the Apache 2.0 License.
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 
 cmake_minimum_required(VERSION 3.21)
 

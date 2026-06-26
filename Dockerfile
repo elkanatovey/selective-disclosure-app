@@ -1,4 +1,5 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 # Dev image for building CCF (from source) and the selective-disclosure app.
 #
 # This image contains ONLY the toolchain / dependencies. The source code
