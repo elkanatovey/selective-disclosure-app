@@ -10,12 +10,13 @@ Implemented:
   * Flat (top-level) map-entry redaction: Redacted Claim Hash in
     `redacted_claim_keys` (CBOR simple(59)); disclosures `[salt, value, key]`
     in the unprotected header (`sd_claims`, label 17).
+  * Flat array-element redaction: element replaced inline by its Redacted Claim
+    Hash wrapped in CBOR tag 60; disclosures `[salt, value]` (no key).
   * Hash-algorithm agility driven by the protected `sd_alg` header
     (SHA-256/384/512).
   * Decoy padding via `pad_to=N` for a uniform token shape.
 
 Not implemented:
-  * Array-element redaction (CBOR tag 60).
   * Nested / recursive redaction.
 
 Out of scope by design:
@@ -126,15 +127,19 @@ def issue(
     redact: set[ClaimKey],
     signer: Any,
     *,
+    redact_elements: Optional[dict[ClaimKey, set[int]]] = None,
     sd_alg: HashAlg = HashAlg.SHA_256,
     pad_to: Optional[int] = None,
     protected_extra: Optional[dict] = None,
 ) -> tuple[bytes, list[Disclosure]]:
     """Build a redacted SD-CWT and sign it.
 
-    Flat (top-level) map redaction only. Returns (signed COSE_Sign1 token bytes
-    with NO disclosures attached, all generated disclosures).
+    Flat (top-level) redaction. `redact` selects whole map entries; the optional
+    `redact_elements` maps a claim key (whose value is a list) to the set of
+    element indices to redact. Returns (signed COSE_Sign1 token bytes with NO
+    disclosures attached, all generated disclosures).
     """
+    redact_elements = redact_elements or {}
     payload: dict[Any, Any] = {}
     disclosures: list[Disclosure] = []
     digests: list[bytes] = []
@@ -148,6 +153,23 @@ def issue(
                 Disclosure(salt=salt, value=value, key=key, encoded=encoded, digest=dig)
             )
             digests.append(dig)
+        elif key in redact_elements:
+            indices = redact_elements[key]
+            new_list: list[Any] = []
+            for i, elem in enumerate(value):
+                if i in indices:
+                    salt = csprng(SALT_LEN)
+                    encoded = cbor2.dumps([salt, elem])
+                    dig = _digest(sd_alg, encoded)
+                    disclosures.append(
+                        Disclosure(
+                            salt=salt, value=elem, key=None, encoded=encoded, digest=dig
+                        )
+                    )
+                    new_list.append(CBORTag(REDACTED_ELEMENT_TAG, dig))
+                else:
+                    new_list.append(elem)
+            payload[key] = new_list
         else:
             payload[key] = value
 
@@ -204,7 +226,12 @@ def verify(token: bytes, pubkey: Any) -> VerifiedToken:
 
 
 def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
-    """Verify, then hash-match presented disclosures into clear/disclosed claims."""
+    """Verify, then hash-match presented disclosures into clear/disclosed claims.
+
+    Map-entry disclosures (`[salt, value, key]`) populate `disclosed`. Array-
+    element disclosures (`[salt, value]`) are spliced back into their array,
+    which stays under its (clear) key; undisclosed elements are omitted.
+    """
     verified = verify(token, pubkey)
 
     arr = _cose_array(token)
@@ -212,14 +239,51 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
     presented = uhdr.get(SD_CLAIMS_LABEL, [])
 
     redacted_key = CBORSimpleValue(REDACTED_CLAIM_KEYS)
-    redacted = set(verified.payload.get(redacted_key, []))
-    clear = {k: v for k, v in verified.payload.items() if k != redacted_key}
+    redacted_map_hashes = set(verified.payload.get(redacted_key, []))
 
-    disclosed: dict[Any, Any] = {}
+    # Every Redacted Claim Hash carried inline as a tag-60 array element.
+    redacted_elem_hashes: set[bytes] = set()
+    for value in verified.payload.values():
+        if isinstance(value, list):
+            for elem in value:
+                if isinstance(elem, CBORTag) and elem.tag == REDACTED_ELEMENT_TAG:
+                    redacted_elem_hashes.add(elem.value)
+
+    map_disclosed: dict[Any, Any] = {}
+    elem_values: dict[bytes, Any] = {}  # digest -> disclosed element value
     for encoded in presented:
-        if _digest(verified.sd_alg, encoded) not in redacted:
-            raise ValueError("presented disclosure does not match any redacted hash")
-        _salt, value, key = cbor2.loads(encoded)
-        disclosed[key] = value
+        dig = _digest(verified.sd_alg, encoded)
+        decoded = cbor2.loads(encoded)
+        if len(decoded) == 3:
+            _salt, value, key = decoded
+            if dig not in redacted_map_hashes:
+                raise ValueError("disclosure does not match any redacted map key")
+            map_disclosed[key] = value
+        elif len(decoded) == 2:
+            _salt, value = decoded
+            if dig not in redacted_elem_hashes:
+                raise ValueError("disclosure does not match any redacted element")
+            elem_values[dig] = value
+        else:
+            raise ValueError("malformed disclosure")
 
-    return ValidatedClaims(clear=clear, disclosed=disclosed)
+    clear: dict[Any, Any] = {}
+    for key, value in verified.payload.items():
+        if key == redacted_key:
+            continue
+        if isinstance(value, list) and any(
+            isinstance(e, CBORTag) and e.tag == REDACTED_ELEMENT_TAG for e in value
+        ):
+            resolved = []
+            for elem in value:
+                if isinstance(elem, CBORTag) and elem.tag == REDACTED_ELEMENT_TAG:
+                    if elem.value in elem_values:
+                        resolved.append(elem_values[elem.value])
+                    # undisclosed element -> omitted
+                else:
+                    resolved.append(elem)
+            clear[key] = resolved
+        else:
+            clear[key] = value
+
+    return ValidatedClaims(clear=clear, disclosed=map_disclosed)
