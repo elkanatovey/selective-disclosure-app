@@ -17,6 +17,9 @@ Implemented:
     still-redacted child).
   * Hash-algorithm agility driven by the protected `sd_alg` header
     (SHA-256/384/512).
+  * Redacted Claim Hash computed over the `bstr-encoded-salted` disclosure (the
+    CBOR-wrapped byte string, per the CDDL and Appendix G) -- matching every
+    reference-generated example token.
   * Decoy padding via `pad_to=N` for a uniform token shape; each decoy is a
     salt-only disclosure `[salt]` returned to the holder (draft-08 s10).
   * Key Binding Token presentation & verification (`kbt_sign` / `kbt_verify`):
@@ -153,6 +156,20 @@ _CRV_BY_ID = {1: P256, 2: P384, 3: P521}  # COSE EC curve identifiers
 
 def _digest(sd_alg: HashAlg, data: bytes) -> bytes:
     return _HASH[HashAlg(sd_alg)](data).digest()
+
+
+def _disclosure_digest(sd_alg: HashAlg, encoded: bytes) -> bytes:
+    """Redacted Claim Hash = hash of the `bstr-encoded-salted` disclosure.
+
+    draft-08 hashes the disclosure *as it appears on the wire*: the CBOR byte
+    string wrapping the salted array (CDDL `bstr-encoded-salted = bstr .cbor
+    salted-entry`, and the Appendix G matching algorithm hashes that byte
+    string), NOT the bare array. `encoded` is the inner `cbor([salt, value,
+    key])` bytes, so wrap it in a CBOR byte string before hashing. (The lone
+    Figure 8 walkthrough hashes the unwrapped array; every reference-generated
+    example token, and the CDDL, use the wrapped form.)
+    """
+    return _digest(sd_alg, cbor2.dumps(encoded))
 
 
 def _sign_alg(signer: Any):
@@ -325,7 +342,7 @@ def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> 
             if key in direct:
                 salt = csprng(SALT_LEN)
                 encoded = cbor2.dumps([salt, child, key])
-                dig = _digest(sd_alg, encoded)
+                dig = _disclosure_digest(sd_alg, encoded)
                 disclosures.append(
                     Disclosure(
                         salt=salt, value=child, key=key, encoded=encoded, digest=dig
@@ -350,7 +367,7 @@ def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> 
             if i in direct:
                 salt = csprng(SALT_LEN)
                 encoded = cbor2.dumps([salt, child])
-                dig = _digest(sd_alg, encoded)
+                dig = _disclosure_digest(sd_alg, encoded)
                 disclosures.append(
                     Disclosure(
                         salt=salt, value=child, key=None, encoded=encoded, digest=dig
@@ -411,7 +428,7 @@ def issue(
         while len(digests) < pad_to:
             salt = csprng(SALT_LEN)
             encoded = cbor2.dumps([salt])  # decoy: salt-only Salted Disclosed Claim
-            dig = _digest(sd_alg, encoded)
+            dig = _disclosure_digest(sd_alg, encoded)
             disclosures.append(
                 Disclosure(salt=salt, value=None, key=None, encoded=encoded, digest=dig)
             )
@@ -507,7 +524,7 @@ def match_disclosures(
     by_decoy: set[bytes] = set()  # digest of a salt-only decoy disclosure
     for encoded in presented:
         _check_cbor(encoded)  # disclosures are attacker-supplied, unsigned
-        dig = _digest(sd_alg, encoded)
+        dig = _disclosure_digest(sd_alg, encoded)
         decoded = cbor2.loads(encoded)
         if len(decoded) == 3:
             _salt, value, key = decoded

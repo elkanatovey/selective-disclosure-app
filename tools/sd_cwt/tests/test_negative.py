@@ -103,9 +103,14 @@ def _sign(signer, payload: dict, uhdr: dict) -> bytes:
 
 
 def _map_disclosure(value, key):
-    """Return (encoded bstr, sha-256 digest) for a [salt, value, key] disclosure."""
+    """Return (encoded bstr, digest) for a [salt, value, key] disclosure.
+
+    The Redacted Claim Hash is over the `bstr-encoded-salted` form (the CBOR
+    byte string wrapping the array), matching the library and the reference
+    example tokens.
+    """
     encoded = cbor2.dumps([secrets.token_bytes(16), value, key])
-    return encoded, hashlib.sha256(encoded).digest()
+    return encoded, hashlib.sha256(cbor2.dumps(encoded)).digest()
 
 
 def test_validate_rejects_disclosed_key_dup_of_clear_key(signer):
