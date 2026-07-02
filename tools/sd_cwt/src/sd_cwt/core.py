@@ -21,7 +21,8 @@ Implemented:
     salt-only disclosure `[salt]` returned to the holder (draft-08 s10).
   * Key Binding Token presentation & verification (`kbt_sign` / `kbt_verify`):
     holder proof-of-possession over the RFC 8747 `cnf` key, `kcwt` (13) header,
-    `application/kb+cwt` (typ 294), audience and `cnonce` binding (draft-08 s8/s9).
+    `application/kb+cwt` (typ 294), KBT + SD-CWT audience and `cnonce` binding
+    (draft-08 s8/s9).
   * Encoding MUSTs enforced on untrusted input: definite-length only (s5.1),
     finite exp/nbf/iat encodings (s5.2), map-key type/length limits (s5.3),
     duplicate-map-key rejection (s5.4), max nesting depth 16 (s5.5), and
@@ -683,8 +684,9 @@ def kbt_verify(
     Steps: parse the KBT; extract the embedded SD-CWT from the `kcwt` header and
     verify the issuer signature over it; recover the `cnf` key from the SD-CWT
     payload and verify the KBT signature against it (proof of possession); check
-    the audience, time-claim presence, and optional `cnonce`; finally hash-match
-    the presented disclosures into the validated claim set.
+    both the KBT and SD-CWT audiences (s9 step 9), time-claim presence, and
+    optional `cnonce`; finally hash-match the presented disclosures into the
+    validated claim set.
     """
     outer = cbor2.loads(kbt)
     if not isinstance(outer, CBORTag) or not isinstance(outer.value, list):
@@ -726,6 +728,11 @@ def kbt_verify(
         raise ValueError("KBT payload MUST contain iat or cti (draft-08 s8.1)")
     if kbt_payload.get(AUD) != expected_aud:
         raise ValueError("KBT audience does not match the intended verifier")
+    # draft-08 s9 step 9: an SD-CWT audience, if the Issuer set one, MUST also
+    # correspond to the intended recipient (it need not equal the KBT audience).
+    sd_cwt_aud = verified.payload.get(AUD)
+    if sd_cwt_aud is not None and sd_cwt_aud != expected_aud:
+        raise ValueError("SD-CWT audience does not match the intended verifier")
 
     cnonce = kbt_payload.get(CNONCE)
     if expected_cnonce is not None and cnonce != expected_cnonce:

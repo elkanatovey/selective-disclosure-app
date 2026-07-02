@@ -178,3 +178,34 @@ def test_conformant_token_still_validates(signer, holder):
     presented = sd_cwt.present(token, discs)
     out = sd_cwt.validate(presented, signer)
     assert out.disclosed[501] == "RCE"
+
+
+# --- Step 4: SD-CWT audience (draft-08 s9 step 9) --------------------------
+
+
+def test_kbt_rejects_sd_cwt_aud_mismatch(signer, holder):
+    """An Issuer-set SD-CWT audience that isn't the recipient MUST be rejected,
+    even when the KBT audience matches."""
+    claims = {1: "iss", 2: "sub", 3: "https://other.example", 501: "RCE"}
+    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
+    with pytest.raises(ValueError):
+        sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
+
+
+def test_kbt_allows_matching_sd_cwt_aud(signer, holder):
+    """An SD-CWT audience equal to the intended verifier is accepted."""
+    claims = {1: "iss", 2: "sub", 3: AUD, 501: "RCE"}
+    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
+    result = sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
+    assert result.aud == AUD
+
+
+def test_kbt_allows_absent_sd_cwt_aud(signer, holder):
+    """Omitting the SD-CWT audience means 'any verifier' -- no restriction."""
+    claims = {1: "iss", 2: "sub", 501: "RCE"}  # no aud (3) in the payload
+    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
+    result = sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
+    assert result.aud == AUD
