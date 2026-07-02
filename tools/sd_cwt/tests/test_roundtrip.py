@@ -62,3 +62,39 @@ def test_decoy_padding_keeps_token_verifiable(signer):
     out = sd_cwt.validate(presented, signer)
 
     assert out.disclosed[501] == "RCE"
+
+
+def test_match_disclosures_matches_validate_on_trusted_payload(signer):
+    """match_disclosures() (no signature check) matches validate()'s result."""
+    import cbor2
+
+    claims = {1: "iss", 500: "detail", 501: "RCE"}
+    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer)
+    presented = sd_cwt.present(token, discs)
+
+    # Trusted path: verify once to obtain the payload, then match directly.
+    v = sd_cwt.verify(presented, signer)
+    uhdr = list(cbor2.loads(presented).value)[1]
+    disclosures = uhdr[17]  # sd_claims
+
+    direct = sd_cwt.match_disclosures(v.payload, disclosures, sd_alg=v.sd_alg)
+    full = sd_cwt.validate(presented, signer)
+
+    assert direct.clear == full.clear
+    assert direct.disclosed == full.disclosed
+    assert direct.disclosed[500] == "detail"
+    assert direct.disclosed[501] == "RCE"
+
+
+def test_match_disclosures_rejects_unmatched_disclosure(signer):
+    """A disclosure with no matching Redacted Claim Hash is rejected."""
+    import cbor2
+
+    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, redact={501}, signer=signer)
+    presented = sd_cwt.present(token, discs)
+    v = sd_cwt.verify(presented, signer)
+
+    # A well-formed but foreign disclosure that matches nothing in the payload.
+    foreign = cbor2.dumps([b"\x00" * 16, "bogus", 999])
+    with pytest.raises(ValueError):
+        sd_cwt.match_disclosures(v.payload, [foreign], sd_alg=v.sd_alg)

@@ -469,26 +469,28 @@ def verify(token: bytes, pubkey: Any) -> VerifiedToken:
     return VerifiedToken(protected=protected, payload=payload, sd_alg=sd_alg)
 
 
-def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
-    """Verify, then hash-match presented disclosures into clear/disclosed claims.
+def match_disclosures(
+    payload: Any,
+    presented: list,
+    *,
+    sd_alg: HashAlg = HashAlg.SHA_256,
+) -> ValidatedClaims:
+    """Hash-match presented disclosures against an already-trusted claims payload.
 
-    Resolution is recursive: a disclosed map entry or array element may itself
-    contain further redactions, resolved by additional disclosures (the
-    ancestor-disclosure rule). Top-level map disclosures populate `disclosed`;
-    everything else (clear claims, arrays, nested maps) is resolved under
-    `clear`. Undisclosed redactions are omitted, and any presented disclosure
-    that matches no reachable Redacted Claim Hash is rejected. Raw Redacted
-    Claim Hashes (the `simple(59)` array and `tag(60)` wrappers) are never
-    surfaced in the returned claims — only resolved values appear.
+    This is the disclosure-resolution core of `validate()` with NO signature
+    verification. Call it directly only when the Issuer signature over `payload`
+    is already trusted -- for example, `payload` came from a prior `verify()`, or
+    the token was read from a trusted store. Otherwise use `validate()`, which
+    verifies the COSE signature first.
+
+    `payload` is the decoded (still-redacted) CWT claims map; `presented` is the
+    list of bstr-encoded Salted Disclosed Claims (the `sd_claims` header value).
+    Resolution is recursive and enforces the same MUSTs as `validate()`: every
+    presented disclosure must match a reachable Redacted Claim Hash, and a
+    disclosed key must not duplicate another key at the same level (s9 step 8).
+    Top-level map disclosures populate `disclosed`; everything else resolves
+    under `clear`. Raw Redacted Claim Hashes are never surfaced.
     """
-    verified = verify(token, pubkey)
-
-    arr = _cose_array(token)
-    uhdr = arr[1] if len(arr) > 1 and arr[1] else {}
-    if SD_CLAIMS_LABEL in uhdr and not uhdr[SD_CLAIMS_LABEL]:
-        raise ValueError("empty sd_claims header is invalid (draft-08 s9 step 2)")
-    presented = uhdr.get(SD_CLAIMS_LABEL, [])
-
     redacted_key = CBORSimpleValue(REDACTED_CLAIM_KEYS)
 
     by_map: dict[bytes, tuple] = {}  # digest -> (key, value)
@@ -496,7 +498,7 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
     by_decoy: set[bytes] = set()  # digest of a salt-only decoy disclosure
     for encoded in presented:
         _check_cbor(encoded)  # disclosures are attacker-supplied, unsigned
-        dig = _digest(verified.sd_alg, encoded)
+        dig = _digest(sd_alg, encoded)
         decoded = cbor2.loads(encoded)
         if len(decoded) == 3:
             _salt, value, key = decoded
@@ -552,7 +554,7 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
             return out_list
         return node
 
-    full = resolve(verified.payload)
+    full = resolve(payload)
 
     unconsumed = (set(by_map) | set(by_elem) | by_decoy) - consumed
     if unconsumed:
@@ -560,13 +562,37 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
 
     # Top-level split: disclosed = top-level map disclosures; clear = the rest.
     disclosed: dict[Any, Any] = {}
-    for dig in verified.payload.get(redacted_key, []):
+    for dig in payload.get(redacted_key, []):
         if dig in by_map:
             key, _value = by_map[dig]
             disclosed[key] = full[key]
     clear = {k: v for k, v in full.items() if k not in disclosed}
 
     return ValidatedClaims(clear=clear, disclosed=disclosed)
+
+
+def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
+    """Verify, then hash-match presented disclosures into clear/disclosed claims.
+
+    Resolution is recursive: a disclosed map entry or array element may itself
+    contain further redactions, resolved by additional disclosures (the
+    ancestor-disclosure rule). Top-level map disclosures populate `disclosed`;
+    everything else (clear claims, arrays, nested maps) is resolved under
+    `clear`. Undisclosed redactions are omitted, and any presented disclosure
+    that matches no reachable Redacted Claim Hash is rejected. Raw Redacted
+    Claim Hashes (the `simple(59)` array and `tag(60)` wrappers) are never
+    surfaced in the returned claims — only resolved values appear. The
+    signature-free hash-matching core is exposed as `match_disclosures`.
+    """
+    verified = verify(token, pubkey)
+
+    arr = _cose_array(token)
+    uhdr = arr[1] if len(arr) > 1 and arr[1] else {}
+    if SD_CLAIMS_LABEL in uhdr and not uhdr[SD_CLAIMS_LABEL]:
+        raise ValueError("empty sd_claims header is invalid (draft-08 s9 step 2)")
+    presented = uhdr.get(SD_CLAIMS_LABEL, [])
+
+    return match_disclosures(verified.payload, presented, sd_alg=verified.sd_alg)
 
 
 def kbt_sign(
