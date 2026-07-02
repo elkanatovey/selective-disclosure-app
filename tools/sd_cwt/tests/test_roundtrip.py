@@ -98,3 +98,41 @@ def test_match_disclosures_rejects_unmatched_disclosure(signer):
     foreign = cbor2.dumps([b"\x00" * 16, "bogus", 999])
     with pytest.raises(ValueError):
         sd_cwt.match_disclosures(v.payload, [foreign], sd_alg=v.sd_alg)
+
+
+def test_validate_trusted_matches_validate(signer):
+    """validate_trusted() (no signature check, no key) matches validate()."""
+    claims = {1: "iss", 500: "detail", 501: "RCE"}
+    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer)
+    presented = sd_cwt.present(token, discs)
+
+    trusted = sd_cwt.validate_trusted(presented)  # note: no key passed
+    full = sd_cwt.validate(presented, signer)
+
+    assert trusted.clear == full.clear
+    assert trusted.disclosed == full.disclosed
+    assert trusted.disclosed[500] == "detail"
+
+
+def test_validate_trusted_rejects_foreign_disclosure(signer):
+    """A presented disclosure matching no Redacted Claim Hash is still rejected."""
+    import cbor2
+
+    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, redact={501}, signer=signer)
+    presented = sd_cwt.present(token, discs)
+    arr = list(cbor2.loads(presented).value)
+    arr[1] = {17: [cbor2.dumps([b"\x00" * 16, "bogus", 999])]}  # swap disclosures
+    forged = cbor2.dumps(cbor2.CBORTag(18, arr))
+    with pytest.raises(ValueError):
+        sd_cwt.validate_trusted(forged)
+
+
+def test_validate_trusted_still_enforces_encoding_musts():
+    """Encoding MUSTs (e.g. finite dates) fire even without a signature check."""
+    import cbor2
+
+    protected = cbor2.dumps({1: -7, 170: -16})
+    payload = cbor2.dumps({1: "iss", 6: float("nan")})  # NaN iat (draft-08 s5.2)
+    forged = cbor2.dumps(cbor2.CBORTag(18, [protected, {}, payload, b""]))
+    with pytest.raises(ValueError):
+        sd_cwt.validate_trusted(forged)

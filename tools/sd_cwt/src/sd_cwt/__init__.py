@@ -16,6 +16,7 @@ from .core import (
     match_disclosures,
     present,
     validate,
+    validate_trusted,
     verify,
 )
 
@@ -32,5 +33,6 @@ __all__ = [
     "match_disclosures",
     "present",
     "validate",
+    "validate_trusted",
     "verify",
 ]

@@ -469,6 +469,14 @@ def verify(token: bytes, pubkey: Any) -> VerifiedToken:
     return VerifiedToken(protected=protected, payload=payload, sd_alg=sd_alg)
 
 
+def _presented_from_arr(arr: list) -> list:
+    """Extract the `sd_claims` disclosures from a COSE array (reject empty header)."""
+    uhdr = arr[1] if len(arr) > 1 and arr[1] else {}
+    if SD_CLAIMS_LABEL in uhdr and not uhdr[SD_CLAIMS_LABEL]:
+        raise ValueError("empty sd_claims header is invalid (draft-08 s9 step 2)")
+    return uhdr.get(SD_CLAIMS_LABEL, [])
+
+
 def match_disclosures(
     payload: Any,
     presented: list,
@@ -585,14 +593,33 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
     signature-free hash-matching core is exposed as `match_disclosures`.
     """
     verified = verify(token, pubkey)
-
-    arr = _cose_array(token)
-    uhdr = arr[1] if len(arr) > 1 and arr[1] else {}
-    if SD_CLAIMS_LABEL in uhdr and not uhdr[SD_CLAIMS_LABEL]:
-        raise ValueError("empty sd_claims header is invalid (draft-08 s9 step 2)")
-    presented = uhdr.get(SD_CLAIMS_LABEL, [])
-
+    presented = _presented_from_arr(_cose_array(token))
     return match_disclosures(verified.payload, presented, sd_alg=verified.sd_alg)
+
+
+def validate_trusted(token: bytes) -> ValidatedClaims:
+    """Hash-match disclosures WITHOUT verifying the COSE signature.
+
+    For callers whose trust in the token comes from elsewhere -- e.g. a CCF
+    transparency receipt proving the SD-CWT is committed to the ledger -- rather
+    than from re-checking the Issuer signature. It still enforces the structural
+    and encoding MUSTs (definite-length, map-key limits, nesting depth, finite
+    date claims, non-empty `sd_claims`) and hash-matches every disclosure against
+    the Redacted Claim Hashes in the (trusted) payload, so a tampered or foreign
+    disclosure is still rejected. `token` MUST be exactly the bytes the receipt
+    covers. Use `validate()` when the Issuer signature is itself the trust anchor.
+    """
+    _check_cbor(token)
+    arr = _cose_array(token)
+    if arr[0]:
+        _check_cbor(arr[0])  # protected header bytes
+    _check_cbor(arr[2])  # claims payload (indefinite/dup/depth/key MUSTs)
+    protected = cbor2.loads(arr[0]) if arr[0] else {}
+    sd_alg = HashAlg(protected.get(SD_ALG_LABEL, int(HashAlg.SHA_256)))
+    payload = cbor2.loads(arr[2])
+    _check_date_claims(payload)
+    presented = _presented_from_arr(arr)
+    return match_disclosures(payload, presented, sd_alg=sd_alg)
 
 
 def kbt_sign(
