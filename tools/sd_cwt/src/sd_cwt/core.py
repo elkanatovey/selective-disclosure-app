@@ -44,7 +44,8 @@ Out of scope by design:
   * Temporal *validity* checks (comparing `exp`/`nbf`/`iat` against a clock or
     each other) -- left to the caller or enclosing protocol; only the s5.2
     encoding checks on those claims are enforced.
-  * AEAD-encrypted disclosures (`sd_aead*`) and pre-issuance To-Be-Redacted tags.
+  * AEAD-encrypted disclosures (`sd_aead*`) and pre-issuance To-Be-Redacted /
+    To-Be-Decoy tags.
 
 Security: all cryptographic randomness (salts, decoys) uses a CSPRNG (`secrets`).
 """
@@ -111,7 +112,7 @@ class Disclosure:
     encoded: bytes = (
         b""  # cbor([salt, value, key]) / cbor([salt, value]) / cbor([salt])
     )
-    digest: bytes = b""  # sd_alg(encoded)
+    digest: bytes = b""  # sd_alg(bstr .cbor encoded) -- hash of the wrapped disclosure
 
 
 @dataclass
