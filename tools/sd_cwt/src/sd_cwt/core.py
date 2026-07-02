@@ -23,6 +23,7 @@ Implemented:
     holder proof-of-possession over the RFC 8747 `cnf` key, `kcwt` (13) header,
     `application/kb+cwt` (typ 294), audience and `cnonce` binding (draft-08 s8/s9).
   * Encoding MUSTs enforced on untrusted input: definite-length only (s5.1),
+    finite exp/nbf/iat encodings (s5.2), map-key type/length limits (s5.3),
     duplicate-map-key rejection (s5.4), max nesting depth 16 (s5.5), and
     non-empty `sd_claims` (s9 step 2).
   * Duplicate-claim-key rejection at validation: a disclosure whose Claim Key
@@ -36,7 +37,9 @@ prefer redacting whole map entries (which never reindex) or redacting the entire
 array as one entry.
 
 Out of scope by design:
-  * Temporal (`exp`/`nbf`) enforcement (time comes from the ledger receipt/seqno).
+  * Temporal *validity* checks (comparing `exp`/`nbf`/`iat` against a clock or
+    each other) -- time ordering comes from the ledger receipt/seqno; only the
+    s5.2 encoding checks on those claims are enforced.
   * AEAD-encrypted disclosures (`sd_aead*`) and pre-issuance To-Be-Redacted tags.
 
 Security: all cryptographic randomness (salts, decoys) uses a CSPRNG (`secrets`).
@@ -45,6 +48,7 @@ Security: all cryptographic randomness (salts, decoys) uses a CSPRNG (`secrets`)
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
 from dataclasses import dataclass
 from enum import IntEnum
@@ -194,13 +198,15 @@ def _cose_array(token: bytes) -> list:
 MAX_DEPTH = 16  # draft-08 s5.5: reject Claims Sets nested beyond 16 levels
 
 
-def _scan_cbor(data: bytes, off: int, depth: int) -> int:
+def _scan_cbor(data: bytes, off: int, depth: int, is_key: bool = False) -> int:
     """Structurally scan one CBOR item, enforcing draft-08 encoding MUSTs.
 
     Rejects indefinite-length items (s5.1), duplicate map keys (s5.4), and
-    nesting deeper than `MAX_DEPTH` (s5.5). Returns the offset just past the
-    scanned item. `cbor2` accepts all of these silently, so decoders of
-    untrusted tokens must enforce them explicitly.
+    nesting deeper than `MAX_DEPTH` (s5.5). When `is_key` is set, also enforces
+    the map-key type/length limits (s5.3): only uint, negint, text string of at
+    most 255 octets, or the simple(59) redaction marker may be a map key.
+    Returns the offset just past the scanned item. `cbor2` accepts all of these
+    silently, so decoders of untrusted tokens must enforce them explicitly.
     """
     if depth > MAX_DEPTH:
         raise ValueError("CBOR nesting exceeds maximum depth (draft-08 s5.5)")
@@ -229,6 +235,13 @@ def _scan_cbor(data: bytes, off: int, depth: int) -> int:
     else:
         raise ValueError("reserved CBOR additional-info value")
 
+    if is_key and not (
+        mt in (0, 1)  # unsigned / negative integer
+        or (mt == 3 and arg <= 255)  # text string, at most 255 octets
+        or (mt == 7 and ai <= 24 and arg == 59)  # simple(59) redaction marker
+    ):
+        raise ValueError("invalid SD-CWT map key type or length (draft-08 s5.3)")
+
     if mt in (0, 1, 7):  # uint / negint / simple / float: no further payload
         return off
     if mt in (2, 3):  # byte string / text string
@@ -241,7 +254,7 @@ def _scan_cbor(data: bytes, off: int, depth: int) -> int:
         seen: set[bytes] = set()
         for _ in range(arg):
             key_start = off
-            off = _scan_cbor(data, off, depth + 1)
+            off = _scan_cbor(data, off, depth + 1, is_key=True)
             key_bytes = data[key_start:off]
             if key_bytes in seen:
                 raise ValueError("duplicate map key (draft-08 s5.4)")
@@ -256,6 +269,31 @@ def _check_cbor(data: bytes) -> None:
     """Assert `data` is a single conformant CBOR item with no trailing bytes."""
     if _scan_cbor(data, 0, 0) != len(data):
         raise ValueError("trailing bytes after CBOR item")
+
+
+_MAX_DATE = 2**53  # draft-08 s5.2: |value| > 2^53 loses integer precision as float
+
+
+def _check_date_claims(claims: Any) -> None:
+    """Reject malformed `exp`/`nbf`/`iat` encodings (draft-08 s5.2).
+
+    Those claims MUST be finite numbers; NaN, +/-Infinity, and floats whose
+    magnitude exceeds 2^53 are forbidden. This validates the *encoding* only;
+    comparing the values against a clock is out of scope (the ledger receipt
+    provides the authoritative time ordering).
+    """
+    if not isinstance(claims, dict):
+        return
+    for label in (EXP, NBF, IAT):
+        if label not in claims:
+            continue
+        val = claims[label]
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise ValueError("exp/nbf/iat must be a finite number (draft-08 s5.2)")
+        if isinstance(val, float) and not math.isfinite(val):
+            raise ValueError("exp/nbf/iat must not be NaN or Infinity (draft-08 s5.2)")
+        if not -_MAX_DATE <= val <= _MAX_DATE:
+            raise ValueError("exp/nbf/iat magnitude exceeds 2^53 (draft-08 s5.2)")
 
 
 def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> Any:
@@ -427,6 +465,7 @@ def verify(token: bytes, pubkey: Any) -> VerifiedToken:
     protected = cbor2.loads(arr[0]) if arr[0] else {}
     sd_alg = HashAlg(protected.get(SD_ALG_LABEL, int(HashAlg.SHA_256)))
     payload = cbor2.loads(msg.payload)
+    _check_date_claims(payload)
     return VerifiedToken(protected=protected, payload=payload, sd_alg=sd_alg)
 
 
@@ -627,6 +666,7 @@ def kbt_verify(
         raise ValueError("KBT signature verification failed (cnf key mismatch)")
 
     kbt_payload = cbor2.loads(kbt_arr[2]) if kbt_arr[2] else {}
+    _check_date_claims(kbt_payload)
     if ISS in kbt_payload or SUB in kbt_payload:
         raise ValueError("KBT payload MUST NOT contain iss or sub (draft-08 s8.1)")
     if IAT not in kbt_payload and CTI not in kbt_payload:

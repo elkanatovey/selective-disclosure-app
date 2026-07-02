@@ -135,3 +135,74 @@ def test_validate_allows_same_key_at_different_levels(signer):
     out = sd_cwt.validate(token, signer)
     assert out.clear[1] == "iss"
     assert out.clear[503][1] == "us"
+
+
+# --- Map-key type / length limits (draft-08 s5.3) --------------------------
+
+
+def test_validate_rejects_bytestring_map_key(signer):
+    """A byte-string map key is not a legal SD-CWT claim key."""
+    payload = {1: "iss", b"\x00\x01": "x"}
+    token = _sign(signer, payload, {})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_rejects_oversized_text_map_key(signer):
+    """A text map key longer than 255 octets is rejected."""
+    payload = {1: "iss", "k" * 256: "x"}
+    token = _sign(signer, payload, {})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_rejects_float_map_key(signer):
+    """A floating-point map key is not a legal SD-CWT claim key."""
+    payload = {1: "iss", 1.5: "x"}
+    token = _sign(signer, payload, {})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_allows_255_octet_text_map_key(signer):
+    """A text map key of exactly 255 octets is allowed."""
+    key = "k" * 255
+    payload = {1: "iss", key: "x"}
+    token = _sign(signer, payload, {})
+    out = sd_cwt.validate(token, signer)
+    assert out.clear[key] == "x"
+
+
+# --- Finite date-claim encodings (draft-08 s5.2) ---------------------------
+
+
+def test_validate_rejects_nan_iat(signer):
+    """iat encoded as NaN is rejected."""
+    payload = {1: "iss", 6: float("nan")}
+    token = _sign(signer, payload, {})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_rejects_infinite_exp(signer):
+    """exp encoded as +Infinity is rejected."""
+    payload = {1: "iss", 4: float("inf")}
+    token = _sign(signer, payload, {})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_rejects_oversized_float_nbf(signer):
+    """nbf encoded as a float beyond 2^53 is rejected."""
+    payload = {1: "iss", 5: 1e19}
+    token = _sign(signer, payload, {})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_allows_integer_iat(signer):
+    """An ordinary integer iat passes the encoding check."""
+    payload = {1: "iss", 6: 1725244200}
+    token = _sign(signer, payload, {})
+    out = sd_cwt.validate(token, signer)
+    assert out.clear[6] == 1725244200
