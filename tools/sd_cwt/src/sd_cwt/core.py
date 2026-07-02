@@ -42,8 +42,8 @@ array as one entry.
 
 Out of scope by design:
   * Temporal *validity* checks (comparing `exp`/`nbf`/`iat` against a clock or
-    each other) -- time ordering comes from the ledger receipt/seqno; only the
-    s5.2 encoding checks on those claims are enforced.
+    each other) -- left to the caller or enclosing protocol; only the s5.2
+    encoding checks on those claims are enforced.
   * AEAD-encrypted disclosures (`sd_aead*`) and pre-issuance To-Be-Redacted tags.
 
 Security: all cryptographic randomness (salts, decoys) uses a CSPRNG (`secrets`).
@@ -297,8 +297,7 @@ def _check_date_claims(claims: Any) -> None:
 
     Those claims MUST be finite numbers; NaN, +/-Infinity, and floats whose
     magnitude exceeds 2^53 are forbidden. This validates the *encoding* only;
-    comparing the values against a clock is out of scope (the ledger receipt
-    provides the authoritative time ordering).
+    comparing the values against a clock is out of scope (left to the caller).
     """
     if not isinstance(claims, dict):
         return
@@ -618,14 +617,15 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
 def validate_trusted(token: bytes) -> ValidatedClaims:
     """Hash-match disclosures WITHOUT verifying the COSE signature.
 
-    For callers whose trust in the token comes from elsewhere -- e.g. a CCF
-    transparency receipt proving the SD-CWT is committed to the ledger -- rather
-    than from re-checking the Issuer signature. It still enforces the structural
-    and encoding MUSTs (definite-length, map-key limits, nesting depth, finite
-    date claims, non-empty `sd_claims`) and hash-matches every disclosure against
-    the Redacted Claim Hashes in the (trusted) payload, so a tampered or foreign
-    disclosure is still rejected. `token` MUST be exactly the bytes the receipt
-    covers. Use `validate()` when the Issuer signature is itself the trust anchor.
+    For callers whose trust in the token comes from elsewhere -- e.g. a
+    transparency-service receipt (such as a CCF ledger receipt) proving the
+    SD-CWT is committed -- rather than from re-checking the Issuer signature. It
+    still enforces the structural and encoding MUSTs (definite-length, map-key
+    limits, nesting depth, finite date claims, non-empty `sd_claims`) and
+    hash-matches every disclosure against the Redacted Claim Hashes in the
+    (trusted) payload, so a tampered or foreign disclosure is still rejected.
+    `token` MUST be exactly the bytes that trust covers. Use `validate()` when
+    the Issuer signature is itself the trust anchor.
     """
     _check_cbor(token)
     arr = _cose_array(token)
