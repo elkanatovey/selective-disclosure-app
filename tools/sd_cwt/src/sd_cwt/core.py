@@ -25,6 +25,9 @@ Implemented:
   * Encoding MUSTs enforced on untrusted input: definite-length only (s5.1),
     duplicate-map-key rejection (s5.4), max nesting depth 16 (s5.5), and
     non-empty `sd_claims` (s9 step 2).
+  * Duplicate-claim-key rejection at validation: a disclosure whose Claim Key
+    collides with another disclosed key or a non-redacted key at the same map
+    level invalidates the whole SD-CWT (s9 step 8).
 
 Note on array-element redaction: an undisclosed redacted element is dropped from
 the reconstructed claim set, which shortens the array and shifts the indices of
@@ -476,6 +479,11 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
                 if dig in by_map:
                     consumed.add(dig)
                     key, value = by_map[dig]
+                    if key in out:
+                        raise ValueError(
+                            "disclosed claim key duplicates another disclosed key "
+                            "at the same level (draft-08 s9 step 8)"
+                        )
                     out[key] = resolve(value)
                 elif dig in by_decoy:
                     consumed.add(dig)
@@ -483,6 +491,11 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
             for key, value in node.items():
                 if key == redacted_key:
                     continue
+                if key in out:
+                    raise ValueError(
+                        "disclosed claim key duplicates a non-redacted claim key "
+                        "at the same level (draft-08 s9 step 8)"
+                    )
                 out[key] = resolve(value)
             return out
         if isinstance(node, list):

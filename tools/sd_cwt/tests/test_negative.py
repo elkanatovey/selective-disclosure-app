@@ -72,3 +72,66 @@ def test_validate_rejects_tampered_payload(signer):
     forged = _retag(presented, arr)
     with pytest.raises(Exception):
         sd_cwt.validate(forged, signer)
+
+
+# --- Duplicate disclosed claim key rejection (draft-08 s9 step 8) ----------
+
+import hashlib  # noqa: E402
+import secrets  # noqa: E402
+
+from cbor2 import CBORSimpleValue  # noqa: E402
+from pycose.algorithms import Es256  # noqa: E402
+from pycose.headers import Algorithm  # noqa: E402
+from pycose.messages import Sign1Message  # noqa: E402
+
+REDACTED_KEYS = CBORSimpleValue(59)
+
+
+def _sign(signer, payload: dict, uhdr: dict) -> bytes:
+    """Sign a crafted payload with a chosen (unsigned) unprotected header.
+
+    Lets a test forge the attacker-controlled disclosures in `sd_claims` (17)
+    while keeping a valid Issuer signature over the payload.
+    """
+    msg = Sign1Message(
+        phdr={Algorithm: Es256, 16: 293, 170: -16},
+        uhdr=uhdr,
+        payload=cbor2.dumps(payload),
+    )
+    msg.key = signer
+    return msg.encode()
+
+
+def _map_disclosure(value, key):
+    """Return (encoded bstr, sha-256 digest) for a [salt, value, key] disclosure."""
+    encoded = cbor2.dumps([secrets.token_bytes(16), value, key])
+    return encoded, hashlib.sha256(encoded).digest()
+
+
+def test_validate_rejects_disclosed_key_dup_of_clear_key(signer):
+    """A disclosure revealing key 1 where 1 already exists in the clear is invalid."""
+    disc, dig = _map_disclosure("forged", 1)  # key 1 collides with clear iss
+    payload = {1: "iss", REDACTED_KEYS: [dig]}
+    token = _sign(signer, payload, {17: [disc]})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_rejects_two_disclosures_same_key(signer):
+    """Two disclosures at the same level revealing the same key 500 is invalid."""
+    disc1, dig1 = _map_disclosure("a", 500)
+    disc2, dig2 = _map_disclosure("b", 500)  # same key, different salt/value
+    payload = {1: "iss", REDACTED_KEYS: [dig1, dig2]}
+    token = _sign(signer, payload, {17: [disc1, disc2]})
+    with pytest.raises(ValueError):
+        sd_cwt.validate(token, signer)
+
+
+def test_validate_allows_same_key_at_different_levels(signer):
+    """A disclosed key equal to a clear key at another level is NOT a duplicate."""
+    disc, dig = _map_disclosure("us", 1)  # key 1 nested inside 503
+    payload = {1: "iss", 503: {REDACTED_KEYS: [dig]}}
+    token = _sign(signer, payload, {17: [disc]})
+    out = sd_cwt.validate(token, signer)
+    assert out.clear[1] == "iss"
+    assert out.clear[503][1] == "us"
