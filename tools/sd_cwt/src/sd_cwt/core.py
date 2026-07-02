@@ -134,11 +134,19 @@ class ValidatedClaims:
 
 @dataclass
 class KBTResult:
-    """Result of verifying a Key Binding Token: bound claims + KBT metadata."""
+    """Result of verifying a Key Binding Token: bound claims + KBT metadata.
+
+    `kbt_claims` is the full decoded KBT payload (`aud`, `iat`/`cti`, optional
+    `exp`/`nbf`, `cnonce`, ...), so callers can apply their own temporal or
+    business-logic checks. The library validates the *encoding* of the time
+    claims (s5.2) but deliberately does not compare them against a clock -- that
+    is the caller's responsibility.
+    """
 
     claims: ValidatedClaims
     aud: Any
     cnonce: Optional[bytes] = None
+    kbt_claims: Optional[dict] = None
 
 
 def csprng(n: int) -> bytes:
@@ -757,4 +765,9 @@ def kbt_verify(
         raise ValueError("KBT cnonce does not match the expected nonce")
 
     claims = validate(sd_cwt_bytes, issuer_pub)
-    return KBTResult(claims=claims, aud=kbt_payload.get(AUD), cnonce=cnonce)
+    return KBTResult(
+        claims=claims,
+        aud=kbt_payload.get(AUD),
+        cnonce=cnonce,
+        kbt_claims=kbt_payload,
+    )

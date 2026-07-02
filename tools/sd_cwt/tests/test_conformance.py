@@ -209,3 +209,34 @@ def test_kbt_allows_absent_sd_cwt_aud(signer, holder):
     kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
     result = sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
     assert result.aud == AUD
+
+
+# --- Step 5: temporal claims are surfaced (not enforced) -------------------
+
+
+def test_kbt_result_exposes_time_claims(signer, holder):
+    """kbt_claims surfaces the KBT payload so business logic can apply its own
+    temporal checks (the library validates s5.2 encoding but does not compare
+    against a clock)."""
+    claims = {1: "iss", 2: "sub", 501: "RCE"}
+    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    kbt = sd_cwt.kbt_sign(
+        token, discs, holder, aud=AUD, iat=1725244237, nbf=1725243900, exp=1725330600
+    )
+    result = sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
+
+    assert result.kbt_claims[6] == 1725244237  # iat (key-binding creation time)
+    assert result.kbt_claims[5] == 1725243900  # nbf
+    assert result.kbt_claims[4] == 1725330600  # exp
+    # caller can now enforce its own policy, e.g. nbf <= iat < exp
+    assert result.kbt_claims[5] <= result.kbt_claims[6] < result.kbt_claims[4]
+
+
+def test_validate_surfaces_sd_cwt_time_claims(signer):
+    """Unredacted SD-CWT exp/nbf/iat appear in `clear` for the caller to check."""
+    claims = {1: "iss", 4: 1725330600, 5: 1725243900, 6: 1725244200, 501: "RCE"}
+    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer)
+    out = sd_cwt.validate(sd_cwt.present(token, discs), signer)
+    assert out.clear[6] == 1725244200  # iat
+    assert out.clear[5] == 1725243900  # nbf
+    assert out.clear[4] == 1725330600  # exp

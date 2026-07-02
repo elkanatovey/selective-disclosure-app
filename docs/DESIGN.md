@@ -276,8 +276,10 @@ report/note schema + `parent_report` rules live in the app/issuer layer on top.
 
 **Deliberately omitted:** temporal *validity* comparison (`exp`/`nbf`/`iat`
 against a clock — the ledger receipt/seqno covers ordering; only the s5.2
-*encoding* checks are enforced); AEAD-encrypted disclosures; pre-issuance
-To-Be-Redacted / To-Be-Decoy tags.
+*encoding* checks are enforced; the claim **values are surfaced** via
+`validate().clear` and `KBTResult.kbt_claims` so the app layer can run its own
+temporal checks); AEAD-encrypted disclosures; pre-issuance To-Be-Redacted /
+To-Be-Decoy tags.
 
 **API (what tests target):**
 ```
