@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 # Build the dev image (toolchain only). Run from the repo root.
 set -euo pipefail
 cd "$(dirname "$0")/.."

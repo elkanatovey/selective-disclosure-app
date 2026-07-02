@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 # Start an interactive dev container with the repo bind-mounted at /workspace.
 # You edit on the host; you build/run inside this container.
 #
