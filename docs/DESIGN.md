@@ -193,7 +193,8 @@ are chain logic that *consumes* those tokens.
    end-to-end demo.
 6. **(optional) hardening** — service→Operator delivery mechanism, optional
    `DisclosuresTable` backup, redact linkage, config-pinned issuer authorization,
-   anti-spam controls, KBT for external subjects.
+   anti-spam controls, KBT for external subjects (**already implemented in the
+   `sd_cwt` lib**; wiring into the app is what remains).
 
 ## 11. Caveats / open decisions
 - Disclosure artifact: separate-bundle (preferred) vs embedded profile.
@@ -254,22 +255,39 @@ report/note schema + `parent_report` rules live in the app/issuer layer on top.
 - **Map-entry** redaction (`redacted_claim_keys` = `simple(59)`) **and**
   **array-element** redaction (tag `60`).
 - Disclosures `[salt,value,key]` / `[salt,value]` in the unprotected header
-  (`sd_claims`, label 17).
+  (`sd_claims`, label 17). The Redacted Claim Hash is taken over the
+  **`bstr`-encoded** disclosure (per the CDDL / Appendix G), matching the
+  reference example tokens.
+- **Nested / recursive redaction** at arbitrary depth (`redact_paths`), including
+  the ancestor-disclosure rule (a disclosed parent may reveal a still-redacted
+  child).
 - **Hash-alg agility** driven by the protected `sd_alg` header (SHA-256/384/512;
   default SHA-256) — `validate` reads `sd_alg` from the header.
 - **Decoy padding:** `issue(..., pad_to=N)` pads the redacted-slot count to N with
   random decoy digests → supports the uniform-token-shape principle.
-- **Nesting/recursion:** design for it; implement flat first, then recursive
-  (ancestor-disclosure rule).
-- **CSPRNG for all crypto randomness** (salts, decoys) via `secrets`/`os.urandom`.
+- **Key Binding Tokens** (`kbt_sign`/`kbt_verify`) with RFC 8747 `cnf`
+  proof-of-possession — spec-complete, though the CCF receipt is the app's
+  binding anchor, so KBT is optional for the core duplicate-proof flow.
+- **Encoding MUSTs on untrusted input:** definite-length (s5.1), finite date-claim
+  encodings (s5.2), map-key type/length (s5.3), duplicate-map-key rejection (s5.4),
+  nesting depth ≤16 (s5.5); plus duplicate disclosed-key rejection and both the
+  KBT and SD-CWT audience checks (s9).
+- **CSPRNG for all crypto randomness** (salts, decoys) via `secrets`.
 
-**Deliberately omitted:** KBT / `cnf` key binding (receipt replaces it); temporal
-(`exp`/`nbf`) enforcement (time comes from the ledger receipt/seqno).
+**Deliberately omitted:** temporal *validity* comparison (`exp`/`nbf`/`iat`
+against a clock — the ledger receipt/seqno covers ordering; only the s5.2
+*encoding* checks are enforced); AEAD-encrypted disclosures; pre-issuance
+To-Be-Redacted / To-Be-Decoy tags.
 
 **API (what tests target):**
 ```
-issue(claims, redact, signer, *, sd_alg=SHA256, pad_to=None) -> (token, [Disclosure])
-present(token, selected: [Disclosure])                       -> token
-verify(token, pubkey)                                        -> VerifiedToken
-validate(token, pubkey)                                      -> ValidatedClaims{clear, disclosed}
+issue(claims, redact, signer, *, redact_elements=None, redact_paths=None,
+      sd_alg=SHA256, pad_to=None, cnf=None)             -> (token, [Disclosure])
+present(token, selected: [Disclosure])                  -> token
+verify(token, pubkey)                                   -> VerifiedToken
+validate(token, pubkey)                                 -> ValidatedClaims{clear, disclosed}
+validate_trusted(token)                                 -> ValidatedClaims   # skip sig; trust from receipt
+match_disclosures(payload, presented, *, sd_alg=SHA256) -> ValidatedClaims
+kbt_sign(token, selected, holder, *, aud, iat=None, cti=None, cnonce=None) -> kbt
+kbt_verify(kbt, issuer_pub, *, expected_aud, expected_cnonce=None)         -> KBTResult
 ```
