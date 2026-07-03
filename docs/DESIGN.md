@@ -79,8 +79,12 @@ The service is a **notary + signer**, not an identity authority.
   core flow.
 - Submitter authentication is a **transport/channel** concern (who may submit),
   orthogonal to the statement signature; optional anti-spam (rate-limit/JWT) sits
-  here. Config-pinned Operator authorization for follow-ups is an optional later
-  hardening.
+  here.
+- **Operator authorization is mandatory for confidential-egress endpoints**
+  (`get_statements_since`, `get_statement`, `make_disclosure` — §9): these return
+  plaintext, so they are gated to a config-pinned / governance-set Operator
+  identity. (This is the one place caller authentication is required; submission
+  itself needs none.)
 
 ## 5. Threat model
 **Defended:**
@@ -192,25 +196,37 @@ COSE_Sign1 (service-signed, TEE):
 
 ## 9. Endpoints & off-chain tooling
 **Service endpoints:**
-- `submit_report` (researchers, direct): L2 sanity check → store redacted token,
-  set claims digest → return **seqno + receipt**; make content available to the Operator;
-  (optional) back up disclosures.
-- `append_follow_up` (the Operator): store redacted follow-up (`parent_report` set),
+- `submit_report` (reporter, direct): store redacted token (public) + the report's
+  disclosures (confidential), set claims digest → **return seqno + receipt to the
+  reporter** (their proof-of-registration and precedence anchor).
+- `append_follow_up` (Operator): store redacted follow-up (`parent_report` set),
   set claims digest → return receipt; index under parent.
-- read helpers: `get_report` (the Operator pulls content), `get_receipt`, `list_notes`.
+- `get_statements_since(cursor_seqno, limit)` (**Operator only**): the unredacted
+  stream — **all** statements (original reports **and** follow-ups) registered
+  after `cursor_seqno`, in seqno order, each with its receipt. The Operator keeps
+  its own cursor (high-water seqno) and advances it; service-side stateless,
+  idempotent to replay. Reuses CCF seqno-indexed historical queries.
+- `get_statement(id)` (**Operator only**): pull a single unredacted statement +
+  receipt by id.
+- `make_disclosure(id, target_paths)` (**Operator only**): assemble
+  `{ redacted token, receipt, disclosures for target_paths + their ancestors }`
+  from the confidential store, for the Operator to hand a researcher. *(Reverts to
+  offline Operator-side tooling when `store_unredacted` is OFF — self-custody.)*
+- read helpers: `get_report` (public **redacted** token), `get_receipt`,
+  `list_notes`.
 
-**Off-chain (NOT endpoints):**
-- `make_disclosure(id, fields)` — **Operator-side, offline.** Only the disclosure
-  holder can run it; assembles `{ redacted token, receipt, selected disclosures }`.
-- `verify` — **researcher-side, offline.** issuer sig over payload → service sig
-  over claims digest → hash-match disclosures.
+**Confidential-egress authorization:** `get_statements_since`, `get_statement`,
+and `make_disclosure` return confidential plaintext and MUST be gated to the
+**Operator** (config-pinned / governance-set identity). This is distinct from the
+notary/no-enrollment stance for submission (§4).
+
+**Off-chain (NOT a service endpoint):**
+- `verify` — **researcher-side.** Checks the service signature + receipt and
+  hash-matches disclosures (`validate` / `validate_trusted`).
 
 **Duplicate proof:** The Operator runs `make_disclosure` on the **earlier** matching
-follow-up; verifier checks **seqno M < their seqno N** and that the disclosed
+statement; verifier checks **seqno M < their seqno N** and that the disclosed
 field matches their bug.
-
-OPEN: confidential delivery of report content service→Operator (encrypt-to-Operator vs
-TEE-mediated forwarding) while the public ledger holds only the redacted form.
 
 ## 10. Phased build order (from today's `basic` app)
 **Build the off-chain token layer first, then the on-chain service on top.**
