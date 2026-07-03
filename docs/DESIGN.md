@@ -266,8 +266,11 @@ report/note schema + `parent_report` rules live in the app/issuer layer on top.
 - **Decoy padding:** `issue(..., pad_to=N)` pads the redacted-slot count to N with
   random decoy digests → supports the uniform-token-shape principle.
 - **Key Binding Tokens** (`kbt_sign`/`kbt_verify`) with RFC 8747 `cnf`
-  proof-of-possession — spec-complete, though the CCF receipt is the app's
-  binding anchor, so KBT is optional for the core duplicate-proof flow.
+  proof-of-possession — included for **spec compliance only**; not used in the
+  core flow. The transparency-service receipt (e.g. a CCF ledger receipt) is the
+  app's binding anchor, and the verification path is the receipt-anchored
+  `validate_trusted` (which is why the signature-free `match_disclosures` is
+  factored out of `verify`).
 - **Encoding MUSTs on untrusted input:** definite-length (s5.1), finite date-claim
   encodings (s5.2), map-key type/length (s5.3), duplicate-map-key rejection (s5.4),
   nesting depth ≤16 (s5.5); plus duplicate disclosed-key rejection and both the
