@@ -39,6 +39,11 @@ namespace sdcwt
   }
 
   // Adapt a byte range to a QCBOR UsefulBufC (const view).
+  //
+  // Lifetime: the returned UsefulBufC *aliases* `bytes` and must not outlive
+  // it. It is safe to pass inline to a QCBOREncode_Add* call (which copies the
+  // bytes immediately, within the full expression), but do NOT store it and use
+  // it after the underlying buffer is gone.
   inline UsefulBufC to_ubc(std::span<const uint8_t> bytes)
   {
     return UsefulBufC{bytes.data(), bytes.size()};

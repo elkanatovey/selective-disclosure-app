@@ -54,6 +54,9 @@ namespace sdcwt::statement
     const RandomSource& rng = default_random_source());
 
   // Build + sign a strictly-uniform statement token.
+  //
+  // Throws std::invalid_argument (non-P-256 key) or std::runtime_error (CBOR
+  // failure); a CCF endpoint handler MUST catch these.
   IssuedToken issue_statement(
     const std::string& iss,
     int64_t iat,

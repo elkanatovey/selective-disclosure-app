@@ -21,6 +21,11 @@ namespace sdcwt
   //
   // The signature is computed over the RFC 9052 Sig_structure and encoded as a
   // fixed-length r||s (IEEE P1363) value, as COSE requires.
+  //
+  // Throws std::invalid_argument if `key` is not a P-256 key, or
+  // std::runtime_error on a CBOR encoding failure. Callers running inside a CCF
+  // endpoint handler MUST catch these so malformed input cannot crash the
+  // enclave transaction.
   std::vector<uint8_t> sign_cose_sign1_es256(
     const ccf::crypto::ECKeyPair& key,
     std::span<const uint8_t> protected_header_cbor,

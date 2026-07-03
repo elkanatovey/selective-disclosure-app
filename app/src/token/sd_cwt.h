@@ -69,6 +69,9 @@ namespace sdcwt
   // Build and sign a redacted SD-CWT over the given top-level claims. Redacted
   // claims are removed from the payload and represented by sorted Redacted
   // Claim Hashes under simple(59); their disclosures are returned separately.
+  //
+  // Throws std::invalid_argument (non-P-256 key) or std::runtime_error (CBOR
+  // failure); a CCF endpoint handler MUST catch these.
   IssuedToken issue(
     const std::vector<Claim>& claims,
     const ccf::crypto::ECKeyPair& key,
