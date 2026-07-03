@@ -55,11 +55,11 @@ SD labels. Prerequisite for Phase 2.
 ## 3. Roles & trust model
 | Role | Who | Notes |
 |---|---|---|
-| Reporter / Issuer (originals) | **Researchers** | sign and submit reports **directly** to the service |
-| Issuer (follow-ups) | **the Operator** | submits follow-up notes referencing a report |
-| Notary / Transparency service | **CCF service in a TEE** | registers statements, assigns **seqno**, issues **signed receipts**, forwards report to the Operator; trust domain **separate** from the Operator |
-| Holder of disclosures | **the Operator (self-custody)**; optional service backup | only the holder of salt/value can disclose |
-| Verifier | a **researcher** | verifies **offline** |
+| Reporter (originals) | **Researchers** | submit **raw report content** directly to the service (authenticated channel) |
+| Follow-ups | **the Operator** | submits follow-up note content referencing a report |
+| Notary / Transparency service | **CCF service in a TEE** | **constructs + signs** the SD-CWT, registers it, assigns **seqno**, issues **signed receipts**, holds the confidential store; trust domain **separate** from the Operator |
+| Holder of disclosures | **the service** (default, `store_unredacted`) or **Operator self-custody** (flag off) | only the holder of salt/value can disclose |
+| Verifier | a **researcher** | verifies **offline** via the receipt (`validate_trusted`) |
 
 **Core flow:** reports go **researcher → service → the Operator**, never the Operator → service.
 This blocks the Operator **front-running** (it only sees a report after the service has
@@ -67,17 +67,20 @@ already assigned a seqno). The Operator enriches the record afterward via **foll
 to make later duplicate-proofs easier.
 
 ## 4. Authentication / registration model (notary)
-The service is a **notary**, not an identity authority.
-- **No issuer key enrollment.** Researcher/Operator keys are NOT CCF users. The
-  receipt proves "this blob existed at seqno T," nothing about who signed.
-- **Signature trust is the verifier's job, offline**, against well-known pubkeys
-  (the Operator anchor; reporter's claimed key).
-- Submission-time check = **sanity check**: parse the COSE_Sign1 and verify
-  its signature against the key **carried in the statement** (`kid`/`x5chain`).
-  Rejects malformed/garbage; does **not** enforce *who*; needs **no registration**.
-- Operator-follow-up authorization (optional, later): a **config-pinned Operator pubkey**
-  (governance-set), or leave to the offline verifier.
-- Optional anti-spam access control (rate-limit/JWT) is orthogonal.
+The service is a **notary + signer**, not an identity authority.
+- **The service (TEE) is the sole signer.** Researchers/Operator submit **raw
+  content** over an authenticated channel; the service constructs and signs the
+  SD-CWT. There is no per-submitter statement signature to check.
+- **No key enrollment.** Submitter identity is not a CCF user set; the receipt
+  proves "this statement existed at seqno T", signed by the service.
+- **Verification is receipt-anchored** (`validate_trusted`): a verifier trusts
+  the statement because of the service signature + receipt, not by re-checking a
+  submitter's key. Submitter authorship "beyond that doesn't matter" for the
+  core flow.
+- Submitter authentication is a **transport/channel** concern (who may submit),
+  orthogonal to the statement signature; optional anti-spam (rate-limit/JWT) sits
+  here. Config-pinned Operator authorization for follow-ups is an optional later
+  hardening.
 
 ## 5. Threat model
 **Defended:**
@@ -91,7 +94,8 @@ The service is a **notary**, not an identity authority.
 - **Content exposure to auditors / replicas** — public ledger entry holds only
   the redacted/committed form.
 - **Disclosure forgery** — `hash ∈ signed payload` + collision resistance.
-- **Issuer-signature forgery** — verifier checks sigs against well-known pubkeys.
+- **Statement-signature forgery** — the service (TEE) signs; verifiers check
+  against the service cert / attestation-rooted key.
 - **Linkage / metadata leakage** — `parent_report` is always-present AND redacted;
   uniform token shape leaks no metadata (not even whether a parent exists).
 
@@ -129,7 +133,7 @@ object carrying a standard *combination* of SD-CWT + transparency receipt; no
 single spec names the combo, so no off-the-shelf tool validates it as one unit).
 
 ```
-COSE_Sign1 (issuer-signed: researcher or the Operator):
+COSE_Sign1 (service-signed, TEE):
   protected   : { alg, sd_alg(SHA-256), typ }
   payload     : { clear fields,
                   redacted_claim_keys:[hashes incl. always-present parent_report] }
@@ -142,10 +146,47 @@ COSE_Sign1 (issuer-signed: researcher or the Operator):
 |---|---|---|
 | `ReportsTable` | public | id → **redacted SD-CWT** bytes (blob write, à la SCITT `EntryTable`) |
 | `NotesIndex` | public | report id → [follow-up seqnos] |
-| `DisclosuresTable` | private (encrypted) | id → `[salt,value,key]` tuples — **OPTIONAL, feature-flagged backup** |
+| `ConfidentialTable` | private (encrypted) | id → the report's **full list of per-field/per-element disclosures** (each `[salt,value,key]` or `[salt,value]`, annotated with its **path**) — **feature-flagged, default ON** |
 
-- the Operator **self-custodies** its follow-up disclosures; `DisclosuresTable` is an
-  optional service-side backup (durability/availability), default off.
+- **Signing:** the **service (TEE)** constructs and signs the SD-CWT (trust roots
+  in attestation); researchers submit raw content over an authenticated channel.
+  The receipt-anchored `validate_trusted` is the verification path.
+- **Confidential store (`store_unredacted`, default ON):** the service holds the
+  report's disclosures (= the unredacted values for redacted fields; with the
+  public token's clear fields this reconstructs the full report). Chosen for
+  implementation ease — it dissolves the separate confidential-delivery channel
+  and lets the service produce duplicate-proofs directly.
+- **Granular + recursive disclosure:** the store keeps the **individual**
+  disclosures (NOT a monolithic plaintext blob) so `make_disclosure` can reveal
+  an arbitrary subset at any depth. Because nested disclosure follows the
+  ancestor-disclosure rule, each disclosure is annotated with its **full path**,
+  and `make_disclosure(target_paths)` selects the targets **plus their ancestor
+  disclosures**. (Likely a small `sd_cwt` helper: given all disclosures + target
+  paths, return the minimal disclosure set incl. ancestors.)
+- **Segregation invariant (for easy migration):** the redacted-token build,
+  claims-digest binding, receipt issuance and the public store **never read**
+  the confidential store. It is *write-only* from the submit path and *read-only*
+  from `make_disclosure`. Turning `store_unredacted` OFF is then a one-site
+  change — disclosures move to Operator self-custody (§9); an encrypt-to-Operator
+  variant is just a change to this table's value format.
+- **Immutability caveat:** the CCF ledger is append-only, so entries written
+  while the flag is ON retain their (encrypted) disclosures permanently. The flag
+  controls future writes, not past ones — migration affects new entries only.
+- **Salts are random (CSPRNG), per field — the production choice.** Each
+  disclosure carries an independent 128-bit random salt (what `sd_cwt` already
+  does). Rationale: the only benefit of *deterministic* salts
+  (`salt = HMAC(K_salt, id‖path)`) is not having to store salts, but since the
+  service stores the confidential data anyway that benefit is moot here — while
+  deterministic salts cost a sealed single-purpose `K_salt` (never the signing
+  key), a strict canonical-encoding requirement, and a real leak surface
+  (hash-equality reveals input-equality, so cross-report values must be blinded
+  by binding a unique id + full path). Random salts blind every occurrence
+  independently, add no key management, and are the least-surprise, spec-aligned
+  default. Since a disclosure *is* `(salt,value,key)`, "store the disclosures"
+  already stores the salts — no change to `issue()`.
+  *(Deferred option: deterministic salts, only if a future model deliberately
+  minimises stored confidential state — store just the redacted token + `K_salt`
+  and reconstruct — and only with strict id+path binding.)*
 - Follow-ups reference parent **by hash** (the always-full field); ordering /
   precedence **by seqno**.
 
@@ -191,17 +232,22 @@ are chain logic that *consumes* those tokens.
    `NotesIndex`, seqno ordering.
 5. **Disclosure & duplicate proof** — offline `make_disclosure` + `verify`;
    end-to-end demo.
-6. **(optional) hardening** — service→Operator delivery mechanism, optional
-   `DisclosuresTable` backup, redact linkage, config-pinned issuer authorization,
+6. **(optional) hardening** — `store_unredacted` OFF (Operator self-custody) or
+   encrypt-to-Operator, redact linkage, config-pinned issuer authorization,
    anti-spam controls, KBT for external subjects (**already implemented in the
    `sd_cwt` lib**; wiring into the app is what remains).
 
 ## 11. Caveats / open decisions
 - Disclosure artifact: separate-bundle (preferred) vs embedded profile.
 - RESOLVED: `parent_report` is redacted by default + always present (no metadata leak).
+- RESOLVED (for now): the **service (TEE) signs** statements; the **service holds
+  the unredacted disclosures** in a private table (`store_unredacted`, default
+  ON), segregated for easy migration. This dissolves the confidential
+  service→Operator delivery channel for the initial implementation.
 - Principle: redacted tokens leak no metadata; keep token shape uniform.
-- "Operator can't read confidential state" is deployment/attestation-dependent.
-- OPEN: confidential report delivery service→Operator.
+- "Operator can't read confidential state" is deployment/attestation-dependent —
+  and now load-bearing for whole reports (not just disclosures), since the
+  service holds plaintext in an encrypted private table.
 - Each layer is standard; only the embedded *combination* is non-standard.
 
 ## 12. Implementation: reuse map & layering
