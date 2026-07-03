@@ -193,7 +193,8 @@ are chain logic that *consumes* those tokens.
    end-to-end demo.
 6. **(optional) hardening** — service→Operator delivery mechanism, optional
    `DisclosuresTable` backup, redact linkage, config-pinned issuer authorization,
-   anti-spam controls, KBT for external subjects.
+   anti-spam controls, KBT for external subjects (**already implemented in the
+   `sd_cwt` lib**; wiring into the app is what remains).
 
 ## 11. Caveats / open decisions
 - Disclosure artifact: separate-bundle (preferred) vs embedded profile.
@@ -237,3 +238,61 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
 - statement schema; `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
+
+## 13. Off-chain token tooling: `sd_cwt` (Python)
+**Decision:** the off-chain token tooling (issue/sign/redact/present/verify/validate)
+is **Python**, wrapping **pycose** (as SCITT's `pyscitt` does, `pycose==1.1.0`) +
+`cbor2` + `hashlib`. The in-TEE C++ app only does **verify + store** (reuse CCF's
+`make_cose_verifier_from_key`). Token *creation/redaction* is client-side, matching
+SCITT's "sign client-side, verify in C++" split.
+
+**`sd_cwt` is our own minimal, domain-agnostic package** (in-repo at `tools/sd_cwt/`,
+src-layout, own `pytest` suite). It operates on arbitrary CBOR claims; the
+report/note schema + `parent_report` rules live in the app/issuer layer on top.
+
+**Implemented subset (our custom profile):**
+- COSE_Sign1 issuer-signed CWT via pycose.
+- **Map-entry** redaction (`redacted_claim_keys` = `simple(59)`) **and**
+  **array-element** redaction (tag `60`).
+- Disclosures `[salt,value,key]` / `[salt,value]` in the unprotected header
+  (`sd_claims`, label 17). The Redacted Claim Hash is taken over the
+  **`bstr`-encoded** disclosure (per the CDDL / Appendix G), matching the
+  reference example tokens.
+- **Nested / recursive redaction** at arbitrary depth (`redact_paths`), including
+  the ancestor-disclosure rule (a disclosed parent may reveal a still-redacted
+  child).
+- **Hash-alg agility** driven by the protected `sd_alg` header (SHA-256/384/512;
+  default SHA-256) — `validate` reads `sd_alg` from the header.
+- **Decoy padding:** `issue(..., pad_to=N)` pads the redacted-slot count to N with
+  random decoy digests → supports the uniform-token-shape principle.
+- **Key Binding Tokens** (`kbt_sign`/`kbt_verify`) with RFC 8747 `cnf`
+  proof-of-possession — included for **spec compliance only**; not used in the
+  core flow. The transparency-service receipt (e.g. a CCF ledger receipt) is the
+  app's binding anchor, and the verification path is the receipt-anchored
+  `validate_trusted` (which is why the signature-free `match_disclosures` is
+  factored out of `verify`).
+- **Encoding MUSTs on untrusted input:** definite-length (s5.1), finite date-claim
+  encodings (s5.2), map-key type/length (s5.3), duplicate-map-key rejection (s5.4),
+  nesting depth ≤16 (s5.5); plus duplicate disclosed-key rejection and both the
+  KBT and SD-CWT audience checks (s9).
+- **CSPRNG for all crypto randomness** (salts, decoys) via `secrets`.
+
+**Deliberately omitted:** temporal *validity* comparison (`exp`/`nbf`/`iat`
+against a clock — the ledger receipt/seqno covers ordering; only the s5.2
+*encoding* checks are enforced; the claim **values are surfaced** via
+`validate().clear` and `KBTResult.kbt_claims` so the app layer can run its own
+temporal checks); AEAD-encrypted disclosures; pre-issuance To-Be-Redacted /
+To-Be-Decoy tags.
+
+**API (what tests target):**
+```
+issue(claims, redact, signer, *, redact_elements=None, redact_paths=None,
+      sd_alg=SHA256, pad_to=None, cnf=None)             -> (token, [Disclosure])
+present(token, selected: [Disclosure])                  -> token
+verify(token, pubkey)                                   -> VerifiedToken
+validate(token, pubkey)                                 -> ValidatedClaims{clear, disclosed}
+validate_trusted(token)                                 -> ValidatedClaims   # skip sig; trust from receipt
+match_disclosures(payload, presented, *, sd_alg=SHA256) -> ValidatedClaims
+kbt_sign(token, selected, holder, *, aud, iat=None, cti=None, cnonce=None) -> kbt
+kbt_verify(kbt, issuer_pub, *, expected_aud, expected_cnonce=None)         -> KBTResult
+```

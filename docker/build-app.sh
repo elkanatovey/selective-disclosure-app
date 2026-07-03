@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 # Build the selective-disclosure app against the locally built+installed CCF.
 # Run this INSIDE the dev container, after docker/build-ccf.sh.
 set -euo pipefail

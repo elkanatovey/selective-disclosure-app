@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 # Build CCF from source (all options ON), installing into /workspace/.ccf-install.
 # Parallelism is throttled to avoid OOM on a 16 GB machine: compiles run with
 # $NPROC_COMPILE jobs but only $NPROC_LINK links run concurrently (links are the
