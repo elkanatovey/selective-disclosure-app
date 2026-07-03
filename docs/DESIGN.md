@@ -159,9 +159,15 @@ out-of-band trust anchors; salts high-entropy.
 - **CCF receipt** — service-signed inclusion proof binding the **claims digest**;
   offline-verifiable with the service cert.
 - **SHA-256** + **CBOR**.
-- Present in the built CCF (call directly): COSE sign/verify, `ccf::cose::edit::
-  set_unprotected_header`, receipt APIs (`describe_merkle_proof_v1`,
-  `describe_cose_signature_v1`, `build_receipt_for_committed_tx`), SHA-256.
+- Present in the built CCF (call directly): COSE **verify**
+  (`ccf::crypto::cose_verifier`), `ccf::cose::edit::set_unprotected_header`,
+  receipt APIs (`describe_merkle_proof_v1`, `describe_cose_signature_v1`,
+  `build_receipt_for_committed_tx`), SHA-256 (`ccf::crypto::sha256`), EC signing
+  (`ccf::crypto::ECKeyPair::sign_hash`), CSPRNG (`ccf::crypto::get_entropy()`).
+- **COSE_Sign1 _creation_ is NOT exposed by CCF** (public `cose.h` only edits
+  headers; SCITT signs client-side in Python). Under Model A we hand-assemble the
+  `COSE_Sign1` with QCBOR and sign the `Sig_structure` via `ccf::crypto` — no
+  `t_cose` dependency.
 - **CBOR encode/decode is NOT exposed by CCF** for general use — we vendor
   **QCBOR** via CMake `FetchContent` (as SCITT does) to build/parse token bytes.
 - CCF-source modification is **last resort**.
@@ -274,18 +280,28 @@ are chain logic that *consumes* those tokens.
 0. **Define the statement schema** ✔ (todo: define-report-fields) — unified
    report/note fields, clear vs SD per field, redacted-always-present
    `parent`, strict uniformity. **Done** (§1; `sd_cwt.statement`).
-1. **Off-chain: build + sign a plain CWT** — schema-valid CBOR claims set wrapped
-   in COSE_Sign1; verify round-trip. Standalone lib + CLI + unit tests, no chain.
-   (Nails the QCBOR + COSE + signing pipeline.)
-2. **Off-chain: SD-CWT redaction** — add salts / disclosures / Redacted Claim
-   Hashes; round-trip: build → redact → disclose subset → verify. Still no chain.
-3. **On-chain: submit + receipt** — `submit_report` consumes a token: sanity
-   check, store the blob, bind claims digest, return **seqno + receipt**.
-   (Receipt/seqno are chain logic layered on top of steps 1–2.)
+1. **Off-chain token layer (Python) ✔ DONE** — `sd_cwt` + `sd_cwt.statement`
+   already build / sign / redact / present / verify / validate schema-valid
+   tokens off-chain (73 tests). Under **Model A** this Python layer is the
+   **reference/conformance oracle** and the **researcher-side verifier**, not
+   the in-enclave signer.
+2. **C++ token core (port of build+sign+redaction) — host build, no chain.**
+   Reimplement the authoritative construction in C++ so the **service (TEE)** can
+   sign in-enclave: build the CBOR claims set, garbage-pad to strict uniformity,
+   CSPRNG salts, SHA-256 redaction (`redacted_claim_keys`), and hand-assemble a
+   `COSE_Sign1` **signed via `ccf::crypto`** (no `t_cose`: encode the
+   `Sig_structure` with QCBOR, `sha256`, `ECKeyPair::sign_hash`, assemble the
+   array). Built as a standalone host/virtual test target (no enclave, no chain)
+   and gated by **cross-impl conformance** against the Python oracle: Python
+   `validate`s C++ tokens, and with **injected fixed salts** the C++ output is
+   **byte-identical** to Python `issue()`. (Vendor **QCBOR** via `FetchContent`.)
+3. **On-chain: submit + receipt** — `submit_report` constructs+signs via the
+   C++ token core, stores the redacted blob, binds the **claims digest**, returns
+   **seqno + receipt**. (Receipt/seqno are chain logic layered on top of 1–2.)
 4. **Follow-ups & linkage** — `append_follow_up`, redacted `parent`,
    `NotesIndex`, seqno ordering.
-5. **Disclosure & duplicate proof** — offline `make_disclosure` + `verify`;
-   end-to-end demo.
+5. **Disclosure & duplicate proof** — Operator `make_disclosure` + researcher
+   `verify`; end-to-end demo.
 6. **(optional) hardening** — `store_unredacted` OFF (Operator self-custody) or
    encrypt-to-Operator, redact linkage, config-pinned issuer authorization,
    anti-spam controls, KBT for external subjects (**already implemented in the
@@ -338,6 +354,14 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   construction is (re)implemented **in the C++ enclave**; the Python library is
   the **reference oracle** for that C++ code and the **researcher-side offline
   verifier** (see §13).
+- **C++ token core** (`app/src/token/`: `cose`, `sd_cwt`, `statement`) — the
+  in-enclave authoritative construction. Hand-assembles a `COSE_Sign1` with
+  QCBOR and signs the `Sig_structure` via `ccf::crypto` (no `t_cose`). Built as
+  a host `unit_tests` target (`BUILD_TESTS=ON`, no enclave/chain) and gated by
+  conformance against the Python oracle (`tools/sd_cwt/tests/test_cpp_conformance.py`):
+  a pinned Redacted-Claim-Hash vector, plus Python `validate`ing C++ tokens
+  (signature + disclosures). Redaction is top-level-map only (the schema redacts
+  `references` whole), so array-element / nested redaction is not ported.
 - `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.

@@ -3,6 +3,7 @@
 third_party/CCF/build/
 app/build/
 app/build-debug/
+app/build-test/
 *.o
 *.so
 

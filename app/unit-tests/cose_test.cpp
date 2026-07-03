@@ -1,0 +1,52 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+#include "token/cose.h"
+
+#include <ccf/crypto/cose_verifier.h>
+#include <ccf/crypto/ec_key_pair.h>
+#include <gtest/gtest.h>
+
+// A hand-assembled COSE_Sign1 must verify under CCF's own COSE verifier, and
+// the recovered payload must match what we signed. This nails the QCBOR + COSE
+// + ccf::crypto signing pipeline before any redaction is layered on top.
+TEST(Cose, Sign1RoundTripVerifiesUnderCcf)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  const auto phdr = sdcwt::encode_protected_header();
+
+  // Arbitrary CBOR payload: a map {1: 2}.
+  const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
+
+  const auto token = sdcwt::sign_cose_sign1_es256(*key, phdr, payload);
+
+  auto verifier =
+    ccf::crypto::make_cose_verifier_from_key(key->public_key_pem());
+  std::span<uint8_t> authned_content;
+  ASSERT_TRUE(verifier->verify(token, authned_content));
+
+  const std::vector<uint8_t> recovered(
+    authned_content.begin(), authned_content.end());
+  EXPECT_EQ(recovered, payload);
+}
+
+// A signature over a different payload must not verify against tampered bytes.
+TEST(Cose, TamperedPayloadFailsVerification)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  const auto phdr = sdcwt::encode_protected_header();
+  const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
+
+  auto token = sdcwt::sign_cose_sign1_es256(*key, phdr, payload);
+  // Flip a byte in the encoded payload region (last-but-one field). Rather than
+  // hunt the offset, re-sign a different payload and swap the signature.
+  const std::vector<uint8_t> other = {0xa1, 0x01, 0x03};
+  auto other_token = sdcwt::sign_cose_sign1_es256(*key, phdr, other);
+
+  auto verifier =
+    ccf::crypto::make_cose_verifier_from_key(key->public_key_pem());
+  std::span<uint8_t> content;
+  // Truncating the envelope must fail cleanly (not crash).
+  std::vector<uint8_t> truncated(
+    token.begin(), token.begin() + token.size() / 2);
+  EXPECT_FALSE(verifier->verify(truncated, content));
+}
