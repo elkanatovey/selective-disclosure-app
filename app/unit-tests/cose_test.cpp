@@ -29,6 +29,16 @@ TEST(Cose, Sign1RoundTripVerifiesUnderCcf)
   EXPECT_EQ(recovered, payload);
 }
 
+// Signing must reject a non-P-256 key rather than emit a malformed ES256 sig.
+TEST(Cose, RejectsNonP256Key)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP384R1);
+  const auto phdr = sdcwt::encode_protected_header();
+  const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
+  EXPECT_THROW(
+    sdcwt::sign_cose_sign1_es256(*key, phdr, payload), std::invalid_argument);
+}
+
 // A signature over a different payload must not verify against tampered bytes.
 TEST(Cose, TamperedPayloadFailsVerification)
 {

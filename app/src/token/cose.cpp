@@ -7,6 +7,7 @@
 #include <ccf/crypto/curve.h>
 #include <ccf/crypto/ecdsa.h>
 #include <ccf/crypto/sha256.h>
+#include <stdexcept>
 
 namespace sdcwt
 {
@@ -24,6 +25,14 @@ namespace sdcwt
     std::span<const uint8_t> protected_header_cbor,
     std::span<const uint8_t> payload)
   {
+    // This routine hardcodes ES256: the protected header advertises alg -7 and
+    // the signature is converted from DER assuming a P-256 curve. Reject any
+    // other key rather than emit a silently-malformed signature.
+    if (key.get_curve_id() != ccf::crypto::CurveID::SECP256R1)
+    {
+      throw std::invalid_argument("sign_cose_sign1_es256 requires a P-256 key");
+    }
+
     // RFC 9052 Sig_structure for a COSE_Sign1:
     //   [ "Signature1", protected, external_aad (empty), payload ]
     const auto to_be_signed = cbor_encode([&](QCBOREncodeContext& ctx) {
