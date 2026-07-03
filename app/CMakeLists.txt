@@ -11,16 +11,9 @@ if(NOT TARGET "ccf")
   find_package(${CCF_PROJECT} REQUIRED)
 endif()
 
-add_ccf_app(
-  selective_disclosure
-  SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
-       ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
-)
-
-# --- Token core (C++) + host unit tests -----------------------------------
-# The token core (CBOR/COSE/SD-CWT construction) is built as plain sources so
-# it can compile both into the enclave app and into a standalone host test
-# binary. QCBOR is vendored the same way SCITT does.
+# --- Vendored dependencies -------------------------------------------------
+# QCBOR is vendored (as SCITT does) for CBOR encode/decode in the token core.
+# Declared before add_ccf_app so the app can link + include it.
 include(FetchContent)
 
 set(BUILD_QCBOR_TEST OFF CACHE STRING "" FORCE)
@@ -32,7 +25,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(qcbor)
 set_property(TARGET qcbor PROPERTY SYSTEM TRUE)
 
-# Sources for the token core, shared by the app and the unit tests.
+# The token core (CBOR/COSE/SD-CWT construction), shared by the enclave app and
+# the host unit tests.
 set(TOKEN_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cbor_value.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cose.cpp
@@ -40,6 +34,17 @@ set(TOKEN_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/statement.cpp
 )
 
+# --- The CCF application ----------------------------------------------------
+add_ccf_app(
+  selective_disclosure
+  SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+       ${TOKEN_SRCS}
+  INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src
+  LINK_LIBS qcbor
+)
+
+# --- Host unit tests (no enclave, no chain) --------------------------------
 option(BUILD_TESTS "Build the host-side C++ unit tests (no enclave, no chain)" OFF)
 if(BUILD_TESTS)
   set(INSTALL_GTEST OFF)

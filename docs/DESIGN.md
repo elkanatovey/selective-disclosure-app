@@ -111,6 +111,14 @@ The service is a **notary + signer**, not an identity authority.
 - **The service (TEE) is the sole signer.** Researchers/Operator submit **raw
   content** over an authenticated channel; the service constructs and signs the
   SD-CWT. There is no per-submitter statement signature to check.
+- **Signing key = app-managed (not the CCF service identity).** CCF does not
+  expose the service identity private key to app code (it signs receipts
+  internally), so the app holds **its own EC P-256 issuer key** in a private
+  (encrypted, replicated) KV table, lazily generated on first use so any primary
+  can sign; its public key is published (`GET /signing-key`) as the issuer trust
+  anchor. Two independent, service-rooted anchors result: the **statement**
+  signature (app key, binds the Redacted Claim Hashes) and the **receipt** (CCF
+  service identity, proves inclusion + seqno).
 - **No key enrollment.** Submitter identity is not a CCF user set; the receipt
   proves "this statement existed at seqno T", signed by the service.
 - **Verification is receipt-anchored** (`validate_trusted`): a verifier trusts
