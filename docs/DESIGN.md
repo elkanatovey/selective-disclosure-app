@@ -212,8 +212,6 @@ COSE_Sign1 (service-signed, TEE):
   `{ redacted token, receipt, disclosures for target_paths + their ancestors }`
   from the confidential store, for the Operator to hand a researcher. *(Reverts to
   offline Operator-side tooling when `store_unredacted` is OFF — self-custody.)*
-- read helpers: `get_report` (public **redacted** token), `get_receipt`,
-  `list_notes`.
 
 **Confidential-egress authorization:** `get_statements_since`, `get_statement`,
 and `make_disclosure` return confidential plaintext and MUST be gated to the
