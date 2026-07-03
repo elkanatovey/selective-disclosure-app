@@ -4,8 +4,11 @@
 #include "ccf/app_interface.h"
 #include "ccf/claims_digest.h"
 #include "ccf/common_auth_policies.h"
+#include "ccf/crypto/cose.h"
+#include "ccf/historical_queries_adapter.h"
 #include "ccf/http_consts.h"
 #include "ccf/json_handler.h"
+#include "ccf/receipt.h"
 #include "ccf/tx_status.h"
 #include "reports.h"
 
@@ -15,6 +18,31 @@
 namespace selectivedisclosure
 {
   namespace statement = ::sdcwt::statement;
+
+  // Convert a CCF transaction receipt into a standalone COSE receipt
+  // (draft-ietf-cose-merkle-tree-proofs): a COSE_Sign1 over the signed tree
+  // root, carrying the Merkle inclusion proof in its unprotected header.
+  inline std::vector<uint8_t> make_cose_receipt(
+    const ccf::TxReceiptImplPtr& receipt_ptr)
+  {
+    const auto proof = ccf::describe_merkle_proof_v1(*receipt_ptr);
+    if (!proof.has_value())
+    {
+      throw std::runtime_error("Failed to describe Merkle proof for receipt.");
+    }
+    const auto signature = ccf::describe_cose_signature_v1(*receipt_ptr);
+    if (!signature.has_value())
+    {
+      throw std::runtime_error(
+        "Failed to describe COSE signature for receipt.");
+    }
+
+    // vdp (verifiable data proofs) = 396; inclusion proofs live at key -1.
+    const int64_t vdp = 396;
+    const ccf::cose::edit::desc::Value inclusion_desc{
+      ccf::cose::edit::pos::AtKey{-1}, vdp, *proof};
+    return ccf::cose::edit::set_unprotected_header(*signature, inclusion_desc);
+  }
 
   class ReportLedgerHandlers : public ccf::UserEndpointRegistry
   {
@@ -138,6 +166,69 @@ namespace selectivedisclosure
       };
       make_read_only_endpoint(
         "/signing-key", HTTP_GET, get_signing_key, {ccf::empty_auth_policy})
+        .install();
+
+      // --- get_statement: retrieve a registered statement + its receipt by
+      // transaction id, as a transparent statement (receipt embedded). --------
+      auto get_statement = [](
+                             ccf::endpoints::ReadOnlyEndpointContext& ctx,
+                             ccf::historical::StatePtr state) {
+        auto historical_tx = state->store->create_read_only_tx();
+        auto* handle =
+          historical_tx.template ro<StatementTable>(STATEMENT_TABLE);
+        const auto entry = handle->get();
+        if (!entry.has_value())
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_NOT_FOUND,
+            ccf::errors::ResourceNotFound,
+            fmt::format(
+              "Transaction {} is not a statement submission.",
+              state->transaction_id.to_str()));
+          return;
+        }
+
+        const auto cose_receipt = make_cose_receipt(state->receipt);
+
+        // Embed the receipt into the statement's unprotected header (label
+        // 394 = array of receipts) to form a transparent statement.
+        const int64_t receipts_label = 394;
+        const ccf::cose::edit::desc::Value receipts_desc{
+          ccf::cose::edit::pos::InArray{}, receipts_label, cose_receipt};
+        const auto transparent =
+          ccf::cose::edit::set_unprotected_header(*entry, receipts_desc);
+
+        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+        ctx.rpc_ctx->set_response_header(
+          ccf::http::headers::CONTENT_TYPE,
+          ccf::http::headervalues::contenttype::COSE);
+        ctx.rpc_ctx->set_response_body(transparent);
+      };
+
+      auto is_tx_committed =
+        [this](ccf::View view, ccf::SeqNo seqno, std::string& reason) {
+          return ccf::historical::is_tx_committed_v2(
+            consensus, view, seqno, reason);
+        };
+      auto txid_from_path = [](ccf::endpoints::ReadOnlyEndpointContext& ctx)
+        -> std::optional<ccf::TxID> {
+        std::string txid_str;
+        std::string error;
+        if (!ccf::endpoints::get_path_param(
+              ctx.rpc_ctx->get_request_path_params(), "txid", txid_str, error))
+        {
+          return std::nullopt;
+        }
+        return ccf::TxID::from_str(txid_str);
+      };
+
+      make_read_only_endpoint(
+        "/statements/{txid}",
+        HTTP_GET,
+        ccf::historical::read_only_adapter_v4(
+          get_statement, context, is_tx_committed, txid_from_path),
+        {ccf::empty_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
     }
 

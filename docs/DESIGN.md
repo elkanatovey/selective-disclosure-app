@@ -249,7 +249,17 @@ COSE_Sign1 (service-signed, TEE):
   precedence **by seqno**.
 
 ## 9. Endpoints & off-chain tooling
-**Service endpoints:**
+**Implemented so far (Phase 2, app-managed signing key):**
+- `POST /reports` — open submission of raw JSON content; the service builds +
+  signs the strict-uniformity SD-CWT, stores the redacted token, binds the
+  claims digest, and returns the **transaction id** on commit.
+- `GET /statements/{txid}` — public read: the redacted statement with its CCF
+  receipt embedded in the unprotected header (transparent statement).
+- `GET /signing-key` — the app issuer public key (trust anchor).
+- *Not yet built:* the confidential store, `append_follow_up`, the Operator-only
+  confidential-egress endpoints, and `make_disclosure` (below).
+
+**Service endpoints (target design):**
 - `submit_report` (reporter, direct): store redacted token (public) + the report's
   disclosures (confidential), set claims digest → **return seqno + receipt to the
   reporter** (their proof-of-registration and precedence anchor).
