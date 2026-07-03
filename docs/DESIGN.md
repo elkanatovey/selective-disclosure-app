@@ -17,37 +17,77 @@ Status: design agreed; implementation starts from the in-repo `basic` sample
 - the Operator can **selectively disclose** chosen fields to a researcher to **prove a
   duplicate**, revealing nothing else.
 
-A report is a multi-field object: `report_text` (+ time), optional
-`classification`, optional `patch` (+ date), and a **`parent_report`** reference.
-Follow-up notes are optional and added later.
+A statement is a multi-field object. Content fields (`title`, `body`,
+`component`, `severity`, `fingerprint`, `references`, `patch`, `patch_date`) are
+all **selectively-disclosable**; a **`parent`** reference links follow-ups to a
+report. Follow-up notes are optional and added later.
 
 ### Terminology: report vs note (same object, different role)
 A **report** and a **note/follow-up** are the **same kind of object** — an SD-CWT
-statement with fields + the always-full `parent_report`. They differ only by role:
+statement with fields + the always-full `parent`. They differ only by role:
 - **report** = a *root* statement (original submission, typically by a
-  **researcher**; `parent_report` = none/garbage).
+  **researcher**; `parent` = none/garbage).
 - **note / follow-up** = a *child* statement (later addition by **the Operator**:
-  classification, patch, detail; `parent_report` = a real report).
+  component/severity, patch, detail; `parent` = a real report).
 
 Recommended: **one unified "statement" schema**, with root-vs-child distinguished
-purely by `parent_report`. ("Notes" always means the Operator follow-ups, never the
+purely by `parent`. ("Notes" always means the Operator follow-ups, never the
 original report.)
 
-### TODO: define the statement schema  (todo: define-report-fields)
-Specify the unified schema (report + note): every claim key (private-use int or
-string), its meaning, and **clear vs selectively-disclosable** per field;
-`parent_report` is **redacted-by-default and always present**; design a **uniform
-token shape** so redacted tokens leak no metadata; reserve standard CWT keys and
-SD labels. Prerequisite for Phase 2.
+### Statement schema (RESOLVED — todo: define-report-fields)
+One **unified statement schema**; `report` and `note` share it, with role
+derived **purely from `parent`** — there is deliberately **no `statement_type`
+field**, because a visible type would itself leak *whether* a parent exists and
+so defeat the redacted-`parent` design.
+
+**Signing (Model A):** the **service (TEE) constructs and signs** every
+statement in-enclave *before* consensus; the committed **seqno** is the
+authoritative order/time. The clear `iss` is therefore the **service**, not the
+submitter.
+
+| Key | Claim | Visibility | Notes |
+|---|---|---|---|
+| `170` (hdr) | `sd_alg` | clear (machinery) | SHA-256; the only structurally-clear item |
+| `1` | `iss` | **clear** | service identity (constant across all statements) |
+| `6` | `iat` | **clear** | service sign-time (pre-consensus wall-clock) |
+| `1000` | `parent` | **SD, always present** | parent-statement hash; garbage sentinel when root |
+| `1001` | `title` | SD | short summary |
+| `1002` | `body` | SD | full report text |
+| `1003` | `component` | SD | affected component/product |
+| `1004` | `severity` | SD | severity rating |
+| `1005` | `fingerprint` | SD | normalized dedup key — the field disclosed to prove duplicates |
+| `1006` | `references` | SD | array (CVEs/URLs), redacted **whole** (not per-element) |
+| `1007` | `patch` | SD | patch id/description (Operator follow-ups) |
+| `1008` | `patch_date` | SD | when patched |
+
+**Strict uniformity:** every statement always carries **all 9** content fields
+as redacted entries; absent fields are padded with a random garbage sentinel
+(exactly as `parent` is when root). A bare redacted token therefore *always*
+exposes exactly `iss` + `iat` + `sd_alg` + **9** Redacted Claim Hashes —
+identical for a one-line note and a full report — leaking neither field
+presence, size, nor the report-vs-note distinction. `references` is redacted as
+a whole claim (not tag-60 per-element) precisely to preserve this uniform shape.
+
+Report-vs-note is decided **only** by disclosing `parent`: a real, on-ledger
+hash ⇒ note; a garbage sentinel ⇒ root. Undisclosed, the two are
+indistinguishable. `iat` is kept clear for now (standard; minor timing leak) —
+it could be redacted later for maximum uniformity without touching the token
+core.
+
+Implemented in `tools/sd_cwt/statement.py` (schema/oracle + researcher-side
+verification), tested in `tools/sd_cwt/tests/test_statement.py`.
 
 ## 2. Report structure
-- Multi-field object; one field is **`parent_report`**.
-- **`parent_report` is mandatory and constant-shape — always present, padded with
-  garbage when there is no real parent.**
-- `parent_report` is **selectively-disclosable and redacted by
-  default** — in a stored/redacted token it appears only as a Redacted Claim
-  Hash, leaking nothing (not even *whether* a parent exists). The Operator discloses the
-  linkage only when it wants to prove it.
+- Multi-field object; all content fields are **selectively-disclosable**, and
+  one field is **`parent`** (linkage).
+- **Strict uniformity — every content field is always present and constant-shape:**
+  each content field is included and redacted, padded with a random garbage
+  sentinel when it has no real value. `parent` when there is no real parent is
+  just the special case of this general rule.
+- Content fields (incl. `parent`) are **redacted by
+  default** — in a stored/redacted token they appear only as Redacted Claim
+  Hashes, leaking nothing (not even *whether* a parent exists, nor how many
+  fields are set). The Operator discloses a field only when it wants to prove it.
 - **Principle: a redacted token must leak no metadata.** The token *shape* (which
   claims appear, the count of redacted entries) should be **uniform** across
   statements regardless of content, so the pattern itself reveals nothing.
@@ -100,7 +140,7 @@ The service is a **notary + signer**, not an identity authority.
 - **Disclosure forgery** — `hash ∈ signed payload` + collision resistance.
 - **Statement-signature forgery** — the service (TEE) signs; verifiers check
   against the service cert / attestation-rooted key.
-- **Linkage / metadata leakage** — `parent_report` is always-present AND redacted;
+- **Linkage / metadata leakage** — `parent` is always-present AND redacted;
   uniform token shape leaks no metadata (not even whether a parent exists).
 
 **Assumptions / trusted:** TEE attestation holds (only attested code wields the
@@ -140,7 +180,7 @@ single spec names the combo, so no off-the-shelf tool validates it as one unit).
 COSE_Sign1 (service-signed, TEE):
   protected   : { alg, sd_alg(SHA-256), typ }
   payload     : { clear fields,
-                  redacted_claim_keys:[hashes incl. always-present parent_report] }
+                  redacted_claim_keys:[hashes incl. always-present parent] }
   unprotected : { receipt: <service-signed>,        # (a) only
                   sd_claims:[selected disclosures] } # (a) only
 ```
@@ -199,7 +239,7 @@ COSE_Sign1 (service-signed, TEE):
 - `submit_report` (reporter, direct): store redacted token (public) + the report's
   disclosures (confidential), set claims digest → **return seqno + receipt to the
   reporter** (their proof-of-registration and precedence anchor).
-- `append_follow_up` (Operator): store redacted follow-up (`parent_report` set),
+- `append_follow_up` (Operator): store redacted follow-up (`parent` set),
   set claims digest → return receipt; index under parent.
 - `get_statements_since(cursor_seqno, limit)` (**Operator only**): the unredacted
   stream — **all** statements (original reports **and** follow-ups) registered
@@ -231,9 +271,9 @@ field matches their bug.
 Token creation (CBOR/COSE/SD-CWT) is a prerequisite layer; receipts and seqno
 are chain logic that *consumes* those tokens.
 
-0. **Define the statement schema** (todo: define-report-fields) — unified
+0. **Define the statement schema** ✔ (todo: define-report-fields) — unified
    report/note fields, clear vs SD per field, redacted-always-present
-   `parent_report`. Prerequisite for everything.
+   `parent`, strict uniformity. **Done** (§1; `sd_cwt.statement`).
 1. **Off-chain: build + sign a plain CWT** — schema-valid CBOR claims set wrapped
    in COSE_Sign1; verify round-trip. Standalone lib + CLI + unit tests, no chain.
    (Nails the QCBOR + COSE + signing pipeline.)
@@ -242,7 +282,7 @@ are chain logic that *consumes* those tokens.
 3. **On-chain: submit + receipt** — `submit_report` consumes a token: sanity
    check, store the blob, bind claims digest, return **seqno + receipt**.
    (Receipt/seqno are chain logic layered on top of steps 1–2.)
-4. **Follow-ups & linkage** — `append_follow_up`, redacted `parent_report`,
+4. **Follow-ups & linkage** — `append_follow_up`, redacted `parent`,
    `NotesIndex`, seqno ordering.
 5. **Disclosure & duplicate proof** — offline `make_disclosure` + `verify`;
    end-to-end demo.
@@ -253,7 +293,7 @@ are chain logic that *consumes* those tokens.
 
 ## 11. Caveats / open decisions
 - Disclosure artifact: separate-bundle (preferred) vs embedded profile.
-- RESOLVED: `parent_report` is redacted by default + always present (no metadata leak).
+- RESOLVED: `parent` is redacted by default + always present (no metadata leak).
 - RESOLVED (for now): the **service (TEE) signs** statements; the **service holds
   the unredacted disclosures** in a private table (`store_unredacted`, default
   ON), segregated for easy migration. This dissolves the confidential
@@ -292,23 +332,29 @@ are chain logic that *consumes* those tokens.
 self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
 
 **New code (the novel parts):**
-- `sd_cwt` library — redaction core (salts, disclosures, Redacted Claim Hashes,
-  `redacted_claim_keys` / tag 60). Built as a **shared library** that compiles
-  into both a standalone CLI + unit tests **and** the CCF app.
-- statement schema; `make_disclosure` / `verify` off-chain tooling.
+- `sd_cwt` **Python** library — redaction core (salts, disclosures, Redacted
+  Claim Hashes, `redacted_claim_keys` / tag 60) + a `statement.py` schema layer.
+  Since the **service is the sole signer (Model A)**, authoritative statement
+  construction is (re)implemented **in the C++ enclave**; the Python library is
+  the **reference oracle** for that C++ code and the **researcher-side offline
+  verifier** (see §13).
+- `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
 
 ## 13. Off-chain token tooling: `sd_cwt` (Python)
-**Decision:** the off-chain token tooling (issue/sign/redact/present/verify/validate)
-is **Python**, wrapping **pycose** (as SCITT's `pyscitt` does, `pycose==1.1.0`) +
-`cbor2` + `hashlib`. The in-TEE C++ app only does **verify + store** (reuse CCF's
-`make_cose_verifier_from_key`). Token *creation/redaction* is client-side, matching
-SCITT's "sign client-side, verify in C++" split.
+**Decision (Model A — service signs):** every statement is **constructed and
+signed by the service (TEE) in C++**, not by the submitter; researchers submit
+**raw content**. The Python token tooling (issue/sign/redact/present/verify/
+validate) is therefore **(a)** the reference oracle mirroring the C++ issuer
+construction and **(b)** the researcher-side **offline verifier** (`validate`, or
+the receipt-anchored `validate_trusted`). This diverges from SCITT's "client
+signs, C++ verifies" split — here the service is the **sole signer**.
 
 **`sd_cwt` is our own minimal, domain-agnostic package** (in-repo at `tools/sd_cwt/`,
-src-layout, own `pytest` suite). It operates on arbitrary CBOR claims; the
-report/note schema + `parent_report` rules live in the app/issuer layer on top.
+src-layout, own `pytest` suite). The core operates on arbitrary CBOR claims; the
+unified report/note schema (§1) + strict-uniformity / `parent` rules live in the
+`sd_cwt.statement` layer on top.
 
 **Implemented subset (our custom profile):**
 - COSE_Sign1 issuer-signed CWT via pycose.
@@ -355,4 +401,15 @@ validate_trusted(token)                                 -> ValidatedClaims   # s
 match_disclosures(payload, presented, *, sd_alg=SHA256) -> ValidatedClaims
 kbt_sign(token, selected, holder, *, aud, iat=None, cti=None, cnonce=None) -> kbt
 kbt_verify(kbt, issuer_pub, *, expected_aud, expected_cnonce=None)         -> KBTResult
+```
+
+**Statement layer (`sd_cwt.statement`) — the report/note schema on top:**
+```
+issue_statement(signer, *, iss, iat, parent=None, title=None, body=None,
+    component=None, severity=None, fingerprint=None, references=None,
+    patch=None, patch_date=None)                        -> (token, [Disclosure])
+disclosures_for(discs, *field_names)                    -> [Disclosure]
+validate_statement(token, issuer_pub)                   -> ValidatedClaims  # sig + schema
+validate_statement_trusted(token)                       -> ValidatedClaims  # receipt-trust + schema
+redacted_shape(token)                   -> (clear_keys, n_redacted)  # uniformity invariant
 ```
