@@ -168,3 +168,26 @@ def test_python_validates_cpp_array_redaction():
     out = sd_cwt.validate(_present(token, disclosures), key)
     assert out.clear[1] == "https://ledger.example/tee"
     assert out.clear[1006] == ["REF_A", "REF_B", "REF_C"]
+
+
+def test_python_validates_cpp_nested_redaction():
+    """A C++ token with deep nested redaction + ancestor disclosure reconstructs.
+
+    claim 700 = {"a": {"b": <secret>, "c": <sibling>}} with both "a" and
+    "a"."b" redacted. Disclosing all disclosures must restore the full nested
+    structure (proving the C++ ancestor-disclosure encoding matches the
+    reference).
+    """
+    if not _ARTIFACT_DIR:
+        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
+    d = Path(_ARTIFACT_DIR) / "nested"
+    if not (d / "statement.cbor").exists():
+        pytest.skip(f"C++ nested-redaction artifact missing in {d}")
+
+    token = (d / "statement.cbor").read_bytes()
+    disclosures = cbor2.loads((d / "disclosures.cbor").read_bytes())
+    key = _ec2_key_from_pem((d / "signer.pem").read_bytes())
+
+    out = sd_cwt.validate(_present(token, disclosures), key)
+    assert out.clear[1] == "https://ledger.example/tee"
+    assert out.clear[700] == {"a": {"b": "SECRET_CHILD", "c": "KEEP_SIBLING"}}

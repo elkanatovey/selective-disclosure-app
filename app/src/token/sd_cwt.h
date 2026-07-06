@@ -101,8 +101,9 @@ namespace sdcwt
   // from the key's curve; the redaction hash is `sd_alg` (default SHA-256);
   // `salt_len` is the per-disclosure salt length in bytes (default 16).
   //
-  // Throws std::invalid_argument (unsupported curve / path into a
-  // non-container) or std::runtime_error (CBOR failure).
+  // Throws std::invalid_argument (unsupported curve, or a redact_path that does
+  // not resolve to an existing claim/element / descends into a non-container)
+  // or std::runtime_error (CBOR failure).
   IssuedToken issue(
     const std::vector<Claim>& claims,
     const ccf::crypto::ECKeyPair& key,

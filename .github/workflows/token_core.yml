@@ -50,7 +50,7 @@ jobs:
           tdnf -y install ./ccf.rpm
           rm -f ccf.rpm
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         # The CCF submodule is not needed: we build against the installed CCF
         # development package, not from source.
 

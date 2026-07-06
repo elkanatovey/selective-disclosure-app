@@ -148,6 +148,53 @@ namespace sdcwt
         static_cast<size_t>(std::get<int64_t>(e)) == index;
     }
 
+    // Walk `path` through `root` and confirm every element resolves to an
+    // existing map entry / in-range array element. A redaction path that
+    // matches nothing would otherwise silently produce no redaction, so we
+    // reject it here (stricter than the Python reference, which ignores it).
+    bool path_resolves(const CborValue& root, const Path& path)
+    {
+      const CborValue* node = &root;
+      for (const auto& elem : path)
+      {
+        if (node->kind == CborValue::Kind::Map)
+        {
+          const CborValue* next = nullptr;
+          for (size_t i = 0; i < node->map_keys.size(); ++i)
+          {
+            if (elem_matches_key(elem, node->map_keys[i]))
+            {
+              next = &node->map_vals[i];
+              break;
+            }
+          }
+          if (next == nullptr)
+          {
+            return false;
+          }
+          node = next;
+        }
+        else if (node->kind == CborValue::Kind::Array)
+        {
+          if (!std::holds_alternative<int64_t>(elem))
+          {
+            return false;
+          }
+          const int64_t idx = std::get<int64_t>(elem);
+          if (idx < 0 || static_cast<size_t>(idx) >= node->array_v.size())
+          {
+            return false;
+          }
+          node = &node->array_v[static_cast<size_t>(idx)];
+        }
+        else
+        {
+          return false; // cannot descend into a scalar
+        }
+      }
+      return true;
+    }
+
     // Recursively redact `node` at the given relative `paths` (mirrors the
     // Python reference `_redact_node`). A length-1 path redacts that whole
     // entry/element here; longer paths recurse first (ancestor-disclosure
@@ -293,6 +340,17 @@ namespace sdcwt
       if (claim.redact)
       {
         paths.push_back(Path{PathElem(claim.key)});
+      }
+    }
+
+    // Reject caller-supplied paths that resolve to nothing, so a mistyped path
+    // can't silently under-redact. (Per-claim paths above always resolve.)
+    for (const auto& p : redact_paths)
+    {
+      if (p.empty() || !path_resolves(root, p))
+      {
+        throw std::invalid_argument(
+          "redact_path does not resolve to an existing claim/element");
       }
     }
 

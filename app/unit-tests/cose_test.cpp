@@ -63,6 +63,28 @@ TEST(Cose, CurveToAlgMapping)
     std::invalid_argument);
 }
 
+// external_aad is bound into the signature: a token signed with a non-empty aad
+// does not verify under CCF's verifier (which uses an empty aad), while the
+// same payload signed with no aad does.
+TEST(Cose, ExternalAadIsBound)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  const auto phdr = sdcwt::encode_protected_header();
+  const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
+  const std::vector<uint8_t> aad = {'c', 't', 'x'};
+
+  const auto with_aad = sdcwt::sign_cose_sign1(*key, phdr, payload, aad);
+  const auto no_aad = sdcwt::sign_cose_sign1(*key, phdr, payload);
+
+  auto verifier =
+    ccf::crypto::make_cose_verifier_from_key(key->public_key_pem());
+  std::span<uint8_t> content;
+  // CCF verify() uses an empty external_aad -> the aad-bound token must fail,
+  // the empty-aad token must pass.
+  EXPECT_FALSE(verifier->verify(with_aad, content));
+  EXPECT_TRUE(verifier->verify(no_aad, content));
+}
+
 // A signature over a different payload must not verify against tampered bytes.
 TEST(Cose, TamperedPayloadFailsVerification)
 {

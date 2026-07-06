@@ -134,6 +134,31 @@ TEST(SdCwt, ConfigurableSaltLength)
   EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
 }
 
+// A redact_path that resolves to nothing must be rejected (rather than silently
+// producing no redaction).
+TEST(SdCwt, UnmatchedRedactPathRejected)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  std::vector<sdcwt::Claim> claims = {
+    {1006, sdcwt::value::text_array({"A", "B"}), false},
+  };
+  // Wrong claim key, out-of-range index, and descending into a scalar.
+  EXPECT_THROW(
+    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, {{int64_t{9999}}}),
+    std::invalid_argument);
+  EXPECT_THROW(
+    sdcwt::issue(
+      claims, *key, sdcwt::HashAlg::SHA_256, {{int64_t{1006}, int64_t{9}}}),
+    std::invalid_argument);
+  EXPECT_THROW(
+    sdcwt::issue(
+      claims,
+      *key,
+      sdcwt::HashAlg::SHA_256,
+      {{int64_t{1006}, int64_t{0}, int64_t{0}}}),
+    std::invalid_argument);
+}
+
 // Array-element redaction: a redact_path into an array element hides only that
 // element (replaced by a tag(60) hash) and yields a keyless disclosure.
 TEST(SdCwt, ArrayElementRedaction)
@@ -179,4 +204,50 @@ TEST(SdCwt, NestedMapRedaction)
   EXPECT_EQ(std::get<std::string>(*issued.disclosures[0].key), "hide");
   EXPECT_FALSE(token_contains(issued.token, "NESTED_HIDE"));
   EXPECT_TRUE(token_contains(issued.token, "INNER_KEEP"));
+}
+
+// Deep nesting + ancestor-disclosure: redacting both a parent map and a child
+// within it yields two disclosures; both values are absent from the token, and
+// the parent's own disclosure carries the child as a still-redacted hash (so
+// disclosing the parent alone does not reveal the child). Cross-validated
+// against the Python reference in test_cpp_conformance.py.
+TEST(SdCwt, NestedAncestorDisclosure)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  // claim 700 = { "a": { "b": "SECRET_CHILD", "c": "KEEP_SIBLING" } }
+  auto grandchild = sdcwt::CborValue::Map(
+    {{std::string("b"), sdcwt::value::text("SECRET_CHILD")},
+     {std::string("c"), sdcwt::value::text("KEEP_SIBLING")}});
+  auto child =
+    sdcwt::CborValue::Map({{std::string("a"), std::move(grandchild)}});
+  std::vector<sdcwt::Claim> claims = {{700, std::move(child), false}};
+  // Redact the parent "a" AND the grandchild "b".
+  const std::vector<sdcwt::Path> paths = {
+    {int64_t{700}, std::string("a")},
+    {int64_t{700}, std::string("a"), std::string("b")}};
+
+  const auto issued =
+    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+
+  ASSERT_EQ(issued.disclosures.size(), 2u);
+  EXPECT_FALSE(token_contains(issued.token, "SECRET_CHILD"));
+  EXPECT_FALSE(
+    token_contains(issued.token, "KEEP_SIBLING")); // inside redacted a
+
+  // The parent "a" disclosure's value must still hide the child: its encoded
+  // bytes contain the sibling but NOT the secret grandchild.
+  const sdcwt::Disclosure* a_disc = nullptr;
+  for (const auto& d : issued.disclosures)
+  {
+    if (
+      d.key.has_value() && std::holds_alternative<std::string>(*d.key) &&
+      std::get<std::string>(*d.key) == "a")
+    {
+      a_disc = &d;
+    }
+  }
+  ASSERT_NE(a_disc, nullptr);
+  const std::string a_enc(a_disc->encoded.begin(), a_disc->encoded.end());
+  EXPECT_NE(a_enc.find("KEEP_SIBLING"), std::string::npos);
+  EXPECT_EQ(a_enc.find("SECRET_CHILD"), std::string::npos);
 }
