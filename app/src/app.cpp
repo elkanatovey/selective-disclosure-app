@@ -61,8 +61,8 @@ namespace selectivedisclosure
     {
       CommonEndpointRegistry::init_handlers();
 
-      // --- submit_report: researchers submit RAW content; the service builds,
-      // signs and registers a redacted statement, then returns its txid. -----
+      // --- submit_report: parse raw JSON content, build + sign a redacted
+      // statement, store it, and return its transaction id on commit. --------
       auto submit_report = [this](ccf::endpoints::EndpointContext& ctx) {
         nlohmann::json body;
         try
@@ -276,13 +276,13 @@ namespace selectivedisclosure
       fields.severity = opt_str("severity");
       fields.patch = opt_str("patch");
 
-      // fingerprint: a normalized dedup key, taken as raw string bytes.
+      // fingerprint: stored as raw UTF-8 string bytes (not hex-decoded).
       if (const auto fp = opt_str("fingerprint"))
       {
         fields.fingerprint = std::vector<uint8_t>(fp->begin(), fp->end());
       }
 
-      // parent: hex-encoded hash of the parent statement.
+      // parent: hex string decoded to the parent statement's hash bytes.
       if (body.contains("parent"))
       {
         if (!body["parent"].is_string())

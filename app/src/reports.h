@@ -14,20 +14,18 @@
 
 namespace selectivedisclosure
 {
-  // Public ledger entry: the redacted, service-signed SD-CWT for a submission.
-  // Stored per-transaction and retrieved by transaction id via historical
-  // query.
+  // Stores the redacted SD-CWT for a submission, per transaction; retrieved by
+  // transaction id via historical query.
   using StatementTable = ccf::kv::Value<std::vector<uint8_t>>;
   static constexpr auto STATEMENT_TABLE = "public:sd.statement";
 
-  // The app's own signing key (private key PEM). Held in a PRIVATE (encrypted,
-  // replicated) table so whichever node is primary can sign. The CCF service
-  // identity key is not app-accessible, so the app manages its own issuer key;
-  // the receipt (service-identity-signed) independently proves inclusion.
+  // The app's issuer signing key (private key PEM), in a PRIVATE (encrypted,
+  // replicated) table so whichever node is primary can sign. See DESIGN.md §4
+  // for why the app manages its own key rather than the CCF service identity.
   using SigningKeyTable = ccf::kv::Value<std::vector<uint8_t>>;
   static constexpr auto SIGNING_KEY_TABLE = "sd.signing_key";
 
-  // Clear `iss` carried by every statement: the service identity, not a caller.
+  // Value written as the clear `iss` claim of every statement.
   static constexpr auto SERVICE_ISS =
     "https://selective-disclosure.example/service";
 
