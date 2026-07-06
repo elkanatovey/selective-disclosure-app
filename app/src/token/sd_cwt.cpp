@@ -9,6 +9,8 @@
 #include <ccf/crypto/entropy.h>
 #include <ccf/crypto/hash_provider.h>
 #include <ccf/crypto/md_type.h>
+#include <qcbor/qcbor_decode.h>
+#include <qcbor/qcbor_spiffy_decode.h>
 
 namespace sdcwt
 {
@@ -421,5 +423,111 @@ namespace sdcwt
     out.token = sign_cose_sign1(key, phdr, payload);
     out.disclosures = std::move(disclosures);
     return out;
+  }
+
+  std::vector<uint8_t> present(
+    std::span<const uint8_t> token,
+    const std::vector<std::vector<uint8_t>>& selected)
+  {
+    // Decode the tagged COSE_Sign1 [ protected, unprotected, payload, signature
+    // ] into its opaque parts; the unprotected header is rebuilt (our issued
+    // tokens carry an empty one), the rest is copied through verbatim so the
+    // signature stays valid.
+    QCBORDecodeContext dc;
+    QCBORDecode_Init(
+      &dc, UsefulBufC{token.data(), token.size()}, QCBOR_DECODE_MODE_NORMAL);
+
+    UsefulBufC phdr = NULLUsefulBufC;
+    UsefulBufC payload = NULLUsefulBufC;
+    UsefulBufC sig = NULLUsefulBufC;
+    QCBORDecode_EnterArray(&dc, nullptr);
+    QCBORDecode_GetByteString(&dc, &phdr);
+    QCBORDecode_EnterMap(&dc, nullptr); // unprotected header (contents unused)
+    QCBORDecode_ExitMap(&dc);
+    QCBORDecode_GetByteString(&dc, &payload);
+    QCBORDecode_GetByteString(&dc, &sig);
+    QCBORDecode_ExitArray(&dc);
+    if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
+    {
+      throw std::runtime_error("present: malformed COSE_Sign1 token");
+    }
+
+    return cbor_encode([&](QCBOREncodeContext& ctx) {
+      QCBOREncode_AddTag(&ctx, 18); // COSE_Sign1
+      QCBOREncode_OpenArray(&ctx);
+      QCBOREncode_AddBytes(&ctx, phdr);
+      QCBOREncode_OpenMap(&ctx);
+      if (!selected.empty())
+      {
+        QCBOREncode_OpenArrayInMapN(&ctx, SD_CLAIMS_LABEL);
+        for (const auto& d : selected)
+        {
+          QCBOREncode_AddBytes(&ctx, to_ubc(d));
+        }
+        QCBOREncode_CloseArray(&ctx);
+      }
+      QCBOREncode_CloseMap(&ctx);
+      QCBOREncode_AddBytes(&ctx, payload);
+      QCBOREncode_AddBytes(&ctx, sig);
+      QCBOREncode_CloseArray(&ctx);
+    });
+  }
+
+  std::vector<uint8_t> kbt_sign(
+    std::span<const uint8_t> token,
+    const std::vector<std::vector<uint8_t>>& selected,
+    const ccf::crypto::ECKeyPair& holder,
+    const KbtParams& params)
+  {
+    if (!params.iat.has_value() && !params.cti.has_value())
+    {
+      throw std::invalid_argument(
+        "KBT payload must contain iat or cti (draft-08 s8.1)");
+    }
+
+    const auto holder_alg = cose_es_alg_for_curve(holder.get_curve_id());
+    const auto presented = present(token, selected);
+
+    // KBT protected header {1: alg, 13: <embedded presented SD-CWT>, 16: typ}.
+    // Keys are emitted in CDE order (1, 13, 16).
+    const auto phdr = cbor_encode([&](QCBOREncodeContext& ctx) {
+      QCBOREncode_OpenMap(&ctx);
+      QCBOREncode_AddInt64ToMapN(&ctx, 1, holder_alg);
+      QCBOREncode_AddEncodedToMapN(&ctx, KCWT_LABEL, to_ubc(presented));
+      QCBOREncode_AddInt64ToMapN(&ctx, TYP_LABEL, KB_CWT_TYP);
+      QCBOREncode_CloseMap(&ctx);
+    });
+
+    // KBT payload: aud plus whichever of exp/nbf/iat/cti/cnonce are set,
+    // emitted in ascending (CDE) key order. iss/sub are forbidden and never
+    // added.
+    const auto payload = cbor_encode([&](QCBOREncodeContext& ctx) {
+      QCBOREncode_OpenMap(&ctx);
+      QCBOREncode_AddTextToMapN(
+        &ctx, CWT_AUD, UsefulBufC{params.aud.data(), params.aud.size()});
+      if (params.exp.has_value())
+      {
+        QCBOREncode_AddInt64ToMapN(&ctx, CWT_EXP, *params.exp);
+      }
+      if (params.nbf.has_value())
+      {
+        QCBOREncode_AddInt64ToMapN(&ctx, CWT_NBF, *params.nbf);
+      }
+      if (params.iat.has_value())
+      {
+        QCBOREncode_AddInt64ToMapN(&ctx, CWT_IAT, *params.iat);
+      }
+      if (params.cti.has_value())
+      {
+        QCBOREncode_AddBytesToMapN(&ctx, CWT_CTI, to_ubc(*params.cti));
+      }
+      if (params.cnonce.has_value())
+      {
+        QCBOREncode_AddBytesToMapN(&ctx, CWT_CNONCE, to_ubc(*params.cnonce));
+      }
+      QCBOREncode_CloseMap(&ctx);
+    });
+
+    return sign_cose_sign1(holder, phdr, payload);
   }
 }

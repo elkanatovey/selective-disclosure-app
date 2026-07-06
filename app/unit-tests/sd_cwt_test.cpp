@@ -172,6 +172,63 @@ TEST(SdCwt, CnfEmbedsHolderPublicKey)
   EXPECT_FALSE(contains(without.token, coords.x));
 }
 
+// present() attaches the selected disclosures to the SD-CWT unprotected header
+// without disturbing the signed protected header / payload / signature.
+TEST(SdCwt, PresentAttachesSelectedDisclosures)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  std::vector<sdcwt::Claim> claims = {
+    {1, sdcwt::value::text("iss"), false},
+    {1002, sdcwt::value::text("secret body"), true},
+  };
+  const auto issued = sdcwt::issue(claims, *key);
+  ASSERT_EQ(issued.disclosures.size(), 1u);
+
+  const auto contains = [](
+                          const std::vector<uint8_t>& hay,
+                          const std::vector<uint8_t>& needle) {
+    return std::search(hay.begin(), hay.end(), needle.begin(), needle.end()) !=
+      hay.end();
+  };
+
+  // The bare token does not carry the disclosure; the presented one does.
+  EXPECT_FALSE(contains(issued.token, issued.disclosures[0].encoded));
+  const auto presented =
+    sdcwt::present(issued.token, {issued.disclosures[0].encoded});
+  EXPECT_TRUE(contains(presented, issued.disclosures[0].encoded));
+  // Presenting nothing yields a decodable token again (no sd_claims header).
+  EXPECT_NO_THROW(sdcwt::present(issued.token, {}));
+}
+
+// kbt_sign requires the draft-08 s8.1 freshness claim (iat or cti).
+TEST(SdCwt, KbtSignRequiresIatOrCti)
+{
+  auto issuer = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  auto holder = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  auto holder_pub = ccf::crypto::make_ec_public_key(holder->public_key_pem());
+  std::vector<sdcwt::Claim> claims = {
+    {1, sdcwt::value::text("iss"), false},
+    {1002, sdcwt::value::text("secret"), true},
+  };
+  const auto issued = sdcwt::issue(
+    claims,
+    *issuer,
+    sdcwt::HashAlg::SHA_256,
+    /*redact_paths=*/{},
+    sdcwt::default_random_source(),
+    sdcwt::SALT_LEN,
+    /*pad_to=*/0,
+    holder_pub.get());
+
+  sdcwt::KbtParams params;
+  params.aud = "https://vendor.example/verify"; // neither iat nor cti
+  EXPECT_THROW(
+    sdcwt::kbt_sign(issued.token, {}, *holder, params), std::invalid_argument);
+
+  params.iat = 1700000500;
+  EXPECT_NO_THROW(sdcwt::kbt_sign(issued.token, {}, *holder, params));
+}
+
 // Decoy padding: pad_to raises the top-level redacted-hash count to the target
 // with salt-only decoy disclosures, without changing the real claim.
 TEST(SdCwt, DecoyPadding)

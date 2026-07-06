@@ -269,3 +269,45 @@ def test_python_reads_cpp_cnf():
     signer = _ec2_key_from_pem((d / "signer.pem").read_bytes())
     out = sd_cwt.validate(token, signer)
     assert out.clear[1] == "https://ledger.example/tee"
+
+
+def test_python_verifies_cpp_kbt():
+    """A holder-signed KBT produced by the C++ core verifies in Python.
+
+    The C++ core issues a cnf-bound SD-CWT (two redacted claims), then
+    kbt_sign()s a presentation of only claim 1002 with the holder key. The
+    Python reference `kbt_verify` must accept it end-to-end: verify the issuer
+    signature over the embedded SD-CWT, recover the holder key from `cnf` and
+    check proof-of-possession, match the audience + cnonce, and reconstruct only
+    the presented disclosure (1003 stays hidden). Values MUST stay in sync with
+    app/unit-tests/conformance_test.cpp::emit_kbt.
+    """
+    if not _ARTIFACT_DIR:
+        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
+    d = Path(_ARTIFACT_DIR) / "kbt"
+    if not (d / "kbt.cbor").exists():
+        pytest.skip(f"C++ kbt artifact missing in {d}")
+
+    kbt = (d / "kbt.cbor").read_bytes()
+    issuer = _ec2_key_from_pem((d / "signer.pem").read_bytes())
+
+    aud = "https://vendor.example/verify"
+    cnonce = bytes([0xA1, 0xB2, 0xC3, 0xD4])
+    result = sd_cwt.kbt_verify(
+        kbt, issuer, expected_aud=aud, expected_cnonce=cnonce
+    )
+
+    assert result.aud == aud
+    assert result.cnonce == cnonce
+    assert result.kbt_claims[6] == 1700000500  # iat
+    # Only the presented claim is reconstructed; the other stays redacted.
+    assert result.claims.disclosed[1002] == "secret body"
+    assert 1003 not in result.claims.disclosed
+    assert 1003 not in result.claims.clear
+    # The clear (always-present) claims survive, including the cnf binding.
+    assert result.claims.clear[1] == "https://ledger.example/tee"
+    assert 8 in result.claims.clear
+
+    # A wrong audience MUST be rejected.
+    with pytest.raises(ValueError):
+        sd_cwt.kbt_verify(kbt, issuer, expected_aud="https://evil.example")

@@ -369,8 +369,9 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   vector, Python `validate`ing C++ tokens (signature + disclosures), a
   byte-identical payload check, cross-validation of array-element (tag 60) and
   deep-nested + ancestor-disclosure redaction, a byte-identical decoy-padding
-  check, and a `cnf` key-binding check (Python recovers the embedded holder
-  key). Supports **map, nested-map and array-element (tag 60) redaction**
+  check, a `cnf` key-binding check (Python recovers the embedded holder key), and
+  a full KBT check (Python `kbt_verify` accepts a C++-signed Key Binding Token).
+  Supports **map, nested-map and array-element (tag 60) redaction**
   at arbitrary depth via `redact_paths` (the ancestor-disclosure rule), matching
   the Python reference — so layered disclosures are available (the statement
   schema still redacts `references` whole for strict uniformity, but the core can
@@ -382,9 +383,14 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   claim (`issue(..., holder=pub)` → clear `8: {1: COSE_Key}`), so the enclave
   issues fully standards-compliant, key-binding-capable SD-CWTs; a conformance
   test recovers the `cnf` key in Python and checks its coordinates + fixed-length
-  encoding. The `kbt_sign`/`kbt_verify` operations themselves are **not** in the
-  enclave: they are the *holder's* proof-of-possession (with a private key the
-  issuer never holds) and the *verifier's* check, both off-chain (Python).
+  encoding. **Presentation + Key Binding Token signing** are also ported:
+  `present()` attaches selected disclosures to the SD-CWT unprotected header
+  (`sd_claims`, 17) without re-signing, and `kbt_sign()` wraps the presented
+  SD-CWT in the KBT `kcwt` (13) protected header and signs it (typ
+  application/kb+cwt) with the holder key — a conformance test has the Python
+  reference `kbt_verify` accept a C++-signed KBT end-to-end (issuer signature,
+  `cnf` proof-of-possession, audience/cnonce, selective disclosure). Only
+  `kbt_verify` stays Python: it is the *verifier's* check, off-chain by design.
 - `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.

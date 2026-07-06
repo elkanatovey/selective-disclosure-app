@@ -26,6 +26,16 @@ namespace sdcwt
   inline constexpr size_t SALT_LEN = 16; // 128-bit CSPRNG salt
   inline constexpr int64_t CNF_LABEL = 8; // clear: RFC 8747 confirmation claim
 
+  // Key Binding Token constants (draft-08 s8).
+  inline constexpr int64_t KCWT_LABEL = 13; // KBT phdr: embedded issued SD-CWT
+  inline constexpr int64_t KB_CWT_TYP = 294; // typ: application/kb+cwt
+  inline constexpr int64_t CWT_AUD = 3; // audience
+  inline constexpr int64_t CWT_EXP = 4; // expiry
+  inline constexpr int64_t CWT_NBF = 5; // not-before
+  inline constexpr int64_t CWT_IAT = 6; // issued-at
+  inline constexpr int64_t CWT_CTI = 7; // token id
+  inline constexpr int64_t CWT_CNONCE = 39; // challenge nonce
+
   // Redaction hash algorithm. The enum values are the COSE hash-algorithm
   // identifiers written into the `sd_alg` protected header (and match the
   // Python reference `HashAlg`).
@@ -125,4 +135,41 @@ namespace sdcwt
     size_t salt_len = SALT_LEN,
     size_t pad_to = 0,
     const ccf::crypto::ECPublicKey* holder = nullptr);
+
+  // Attach `selected` disclosures (their encoded `[salt, value, key]` bytes) to
+  // an issued SD-CWT's unprotected header (sd_claims, label 17), leaving the
+  // protected header, payload and signature untouched (no re-signing). Passing
+  // an empty selection omits the sd_claims header entirely. Mirrors the Python
+  // reference `present`. Throws std::runtime_error on a malformed token.
+  std::vector<uint8_t> present(
+    std::span<const uint8_t> token,
+    const std::vector<std::vector<uint8_t>>& selected);
+
+  // Key Binding Token payload parameters (draft-08 s8.1). `aud` (the intended
+  // verifier) is required; at least one of `iat`/`cti` MUST be set. `iss`/`sub`
+  // are forbidden by the spec and are never emitted.
+  struct KbtParams
+  {
+    std::string aud;
+    std::optional<int64_t> iat;
+    std::optional<std::vector<uint8_t>> cti;
+    std::optional<std::vector<uint8_t>> cnonce;
+    std::optional<int64_t> exp;
+    std::optional<int64_t> nbf;
+  };
+
+  // Sign a Key Binding Token (draft-08 s8): present `selected` disclosures on
+  // the SD-CWT `token`, embed the presented SD-CWT in the KBT `kcwt` (13)
+  // protected header, and sign the KBT (typ = application/kb+cwt) with the
+  // `holder` private key — which MUST correspond to the SD-CWT `cnf` key for a
+  // verifier's proof-of-possession check to pass. The signing algorithm is
+  // derived from the holder key's curve.
+  //
+  // Throws std::invalid_argument (neither iat nor cti set, or an unsupported
+  // holder curve) or std::runtime_error (malformed token / CBOR failure).
+  std::vector<uint8_t> kbt_sign(
+    std::span<const uint8_t> token,
+    const std::vector<std::vector<uint8_t>>& selected,
+    const ccf::crypto::ECKeyPair& holder,
+    const KbtParams& params);
 }
