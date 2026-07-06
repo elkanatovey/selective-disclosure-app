@@ -5,6 +5,7 @@
 #include "token/cbor.h"
 #include "token/cose.h"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <qcbor/qcbor_decode.h>
 
@@ -132,6 +133,43 @@ TEST(SdCwt, ConfigurableSaltLength)
     /*salt_len=*/32);
   ASSERT_EQ(issued.disclosures.size(), 1u);
   EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
+}
+
+// A standards-compliant issuer can bind the token to a holder key: passing a
+// `holder` public key embeds the RFC 8747 `cnf` claim (clear) so the token is
+// key-binding capable. The holder's public coordinates appear only when set.
+TEST(SdCwt, CnfEmbedsHolderPublicKey)
+{
+  auto issuer = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  auto holder = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  auto holder_pub = ccf::crypto::make_ec_public_key(holder->public_key_pem());
+  const auto coords = holder_pub->coordinates();
+
+  std::vector<sdcwt::Claim> claims = {
+    {1, sdcwt::value::text("https://issuer.example"), false},
+    {1002, sdcwt::value::text("secret body"), true},
+  };
+
+  const auto with_cnf = sdcwt::issue(
+    claims,
+    *issuer,
+    sdcwt::HashAlg::SHA_256,
+    /*redact_paths=*/{},
+    sdcwt::default_random_source(),
+    sdcwt::SALT_LEN,
+    /*pad_to=*/0,
+    holder_pub.get());
+  const auto without = sdcwt::issue(claims, *issuer);
+
+  const auto contains = [](
+                          const std::vector<uint8_t>& hay,
+                          const std::vector<uint8_t>& needle) {
+    return std::search(hay.begin(), hay.end(), needle.begin(), needle.end()) !=
+      hay.end();
+  };
+  EXPECT_TRUE(contains(with_cnf.token, coords.x));
+  EXPECT_TRUE(contains(with_cnf.token, coords.y));
+  EXPECT_FALSE(contains(without.token, coords.x));
 }
 
 // Decoy padding: pad_to raises the top-level redacted-hash count to the target

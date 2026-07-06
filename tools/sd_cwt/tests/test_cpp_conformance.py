@@ -223,3 +223,49 @@ def test_decoy_padding_byte_identical_to_python(monkeypatch):
     )
 
     assert _payload_bytes(cpp_token) == _payload_bytes(py_token)
+
+
+def test_python_reads_cpp_cnf():
+    """A C++ token bound to a holder key (RFC 8747 `cnf`) is spec-correct.
+
+    The issuer (enclave) embeds `8: {1: COSE_Key}` at issuance. The Python
+    reference must recover a well-formed EC2 COSE_Key from the clear payload
+    whose coordinates equal the emitted holder public key, proving the
+    C++-issued token is key-binding capable / interoperable. The holder-side
+    KBT sign+verify round-trip itself is covered by tests/test_conformance.py.
+    """
+    if not _ARTIFACT_DIR:
+        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
+    d = Path(_ARTIFACT_DIR) / "cnf"
+    if not (d / "statement.cbor").exists():
+        pytest.skip(f"C++ cnf artifact missing in {d}")
+
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+    from sd_cwt.core import _key_from_cnf  # reference cnf reader
+
+    token = (d / "statement.cbor").read_bytes()
+    holder_pem = (d / "holder.pem").read_bytes()
+
+    payload = cbor2.loads(_payload_bytes(token))
+    assert 8 in payload, "cnf claim (8) missing from clear payload"
+    cose_key = payload[8][1]  # cnf = {1: COSE_Key}
+    assert cose_key[1] == 2  # kty: EC2
+    assert cose_key[-1] == 1  # crv: P-256
+    # COSE requires fixed-length (curve-size) coordinates.
+    assert len(cose_key[-2]) == 32
+    assert len(cose_key[-3]) == 32
+
+    # The recovered confirmation key must equal the emitted holder public key.
+    expected = load_pem_public_key(holder_pem).public_numbers()
+    assert int.from_bytes(cose_key[-2], "big") == expected.x
+    assert int.from_bytes(cose_key[-3], "big") == expected.y
+
+    # It must also parse into a usable pycose verification key.
+    holder_key = _key_from_cnf(payload[8])
+    assert int.from_bytes(holder_key.x, "big") == expected.x
+
+    # And the issuer signature over the whole token must verify.
+    signer = _ec2_key_from_pem((d / "signer.pem").read_bytes())
+    out = sd_cwt.validate(token, signer)
+    assert out.clear[1] == "https://ledger.example/tee"

@@ -136,6 +136,26 @@ namespace sdcwt
       });
     }
 
+    // Build an RFC 8747 `cnf` claim value `{1: COSE_Key}` holding only the EC2
+    // PUBLIC coordinates of `holder` (kty=EC2, crv, x, y). Mirrors the Python
+    // reference `_cnf_from_key`.
+    CborValue cnf_from_holder(const ccf::crypto::ECPublicKey& holder)
+    {
+      const auto coords = holder.coordinates();
+      CborValue cose_key = CborValue::Map({});
+      cose_key.map_put(CborKey(int64_t{1}), value::integer(2)); // kty: EC2
+      cose_key.map_put(
+        CborKey(int64_t{-1}),
+        value::integer(cose_ec_curve_id(holder.get_curve_id()))); // crv
+      cose_key.map_put(CborKey(int64_t{-2}), value::bytes(coords.x)); // x
+      cose_key.map_put(CborKey(int64_t{-3}), value::bytes(coords.y)); // y
+
+      CborValue cnf = CborValue::Map({});
+      cnf.map_put(
+        CborKey(int64_t{1}), std::move(cose_key)); // method 1 = COSE_Key
+      return cnf;
+    }
+
     bool elem_matches_key(const PathElem& e, const CborKey& key)
     {
       if (
@@ -335,7 +355,8 @@ namespace sdcwt
     const std::vector<Path>& redact_paths,
     const RandomSource& rng,
     size_t salt_len,
-    size_t pad_to)
+    size_t pad_to,
+    const ccf::crypto::ECPublicKey* holder)
   {
     // Derive the COSE signing algorithm from the key's curve (throws early on
     // an unsupported curve, before any redaction work).
@@ -353,6 +374,13 @@ namespace sdcwt
       {
         paths.push_back(Path{PathElem(claim.key)});
       }
+    }
+
+    // Embed the RFC 8747 confirmation claim (clear, never redacted) so the
+    // token is key-binding capable.
+    if (holder != nullptr)
+    {
+      root.map_put(CborKey(CNF_LABEL), cnf_from_holder(*holder));
     }
 
     // Reject caller-supplied paths that resolve to nothing, so a mistyped path

@@ -220,6 +220,57 @@ namespace
       reinterpret_cast<const char*>(issued.token.data()),
       static_cast<std::streamsize>(issued.token.size()));
   }
+
+  // Emit a generic token that BINDS a holder key via the RFC 8747 `cnf`
+  // claim, plus the holder's public key, so the Python reference can recover
+  // the cnf key and confirm the C++-issued token is key-binding capable /
+  // spec-correct. Values MUST stay in sync with
+  // test_cpp_conformance.py::test_python_reads_cpp_cnf.
+  void emit_cnf(const std::string& base)
+  {
+    auto issuer =
+      ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+    auto holder =
+      ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+    auto holder_pub = ccf::crypto::make_ec_public_key(holder->public_key_pem());
+
+    std::vector<sdcwt::Claim> claims = {
+      {1, sdcwt::value::text("https://ledger.example/tee"), false},
+      {1002, sdcwt::value::text("secret body"), true},
+    };
+
+    const auto issued = sdcwt::issue(
+      claims,
+      *issuer,
+      sdcwt::HashAlg::SHA_256,
+      /*redact_paths=*/{},
+      sdcwt::default_random_source(),
+      sdcwt::SALT_LEN,
+      /*pad_to=*/0,
+      holder_pub.get());
+
+    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
+      QCBOREncode_OpenArray(&ctx);
+      for (const auto& d : issued.disclosures)
+      {
+        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
+      }
+      QCBOREncode_CloseArray(&ctx);
+    });
+
+    const std::string dir = base + "/cnf";
+    std::filesystem::create_directories(dir);
+    const auto write = [&](const std::string& name, const void* p, size_t n) {
+      std::ofstream out(dir + "/" + name, std::ios::binary);
+      out.write(static_cast<const char*>(p), static_cast<std::streamsize>(n));
+    };
+    write("statement.cbor", issued.token.data(), issued.token.size());
+    write("disclosures.cbor", disclosures.data(), disclosures.size());
+    const auto signer_pem = issuer->public_key_pem().str();
+    write("signer.pem", signer_pem.data(), signer_pem.size());
+    const auto holder_pem = holder_pub->public_key_pem().str();
+    write("holder.pem", holder_pem.data(), holder_pem.size());
+  }
 }
 
 // Emit conformance artifacts across signing/redaction-hash suites, so the
@@ -241,6 +292,7 @@ TEST(Conformance, EmitStatementArtifactsForPython)
   emit_array_redaction(dir);
   emit_nested_redaction(dir);
   emit_decoy(dir);
+  emit_cnf(dir);
 
   SUCCEED();
 }

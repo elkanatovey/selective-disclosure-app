@@ -30,6 +30,25 @@ namespace sdcwt
     }
   }
 
+  int64_t cose_ec_curve_id(ccf::crypto::CurveID curve)
+  {
+    switch (curve)
+    {
+      case ccf::crypto::CurveID::SECP256R1:
+        return COSE_CRV_P256;
+      case ccf::crypto::CurveID::SECP384R1:
+        return COSE_CRV_P384;
+      case ccf::crypto::CurveID::SECP521R1:
+        return COSE_CRV_P521;
+      case ccf::crypto::CurveID::NONE:
+      case ccf::crypto::CurveID::CURVE25519:
+      case ccf::crypto::CurveID::X25519:
+      default:
+        throw std::invalid_argument(
+          "unsupported EC curve (expected P-256/P-384/P-521)");
+    }
+  }
+
   std::vector<uint8_t> encode_protected_header(int64_t alg)
   {
     return cbor_encode([&](QCBOREncodeContext& ctx) {

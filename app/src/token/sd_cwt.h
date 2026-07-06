@@ -5,6 +5,7 @@
 #include "token/cbor_value.h"
 
 #include <ccf/crypto/ec_key_pair.h>
+#include <ccf/crypto/ec_public_key.h>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -23,6 +24,7 @@ namespace sdcwt
   inline constexpr int64_t SD_CWT_TYP = 293; // application/sd-cwt
   inline constexpr uint8_t REDACTED_CLAIM_KEYS = 59; // CBOR simple(59)
   inline constexpr size_t SALT_LEN = 16; // 128-bit CSPRNG salt
+  inline constexpr int64_t CNF_LABEL = 8; // clear: RFC 8747 confirmation claim
 
   // Redaction hash algorithm. The enum values are the COSE hash-algorithm
   // identifiers written into the `sd_alg` protected header (and match the
@@ -105,6 +107,12 @@ namespace sdcwt
   // that many entries with indistinguishable salt-only decoy disclosures, so
   // the count does not reveal how many real claims were redacted.
   //
+  // `holder`, if non-null, embeds it as the RFC 8747 confirmation claim (`cnf`,
+  // claim 8) in the CLEAR payload: `8: {1: COSE_Key}` carrying only the holder
+  // public key's EC2 coordinates. This makes the issued token key-binding
+  // capable (a holder of the matching private key can later present it with a
+  // Key Binding Token); the issuer never sees the private key.
+  //
   // Throws std::invalid_argument (unsupported curve, or a redact_path that does
   // not resolve to an existing claim/element / descends into a non-container)
   // or std::runtime_error (CBOR failure).
@@ -115,5 +123,6 @@ namespace sdcwt
     const std::vector<Path>& redact_paths = {},
     const RandomSource& rng = default_random_source(),
     size_t salt_len = SALT_LEN,
-    size_t pad_to = 0);
+    size_t pad_to = 0,
+    const ccf::crypto::ECPublicKey* holder = nullptr);
 }

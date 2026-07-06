@@ -14,9 +14,18 @@ namespace sdcwt
   inline constexpr int64_t COSE_ALG_ES384 = -35;
   inline constexpr int64_t COSE_ALG_ES512 = -36;
 
+  // COSE Elliptic Curve identifiers (RFC 9053, "COSE Elliptic Curves").
+  inline constexpr int64_t COSE_CRV_P256 = 1;
+  inline constexpr int64_t COSE_CRV_P384 = 2;
+  inline constexpr int64_t COSE_CRV_P521 = 3;
+
   // Map an EC curve to its COSE ECDSA signing algorithm id (ES256/384/512).
   // Throws std::invalid_argument for non-ECDSA / unsupported curves.
   int64_t cose_es_alg_for_curve(ccf::crypto::CurveID curve);
+
+  // Map an EC curve to its COSE Elliptic Curve id (P-256=1/P-384=2/P-521=3),
+  // as used in a COSE_Key. Throws std::invalid_argument for unsupported curves.
+  int64_t cose_ec_curve_id(ccf::crypto::CurveID curve);
 
   // Encode a minimal protected-header map {1: alg}. Extended by the SD-CWT
   // layer with the `sd_alg` (170) and `typ` (16) headers.

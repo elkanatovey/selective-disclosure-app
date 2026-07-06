@@ -368,17 +368,23 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   (`tools/sd_cwt/tests/test_cpp_conformance.py`): a pinned Redacted-Claim-Hash
   vector, Python `validate`ing C++ tokens (signature + disclosures), a
   byte-identical payload check, cross-validation of array-element (tag 60) and
-  deep-nested + ancestor-disclosure redaction, and a byte-identical decoy-padding
-  check. Supports **map, nested-map and array-element (tag 60) redaction**
+  deep-nested + ancestor-disclosure redaction, a byte-identical decoy-padding
+  check, and a `cnf` key-binding check (Python recovers the embedded holder
+  key). Supports **map, nested-map and array-element (tag 60) redaction**
   at arbitrary depth via `redact_paths` (the ancestor-disclosure rule), matching
   the Python reference — so layered disclosures are available (the statement
   schema still redacts `references` whole for strict uniformity, but the core can
   redact individual elements when a policy needs it). **Decoy padding**
   (`issue(..., pad_to=N)`) is ported too — pads the top-level Redacted-Claim-Hash
   count to N with indistinguishable salt-only decoys, byte-identical to the
-  Python reference under fixed salts (conformance-pinned). **KBT is intentionally
-  not ported**: `kbt_sign`/`kbt_verify` are holder-presentation / verifier
-  operations that run off-chain (Python), not in the in-enclave issuer.
+  Python reference under fixed salts (conformance-pinned). **Key binding**: the
+  issuer can bind a token to a holder key by embedding the RFC 8747 confirmation
+  claim (`issue(..., holder=pub)` → clear `8: {1: COSE_Key}`), so the enclave
+  issues fully standards-compliant, key-binding-capable SD-CWTs; a conformance
+  test recovers the `cnf` key in Python and checks its coordinates + fixed-length
+  encoding. The `kbt_sign`/`kbt_verify` operations themselves are **not** in the
+  enclave: they are the *holder's* proof-of-possession (with a private key the
+  issuer never holds) and the *verifier's* check, both off-chain (Python).
 - `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
