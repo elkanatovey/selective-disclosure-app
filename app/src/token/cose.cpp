@@ -42,7 +42,8 @@ namespace sdcwt
   std::vector<uint8_t> sign_cose_sign1(
     const ccf::crypto::ECKeyPair& key,
     std::span<const uint8_t> protected_header_cbor,
-    std::span<const uint8_t> payload)
+    std::span<const uint8_t> payload,
+    std::span<const uint8_t> external_aad)
   {
     // Derive the digest from the key's curve; an unsupported curve throws here
     // (before any signing) rather than emitting a malformed signature.
@@ -51,12 +52,12 @@ namespace sdcwt
     const auto md = ccf::crypto::get_md_for_ec(curve);
 
     // RFC 9052 Sig_structure for a COSE_Sign1:
-    //   [ "Signature1", protected, external_aad (empty), payload ]
+    //   [ "Signature1", protected, external_aad, payload ]
     const auto to_be_signed = cbor_encode([&](QCBOREncodeContext& ctx) {
       QCBOREncode_OpenArray(&ctx);
       QCBOREncode_AddSZString(&ctx, "Signature1");
       QCBOREncode_AddBytes(&ctx, to_ubc(protected_header_cbor));
-      QCBOREncode_AddBytes(&ctx, UsefulBufC{"", 0}); // external_aad
+      QCBOREncode_AddBytes(&ctx, to_ubc(external_aad));
       QCBOREncode_AddBytes(&ctx, to_ubc(payload));
       QCBOREncode_CloseArray(&ctx);
     });

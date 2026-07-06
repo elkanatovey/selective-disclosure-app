@@ -30,12 +30,15 @@ namespace sdcwt
   // SD-CWT layer does this via cose_es_alg_for_curve).
   //
   // The signature is computed over the RFC 9052 Sig_structure and encoded as a
-  // fixed-length r||s (IEEE P1363) value, as COSE requires.
+  // fixed-length r||s (IEEE P1363) value, as COSE requires. `external_aad` is
+  // the COSE externally-supplied data bound into the signature (empty by
+  // default).
   //
   // Throws std::invalid_argument for an unsupported curve, or
   // std::runtime_error on a CBOR encoding failure.
   std::vector<uint8_t> sign_cose_sign1(
     const ccf::crypto::ECKeyPair& key,
     std::span<const uint8_t> protected_header_cbor,
-    std::span<const uint8_t> payload);
+    std::span<const uint8_t> payload,
+    std::span<const uint8_t> external_aad = {});
 }

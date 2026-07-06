@@ -116,6 +116,24 @@ namespace
   }
 }
 
+// The salt length is configurable (default 16).
+TEST(SdCwt, ConfigurableSaltLength)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  std::vector<sdcwt::Claim> claims = {
+    {1002, sdcwt::value::text("secret"), true},
+  };
+  const auto issued = sdcwt::issue(
+    claims,
+    *key,
+    sdcwt::HashAlg::SHA_256,
+    /*redact_paths=*/{},
+    sdcwt::default_random_source(),
+    /*salt_len=*/32);
+  ASSERT_EQ(issued.disclosures.size(), 1u);
+  EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
+}
+
 // Array-element redaction: a redact_path into an array element hides only that
 // element (replaced by a tag(60) hash) and yields a keyless disclosure.
 TEST(SdCwt, ArrayElementRedaction)

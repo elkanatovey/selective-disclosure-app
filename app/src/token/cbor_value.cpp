@@ -109,7 +109,8 @@ namespace sdcwt
         QCBOREncode_AddText(&ctx, UsefulBufC{v.text_v.data(), v.text_v.size()});
         break;
       case CborValue::Kind::RedactedElement:
-        // An array element replaced by tag(60) wrapping its Redacted Claim Hash.
+        // An array element replaced by tag(60) wrapping its Redacted Claim
+        // Hash.
         QCBOREncode_AddTag(&ctx, 60);
         QCBOREncode_AddBytes(&ctx, to_ubc(v.bytes_v));
         break;
@@ -123,9 +124,9 @@ namespace sdcwt
         break;
       case CborValue::Kind::Map:
       {
-        // CDE (RFC 8949 §4.2): emit entries sorted by encoded-key bytes. int and
-        // text keys all encode with a first byte < simple(59) (0xf8), so the
-        // redacted-keys entry is emitted last.
+        // CDE (RFC 8949 §4.2): emit entries sorted by encoded-key bytes. int
+        // and text keys all encode with a first byte < simple(59) (0xf8), so
+        // the redacted-keys entry is emitted last.
         std::vector<size_t> order(v.map_keys.size());
         for (size_t i = 0; i < order.size(); ++i)
         {

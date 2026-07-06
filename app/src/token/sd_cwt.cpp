@@ -127,7 +127,9 @@ namespace sdcwt
 
     bool elem_matches_key(const PathElem& e, const CborKey& key)
     {
-      if (std::holds_alternative<int64_t>(e) && std::holds_alternative<int64_t>(key))
+      if (
+        std::holds_alternative<int64_t>(e) &&
+        std::holds_alternative<int64_t>(key))
       {
         return std::get<int64_t>(e) == std::get<int64_t>(key);
       }
@@ -142,19 +144,20 @@ namespace sdcwt
 
     bool elem_matches_index(const PathElem& e, size_t index)
     {
-      return std::holds_alternative<int64_t>(e) &&
-        std::get<int64_t>(e) >= 0 &&
+      return std::holds_alternative<int64_t>(e) && std::get<int64_t>(e) >= 0 &&
         static_cast<size_t>(std::get<int64_t>(e)) == index;
     }
 
     // Recursively redact `node` at the given relative `paths` (mirrors the
     // Python reference `_redact_node`). A length-1 path redacts that whole
-    // entry/element here; longer paths recurse first (ancestor-disclosure rule).
+    // entry/element here; longer paths recurse first (ancestor-disclosure
+    // rule).
     CborValue redact_node(
       const CborValue& node,
       const std::vector<Path>& paths,
       HashAlg sd_alg,
       const RandomSource& rng,
+      size_t salt_len,
       std::vector<Disclosure>& disclosures)
     {
       if (node.kind == CborValue::Kind::Map)
@@ -189,13 +192,13 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             value :
-            redact_node(value, deeper, sd_alg, rng, disclosures);
+            redact_node(value, deeper, sd_alg, rng, salt_len, disclosures);
 
           if (direct)
           {
             Disclosure d;
             d.key = key;
-            d.salt = rng(SALT_LEN);
+            d.salt = rng(salt_len);
             d.encoded = encode_map_disclosure(d.salt, child, key);
             d.digest = disclosure_digest(d.encoded, sd_alg);
             digests.push_back(d.digest);
@@ -241,13 +244,14 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             node.array_v[i] :
-            redact_node(node.array_v[i], deeper, sd_alg, rng, disclosures);
+            redact_node(
+              node.array_v[i], deeper, sd_alg, rng, salt_len, disclosures);
 
           if (direct)
           {
             Disclosure d;
             d.key = std::nullopt;
-            d.salt = rng(SALT_LEN);
+            d.salt = rng(salt_len);
             d.encoded = encode_elem_disclosure(d.salt, child);
             d.digest = disclosure_digest(d.encoded, sd_alg);
             out.array_v.push_back(CborValue::RedactedElem(d.digest));
@@ -271,7 +275,8 @@ namespace sdcwt
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
     const std::vector<Path>& redact_paths,
-    const RandomSource& rng)
+    const RandomSource& rng,
+    size_t salt_len)
   {
     // Derive the COSE signing algorithm from the key's curve (throws early on
     // an unsupported curve, before any redaction work).
@@ -293,7 +298,7 @@ namespace sdcwt
 
     std::vector<Disclosure> disclosures;
     const CborValue redacted =
-      redact_node(root, paths, sd_alg, rng, disclosures);
+      redact_node(root, paths, sd_alg, rng, salt_len, disclosures);
     const auto payload = encode_value(redacted);
 
     const auto phdr = encode_sdcwt_protected_header(cose_alg, sd_alg);

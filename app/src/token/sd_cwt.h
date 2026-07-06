@@ -60,7 +60,8 @@ namespace sdcwt
   using PathElem = std::variant<int64_t, std::string>;
   // A redaction path from the claims-map root, e.g. {1006, 1} redacts element 1
   // of the array claim 1006. A length-1 path redacts a whole top-level claim
-  // (equivalent to Claim::redact); longer paths redact nested map/array members.
+  // (equivalent to Claim::redact); longer paths redact nested map/array
+  // members.
   using Path = std::vector<PathElem>;
 
   // A generated Salted Disclosed Claim. `key` is absent for a redacted array
@@ -70,7 +71,8 @@ namespace sdcwt
   {
     std::optional<CborKey> key;
     std::vector<uint8_t> salt;
-    std::vector<uint8_t> encoded; // cbor([salt, value, key]) or cbor([salt, value])
+    std::vector<uint8_t>
+      encoded; // cbor([salt, value, key]) or cbor([salt, value])
     std::vector<uint8_t> digest; // sd_alg hash of (bstr .cbor encoded)
   };
 
@@ -90,20 +92,22 @@ namespace sdcwt
     int64_t cose_alg, HashAlg sd_alg);
 
   // Build and sign a redacted SD-CWT over the given top-level claims. Each
-  // `Claim` with `redact == true` is redacted whole; `redact_paths` additionally
-  // redacts nested map entries / array elements at arbitrary depth (the
-  // ancestor-disclosure rule applies: a disclosed parent may reveal a
+  // `Claim` with `redact == true` is redacted whole; `redact_paths`
+  // additionally redacts nested map entries / array elements at arbitrary depth
+  // (the ancestor-disclosure rule applies: a disclosed parent may reveal a
   // still-redacted child). Redacted map entries become sorted Redacted Claim
   // Hashes under simple(59); redacted array elements become tag(60) hashes.
   // Disclosures are returned separately. The COSE signing algorithm is derived
-  // from the key's curve; the redaction hash is `sd_alg` (default SHA-256).
+  // from the key's curve; the redaction hash is `sd_alg` (default SHA-256);
+  // `salt_len` is the per-disclosure salt length in bytes (default 16).
   //
-  // Throws std::invalid_argument (unsupported curve / path into a non-container)
-  // or std::runtime_error (CBOR failure).
+  // Throws std::invalid_argument (unsupported curve / path into a
+  // non-container) or std::runtime_error (CBOR failure).
   IssuedToken issue(
     const std::vector<Claim>& claims,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
     const std::vector<Path>& redact_paths = {},
-    const RandomSource& rng = default_random_source());
+    const RandomSource& rng = default_random_source(),
+    size_t salt_len = SALT_LEN);
 }

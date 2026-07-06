@@ -45,17 +45,19 @@ namespace sdcwt::statement
   };
 
   // Build the strictly-uniform claim set: clear iss/iat + all 9 content fields
-  // (real value when set, else a random garbage sentinel), all content
-  // redacted.
+  // (real value when set, else a random `pad_len`-byte garbage sentinel), all
+  // content redacted.
   std::vector<Claim> build_claims(
     const std::string& iss,
     int64_t iat,
     const Fields& fields,
-    const RandomSource& rng = default_random_source());
+    const RandomSource& rng = default_random_source(),
+    size_t pad_len = SALT_LEN);
 
   // Build + sign a strictly-uniform statement token. The COSE signing algorithm
   // is derived from the key's curve; the redaction hash is `sd_alg` (default
-  // SHA-256).
+  // SHA-256); `salt_len` is the per-disclosure salt / padding length (default
+  // 16).
   //
   // Throws std::invalid_argument (unsupported curve) or std::runtime_error
   // (CBOR failure).
@@ -65,5 +67,6 @@ namespace sdcwt::statement
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
-    const RandomSource& rng = default_random_source());
+    const RandomSource& rng = default_random_source(),
+    size_t salt_len = SALT_LEN);
 }
