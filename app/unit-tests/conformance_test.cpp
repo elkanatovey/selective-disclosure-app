@@ -54,6 +54,48 @@ namespace
     const auto pem = key->public_key_pem().str();
     write("signer.pem", pem.data(), pem.size());
   }
+  // Emit a fully-populated statement signed with a DETERMINISTIC salt source
+  // (the i-th 16-byte salt is all-bytes-equal-to-i), so the Python reference
+  // can byte-compare its own payload against this one. Values MUST stay in sync
+  // with test_cpp_conformance.py::test_payload_byte_identical_to_python.
+  void emit_deterministic(const std::string& base)
+  {
+    auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+
+    sdcwt::statement::Fields f;
+    f.parent = std::vector<uint8_t>(32, 0x11);
+    f.title = "conformance title";
+    f.body = "body text";
+    f.component = "parser";
+    f.severity = "high";
+    f.fingerprint = std::vector<uint8_t>{0xde, 0xad, 0xbe, 0xef};
+    f.references = std::vector<std::string>{"CVE-2025-9999"};
+    f.patch = "fixed";
+    f.patch_date = 1700100000;
+
+    // Counter-based salt source: call i returns n bytes all equal to i.
+    auto counter = std::make_shared<uint8_t>(0);
+    sdcwt::RandomSource det_rng = [counter](size_t n) {
+      std::vector<uint8_t> v(n, *counter);
+      ++(*counter);
+      return v;
+    };
+
+    const auto issued = sdcwt::statement::issue_statement(
+      "https://ledger.example/tee",
+      1700000000,
+      f,
+      *key,
+      sdcwt::HashAlg::SHA_256,
+      det_rng);
+
+    const std::string dir = base + "/det";
+    std::filesystem::create_directories(dir);
+    std::ofstream out(dir + "/statement.cbor", std::ios::binary);
+    out.write(
+      reinterpret_cast<const char*>(issued.token.data()),
+      static_cast<std::streamsize>(issued.token.size()));
+  }
 }
 
 // Emit conformance artifacts across signing/redaction-hash suites, so the
@@ -71,6 +113,7 @@ TEST(Conformance, EmitStatementArtifactsForPython)
     dir, "es256", ccf::crypto::CurveID::SECP256R1, sdcwt::HashAlg::SHA_256);
   emit_suite(
     dir, "es384", ccf::crypto::CurveID::SECP384R1, sdcwt::HashAlg::SHA_384);
+  emit_deterministic(dir);
 
   SUCCEED();
 }

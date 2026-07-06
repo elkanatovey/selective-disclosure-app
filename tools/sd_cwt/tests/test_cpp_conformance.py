@@ -88,3 +88,62 @@ def test_python_verifies_cpp_signature(suite):
     key = _ec2_key_from_pem(pem)
     out = st.validate_statement(_present(token, disclosures), key)
     assert out.disclosed[st.TITLE] == "conformance title"
+
+
+def _payload_bytes(token: bytes) -> bytes:
+    """Extract the COSE_Sign1 payload (claims map bytes) from a token."""
+    obj = cbor2.loads(token)
+    arr = obj.value if hasattr(obj, "value") else obj  # unwrap tag 18
+    return arr[2]
+
+
+def _counter_salt_source():
+    """Deterministic salt source: the i-th call returns n bytes all equal to i.
+
+    Matches app/unit-tests/conformance_test.cpp::emit_deterministic so the two
+    implementations draw identical salts for the same fields.
+    """
+    counter = [0]
+
+    def _src(n: int) -> bytes:
+        value = bytes([counter[0] & 0xFF]) * n
+        counter[0] += 1
+        return value
+
+    return _src
+
+
+def test_payload_byte_identical_to_python(monkeypatch):
+    """With identical fixed salts, the C++ payload bytes equal Python's exactly.
+
+    Signatures are randomised ECDSA and are NOT compared (they are covered by
+    test_python_verifies_cpp_signature); this pins the redaction + CBOR encoding.
+    """
+    if not _ARTIFACT_DIR:
+        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
+    d = Path(_ARTIFACT_DIR) / "det"
+    if not (d / "statement.cbor").exists():
+        pytest.skip(f"C++ deterministic artifact missing in {d}")
+    cpp_token = (d / "statement.cbor").read_bytes()
+
+    from pycose.keys import EC2Key
+    from pycose.keys.curves import P256
+
+    monkeypatch.setattr("sd_cwt.core.csprng", _counter_salt_source())
+    signer = EC2Key.generate_key(crv=P256)
+    py_token, _ = st.issue_statement(
+        signer,
+        iss="https://ledger.example/tee",
+        iat=1700000000,
+        parent=b"\x11" * 32,
+        title="conformance title",
+        body="body text",
+        component="parser",
+        severity="high",
+        fingerprint=b"\xde\xad\xbe\xef",
+        references=["CVE-2025-9999"],
+        patch="fixed",
+        patch_date=1700100000,
+    )
+
+    assert _payload_bytes(cpp_token) == _payload_bytes(py_token)

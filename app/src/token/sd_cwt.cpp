@@ -84,12 +84,14 @@ namespace sdcwt
   std::vector<uint8_t> encode_sdcwt_protected_header(
     int64_t cose_alg, HashAlg sd_alg)
   {
+    // Map keys are emitted in CDE (RFC 8949 §4.2) order: 1 (alg) < 16 (typ) <
+    // 170 (sd_alg).
     return cbor_encode([&](QCBOREncodeContext& ctx) {
       QCBOREncode_OpenMap(&ctx);
       QCBOREncode_AddInt64ToMapN(&ctx, 1, cose_alg); // alg
+      QCBOREncode_AddInt64ToMapN(&ctx, TYP_LABEL, SD_CWT_TYP); // typ (16)
       QCBOREncode_AddInt64ToMapN(
-        &ctx, SD_ALG_LABEL, static_cast<int64_t>(sd_alg)); // sd_alg
-      QCBOREncode_AddInt64ToMapN(&ctx, TYP_LABEL, SD_CWT_TYP); // typ
+        &ctx, SD_ALG_LABEL, static_cast<int64_t>(sd_alg)); // sd_alg (170)
       QCBOREncode_CloseMap(&ctx);
     });
   }
@@ -144,16 +146,27 @@ namespace sdcwt
     // Hide real-vs-decoy ordering (salts already randomise the hashes).
     std::sort(digests.begin(), digests.end());
 
+    // Emit clear claims in CDE key order (RFC 8949 §4.2). For our unsigned
+    // integer labels with preferred encoding, numeric order == bytewise order;
+    // simple(59) is major type 7, so it always sorts after any integer key.
+    std::vector<const Claim*> clear;
+    for (const auto& claim : claims)
+    {
+      if (!claim.redact)
+      {
+        clear.push_back(&claim);
+      }
+    }
+    std::sort(clear.begin(), clear.end(), [](const Claim* a, const Claim* b) {
+      return a->key < b->key;
+    });
+
     const auto payload = cbor_encode([&](QCBOREncodeContext& ctx) {
       QCBOREncode_OpenMap(&ctx);
-      for (const auto& claim : claims)
+      for (const auto* claim : clear)
       {
-        if (claim.redact)
-        {
-          continue;
-        }
-        QCBOREncode_AddInt64(&ctx, claim.key); // clear claim label
-        QCBOREncode_AddEncoded(&ctx, to_ubc(claim.value_cbor));
+        QCBOREncode_AddInt64(&ctx, claim->key); // clear claim label
+        QCBOREncode_AddEncoded(&ctx, to_ubc(claim->value_cbor));
       }
       if (!digests.empty())
       {

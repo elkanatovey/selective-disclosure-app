@@ -293,12 +293,14 @@ are chain logic that *consumes* those tokens.
    `Sig_structure` with QCBOR, hash, `ECKeyPair::sign_hash`, assemble the
    array). **Algorithm-agile** like the Python lib: the COSE signing algorithm
    (ES256/384/512) is derived from the key's curve and the redaction hash
-   (SHA-256/384/512, default SHA-256) is a parameter written to `sd_alg`. Built
+   (SHA-256/384/512, default SHA-256) is a parameter written to `sd_alg`. Maps
+   are emitted in **deterministic (CDE, RFC 8949 §4.2) key order**. Built
    as a standalone host/virtual test target (no enclave, no chain)
    and gated by **cross-impl conformance** against the Python oracle: Python
    `validate`s C++ tokens (both ES256/SHA-256 and ES384/SHA-384 suites), and
-   with **injected fixed salts** the C++ output is
-   **byte-identical** to Python `issue()`. (Vendor **QCBOR** via `FetchContent`.)
+   with **injected fixed salts** the C++ **payload** is **byte-identical** to
+   Python `issue()` (the ECDSA signature is randomised, so it is validated, not
+   byte-compared). (Vendor **QCBOR** via `FetchContent`.)
 3. **On-chain: submit + receipt** — `submit_report` constructs+signs via the
    C++ token core, stores the redacted blob, binds the **claims digest**, returns
    **seqno + receipt**. (Receipt/seqno are chain logic layered on top of 1–2.)
