@@ -7,10 +7,29 @@
 
 #include <algorithm>
 #include <ccf/crypto/entropy.h>
-#include <ccf/crypto/sha256.h>
+#include <ccf/crypto/hash_provider.h>
+#include <ccf/crypto/md_type.h>
 
 namespace sdcwt
 {
+  namespace
+  {
+    ccf::crypto::MDType md_for_hash_alg(HashAlg sd_alg)
+    {
+      switch (sd_alg)
+      {
+        case HashAlg::SHA_256:
+          return ccf::crypto::MDType::SHA256;
+        case HashAlg::SHA_384:
+          return ccf::crypto::MDType::SHA384;
+        case HashAlg::SHA_512:
+          return ccf::crypto::MDType::SHA512;
+        default:
+          throw std::invalid_argument("unsupported sd_alg hash");
+      }
+    }
+  }
+
   RandomSource default_random_source()
   {
     return [](size_t n) { return ccf::crypto::get_entropy()->random(n); };
@@ -51,21 +70,25 @@ namespace sdcwt
     }
   }
 
-  std::vector<uint8_t> disclosure_digest(std::span<const uint8_t> encoded)
+  std::vector<uint8_t> disclosure_digest(
+    std::span<const uint8_t> encoded, HashAlg sd_alg)
   {
     // Wrap the encoded salted array in a CBOR byte string, then hash it.
     const auto wrapped = cbor_encode([&](QCBOREncodeContext& ctx) {
       QCBOREncode_AddBytes(&ctx, to_ubc(encoded));
     });
-    return ccf::crypto::sha256(wrapped);
+    return ccf::crypto::make_hash_provider()->hash(
+      wrapped.data(), wrapped.size(), md_for_hash_alg(sd_alg));
   }
 
-  std::vector<uint8_t> encode_sdcwt_protected_header()
+  std::vector<uint8_t> encode_sdcwt_protected_header(
+    int64_t cose_alg, HashAlg sd_alg)
   {
     return cbor_encode([&](QCBOREncodeContext& ctx) {
       QCBOREncode_OpenMap(&ctx);
-      QCBOREncode_AddInt64ToMapN(&ctx, 1, COSE_ALG_ES256); // alg
-      QCBOREncode_AddInt64ToMapN(&ctx, SD_ALG_LABEL, SD_ALG_SHA_256); // sd_alg
+      QCBOREncode_AddInt64ToMapN(&ctx, 1, cose_alg); // alg
+      QCBOREncode_AddInt64ToMapN(
+        &ctx, SD_ALG_LABEL, static_cast<int64_t>(sd_alg)); // sd_alg
       QCBOREncode_AddInt64ToMapN(&ctx, TYP_LABEL, SD_CWT_TYP); // typ
       QCBOREncode_CloseMap(&ctx);
     });
@@ -92,8 +115,13 @@ namespace sdcwt
   IssuedToken issue(
     const std::vector<Claim>& claims,
     const ccf::crypto::ECKeyPair& key,
+    HashAlg sd_alg,
     const RandomSource& rng)
   {
+    // Derive the COSE signing algorithm from the key's curve (throws early on
+    // an unsupported curve, before any redaction work).
+    const auto cose_alg = cose_es_alg_for_curve(key.get_curve_id());
+
     std::vector<Disclosure> disclosures;
     std::vector<std::vector<uint8_t>> digests;
 
@@ -108,7 +136,7 @@ namespace sdcwt
       d.salt = rng(SALT_LEN);
       d.value_cbor = claim.value_cbor;
       d.encoded = encode_disclosure(d.salt, d.value_cbor, d.key);
-      d.digest = disclosure_digest(d.encoded);
+      d.digest = disclosure_digest(d.encoded, sd_alg);
       digests.push_back(d.digest);
       disclosures.push_back(std::move(d));
     }
@@ -141,9 +169,9 @@ namespace sdcwt
       QCBOREncode_CloseMap(&ctx);
     });
 
-    const auto phdr = encode_sdcwt_protected_header();
+    const auto phdr = encode_sdcwt_protected_header(cose_alg, sd_alg);
     IssuedToken out;
-    out.token = sign_cose_sign1_es256(key, phdr, payload);
+    out.token = sign_cose_sign1(key, phdr, payload);
     out.disclosures = std::move(disclosures);
     return out;
   }

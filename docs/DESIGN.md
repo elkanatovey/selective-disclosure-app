@@ -288,12 +288,16 @@ are chain logic that *consumes* those tokens.
 2. **C++ token core (port of build+sign+redaction) — host build, no chain.**
    Reimplement the authoritative construction in C++ so the **service (TEE)** can
    sign in-enclave: build the CBOR claims set, garbage-pad to strict uniformity,
-   CSPRNG salts, SHA-256 redaction (`redacted_claim_keys`), and hand-assemble a
+   CSPRNG salts, `sd_alg` redaction (`redacted_claim_keys`), and hand-assemble a
    `COSE_Sign1` **signed via `ccf::crypto`** (no `t_cose`: encode the
-   `Sig_structure` with QCBOR, `sha256`, `ECKeyPair::sign_hash`, assemble the
-   array). Built as a standalone host/virtual test target (no enclave, no chain)
+   `Sig_structure` with QCBOR, hash, `ECKeyPair::sign_hash`, assemble the
+   array). **Algorithm-agile** like the Python lib: the COSE signing algorithm
+   (ES256/384/512) is derived from the key's curve and the redaction hash
+   (SHA-256/384/512, default SHA-256) is a parameter written to `sd_alg`. Built
+   as a standalone host/virtual test target (no enclave, no chain)
    and gated by **cross-impl conformance** against the Python oracle: Python
-   `validate`s C++ tokens, and with **injected fixed salts** the C++ output is
+   `validate`s C++ tokens (both ES256/SHA-256 and ES384/SHA-384 suites), and
+   with **injected fixed salts** the C++ output is
    **byte-identical** to Python `issue()`. (Vendor **QCBOR** via `FetchContent`.)
 3. **On-chain: submit + receipt** — `submit_report` constructs+signs via the
    C++ token core, stores the redacted blob, binds the **claims digest**, returns

@@ -17,7 +17,7 @@ TEST(Cose, Sign1RoundTripVerifiesUnderCcf)
   // Arbitrary CBOR payload: a map {1: 2}.
   const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
 
-  const auto token = sdcwt::sign_cose_sign1_es256(*key, phdr, payload);
+  const auto token = sdcwt::sign_cose_sign1(*key, phdr, payload);
 
   auto verifier =
     ccf::crypto::make_cose_verifier_from_key(key->public_key_pem());
@@ -29,14 +29,38 @@ TEST(Cose, Sign1RoundTripVerifiesUnderCcf)
   EXPECT_EQ(recovered, payload);
 }
 
-// Signing must reject a non-P-256 key rather than emit a malformed ES256 sig.
-TEST(Cose, RejectsNonP256Key)
+// Algorithm agility: a P-384 key must sign (ES384) and verify under CCF. The
+// signing algorithm and digest are derived from the key's curve.
+TEST(Cose, Sign1WithP384VerifiesUnderCcf)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP384R1);
-  const auto phdr = sdcwt::encode_protected_header();
+  const auto phdr = sdcwt::encode_protected_header(sdcwt::COSE_ALG_ES384);
   const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
+
+  const auto token = sdcwt::sign_cose_sign1(*key, phdr, payload);
+
+  auto verifier =
+    ccf::crypto::make_cose_verifier_from_key(key->public_key_pem());
+  std::span<uint8_t> content;
+  EXPECT_TRUE(verifier->verify(token, content));
+}
+
+// The curve->COSE-algorithm map covers ES256/384/512 and rejects non-ECDSA
+// curves.
+TEST(Cose, CurveToAlgMapping)
+{
+  EXPECT_EQ(
+    sdcwt::cose_es_alg_for_curve(ccf::crypto::CurveID::SECP256R1),
+    sdcwt::COSE_ALG_ES256);
+  EXPECT_EQ(
+    sdcwt::cose_es_alg_for_curve(ccf::crypto::CurveID::SECP384R1),
+    sdcwt::COSE_ALG_ES384);
+  EXPECT_EQ(
+    sdcwt::cose_es_alg_for_curve(ccf::crypto::CurveID::SECP521R1),
+    sdcwt::COSE_ALG_ES512);
   EXPECT_THROW(
-    sdcwt::sign_cose_sign1_es256(*key, phdr, payload), std::invalid_argument);
+    sdcwt::cose_es_alg_for_curve(ccf::crypto::CurveID::CURVE25519),
+    std::invalid_argument);
 }
 
 // A signature over a different payload must not verify against tampered bytes.
@@ -46,11 +70,11 @@ TEST(Cose, TamperedPayloadFailsVerification)
   const auto phdr = sdcwt::encode_protected_header();
   const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
 
-  auto token = sdcwt::sign_cose_sign1_es256(*key, phdr, payload);
+  auto token = sdcwt::sign_cose_sign1(*key, phdr, payload);
   // Flip a byte in the encoded payload region (last-but-one field). Rather than
   // hunt the offset, re-sign a different payload and swap the signature.
   const std::vector<uint8_t> other = {0xa1, 0x01, 0x03};
-  auto other_token = sdcwt::sign_cose_sign1_es256(*key, phdr, other);
+  auto other_token = sdcwt::sign_cose_sign1(*key, phdr, other);
 
   auto verifier =
     ccf::crypto::make_cose_verifier_from_key(key->public_key_pem());

@@ -53,14 +53,17 @@ namespace sdcwt::statement
     const Fields& fields,
     const RandomSource& rng = default_random_source());
 
-  // Build + sign a strictly-uniform statement token.
+  // Build + sign a strictly-uniform statement token. The COSE signing algorithm
+  // is derived from the key's curve; the redaction hash is `sd_alg` (default
+  // SHA-256).
   //
-  // Throws std::invalid_argument (non-P-256 key) or std::runtime_error (CBOR
-  // failure); a CCF endpoint handler MUST catch these.
+  // Throws std::invalid_argument (unsupported curve) or std::runtime_error
+  // (CBOR failure); a CCF endpoint handler MUST catch these.
   IssuedToken issue_statement(
     const std::string& iss,
     int64_t iat,
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
+    HashAlg sd_alg = HashAlg::SHA_256,
     const RandomSource& rng = default_random_source());
 }

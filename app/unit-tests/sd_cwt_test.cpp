@@ -3,6 +3,7 @@
 #include "token/sd_cwt.h"
 
 #include "token/cbor.h"
+#include "token/cose.h"
 
 #include <gtest/gtest.h>
 #include <qcbor/qcbor_decode.h>
@@ -76,4 +77,31 @@ TEST(SdCwt, RedactedClaimIsHiddenAndDisclosed)
   EXPECT_EQ(
     issued.disclosures[0].digest,
     sdcwt::disclosure_digest(issued.disclosures[0].encoded));
+}
+
+// Redaction-hash agility: issuing with SHA-384 uses SHA-384 digests (48 bytes)
+// and writes sd_alg = -43 into the protected header.
+TEST(SdCwt, RedactionHashAgilitySha384)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  std::vector<sdcwt::Claim> claims = {
+    {1, sdcwt::value::text("iss"), false},
+    {1002, sdcwt::value::text("secret"), true},
+  };
+
+  const auto issued = sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_384);
+
+  ASSERT_EQ(issued.disclosures.size(), 1u);
+  EXPECT_EQ(issued.disclosures[0].digest.size(), 48u); // SHA-384 output
+  EXPECT_EQ(
+    issued.disclosures[0].digest,
+    sdcwt::disclosure_digest(
+      issued.disclosures[0].encoded, sdcwt::HashAlg::SHA_384));
+
+  // sd_alg (-43) must be advertised in the protected header bytes.
+  const auto expected_hdr = sdcwt::encode_sdcwt_protected_header(
+    sdcwt::COSE_ALG_ES256, sdcwt::HashAlg::SHA_384);
+  const std::string tok(issued.token.begin(), issued.token.end());
+  const std::string hdr(expected_hdr.begin(), expected_hdr.end());
+  EXPECT_NE(tok.find(hdr), std::string::npos);
 }

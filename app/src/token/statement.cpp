@@ -66,8 +66,9 @@ namespace sdcwt::statement
     int64_t iat,
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
+    HashAlg sd_alg,
     const RandomSource& rng)
   {
-    return issue(build_claims(iss, iat, fields, rng), key, rng);
+    return issue(build_claims(iss, iat, fields, rng), key, sd_alg, rng);
   }
 }
