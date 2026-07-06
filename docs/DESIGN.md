@@ -294,13 +294,18 @@ are chain logic that *consumes* those tokens.
    array). **Algorithm-agile** like the Python lib: the COSE signing algorithm
    (ES256/384/512) is derived from the key's curve and the redaction hash
    (SHA-256/384/512, default SHA-256) is a parameter written to `sd_alg`. Maps
-   are emitted in **deterministic (CDE, RFC 8949 §4.2) key order**. Built
+   are emitted in **deterministic (CDE, RFC 8949 §4.2.1 bytewise) key order** on
+   **both** sides — the Python reference canonicalises its emitted CBOR to match
+   (see §13). Deterministic encoding is not an SD-CWT wire-format MUST (only
+   definite-length is, draft-08 §5.1); it is the spec's recommended **privacy
+   profiling** choice (§15.2/§16.7) that closes the issuer covert channel from
+   map-key ordering — relevant here because the TEE is the issuer. Built
    as a standalone host/virtual test target (no enclave, no chain)
    and gated by **cross-impl conformance** against the Python oracle: Python
    `validate`s C++ tokens (both ES256/SHA-256 and ES384/SHA-384 suites), and
-   with **injected fixed salts** the C++ **payload** is **byte-identical** to
-   Python `issue()` (the ECDSA signature is randomised, so it is validated, not
-   byte-compared). (Vendor **QCBOR** via `FetchContent`.)
+   with **injected fixed salts** the C++ **protected header and payload** are
+   **byte-identical** to Python `issue()` (the ECDSA signature is randomised, so
+   it is validated, not byte-compared). (Vendor **QCBOR** via `FetchContent`.)
 3. **On-chain: submit + receipt** — `submit_report` constructs+signs via the
    C++ token core, stores the redacted blob, binds the **claims digest**, returns
    **seqno + receipt**. (Receipt/seqno are chain logic layered on top of 1–2.)
@@ -435,6 +440,15 @@ unified report/note schema (§1) + strict-uniformity / `parent` rules live in th
   nesting depth ≤16 (s5.5); plus duplicate disclosed-key rejection and both the
   KBT and SD-CWT audience checks (s9).
 - **CSPRNG for all crypto randomness** (salts, decoys) via `secrets`.
+- **Deterministic (CDE) emission:** everything the issuer/holder emits — the
+  SD-CWT and KBT protected headers and payloads, and every Salted Disclosed
+  Claim — is canonicalised to **RFC 8949 §4.2.1 bytewise** map-key order (`_cde`
+  / `_cde_header`), so the reference is **byte-identical** to the C++ token core
+  (headers included), and the issuer covert channel from key ordering (§15.2/
+  §16.7) is closed. This is a **privacy profile** choice, not a wire-format MUST
+  (only definite-length is). Note: cbor2's own `canonical=True` uses length-first
+  ordering (§4.2.3), which diverges from CDE for maps mixing multi-byte unsigned
+  and negative keys, so ordering is done explicitly.
 
 **Deliberately omitted:** temporal *validity* comparison (`exp`/`nbf`/`iat`
 against a clock — the ledger receipt/seqno covers ordering; only the s5.2

@@ -97,6 +97,13 @@ def _payload_bytes(token: bytes) -> bytes:
     return arr[2]
 
 
+def _protected_header_bytes(token: bytes) -> bytes:
+    """Extract the COSE_Sign1 protected-header bytes from a token."""
+    obj = cbor2.loads(token)
+    arr = obj.value if hasattr(obj, "value") else obj  # unwrap tag 18
+    return arr[0]
+
+
 def _counter_salt_source():
     """Deterministic salt source: the i-th call returns n bytes all equal to i.
 
@@ -114,10 +121,13 @@ def _counter_salt_source():
 
 
 def test_payload_byte_identical_to_python(monkeypatch):
-    """With identical fixed salts, the C++ payload bytes equal Python's exactly.
+    """With identical fixed salts, the C++ protected header AND payload bytes
+    equal Python's exactly.
 
-    Signatures are randomised ECDSA and are NOT compared (they are covered by
-    test_python_verifies_cpp_signature); this pins the redaction + CBOR encoding.
+    Both sides emit deterministic (CDE, RFC 8949 §4.2.1) CBOR, so the signed
+    protected header (map key order {1, 16, 170}) and the redacted claims payload
+    are byte-for-byte identical. Signatures are randomised ECDSA and are NOT
+    compared (covered by test_python_verifies_cpp_signature).
     """
     if not _ARTIFACT_DIR:
         pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
@@ -146,6 +156,7 @@ def test_payload_byte_identical_to_python(monkeypatch):
         patch_date=1700100000,
     )
 
+    assert _protected_header_bytes(cpp_token) == _protected_header_bytes(py_token)
     assert _payload_bytes(cpp_token) == _payload_bytes(py_token)
 
 
