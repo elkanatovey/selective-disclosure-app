@@ -69,7 +69,7 @@ def _ec2_key_from_pem(pem: bytes):
 
 @pytest.mark.parametrize("suite", _SUITES)
 def test_python_validates_cpp_statement_structure(suite):
-    """Disclosures hash-match and the schema holds (receipt-anchored path)."""
+    """Disclosures hash-match and the schema holds (no signature check)."""
     token, disclosures, _ = _load(suite)
     out = st.validate_statement_trusted(_present(token, disclosures))
 
