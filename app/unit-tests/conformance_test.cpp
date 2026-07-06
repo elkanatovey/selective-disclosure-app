@@ -96,6 +96,45 @@ namespace
       reinterpret_cast<const char*>(issued.token.data()),
       static_cast<std::streamsize>(issued.token.size()));
   }
+
+  // Emit a generic token with a redacted ARRAY ELEMENT (tag 60), so the Python
+  // reference can reconstruct it via the core verifier. Values MUST stay in
+  // sync with
+  // test_cpp_conformance.py::test_python_validates_cpp_array_redaction.
+  void emit_array_redaction(const std::string& base)
+  {
+    auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+
+    std::vector<sdcwt::Claim> claims = {
+      {1, sdcwt::value::text("https://ledger.example/tee"), false},
+      {1006, sdcwt::value::text_array({"REF_A", "REF_B", "REF_C"}), false},
+    };
+    // Redact element 1 of the array claim 1006.
+    const std::vector<sdcwt::Path> paths = {{int64_t{1006}, int64_t{1}}};
+
+    const auto issued =
+      sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+
+    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
+      QCBOREncode_OpenArray(&ctx);
+      for (const auto& d : issued.disclosures)
+      {
+        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
+      }
+      QCBOREncode_CloseArray(&ctx);
+    });
+
+    const std::string dir = base + "/array";
+    std::filesystem::create_directories(dir);
+    const auto write = [&](const std::string& name, const void* p, size_t n) {
+      std::ofstream out(dir + "/" + name, std::ios::binary);
+      out.write(static_cast<const char*>(p), static_cast<std::streamsize>(n));
+    };
+    write("statement.cbor", issued.token.data(), issued.token.size());
+    write("disclosures.cbor", disclosures.data(), disclosures.size());
+    const auto pem = key->public_key_pem().str();
+    write("signer.pem", pem.data(), pem.size());
+  }
 }
 
 // Emit conformance artifacts across signing/redaction-hash suites, so the
@@ -114,6 +153,7 @@ TEST(Conformance, EmitStatementArtifactsForPython)
   emit_suite(
     dir, "es384", ccf::crypto::CurveID::SECP384R1, sdcwt::HashAlg::SHA_384);
   emit_deterministic(dir);
+  emit_array_redaction(dir);
 
   SUCCEED();
 }

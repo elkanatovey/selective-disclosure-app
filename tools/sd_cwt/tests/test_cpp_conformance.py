@@ -147,3 +147,24 @@ def test_payload_byte_identical_to_python(monkeypatch):
     )
 
     assert _payload_bytes(cpp_token) == _payload_bytes(py_token)
+
+
+def test_python_validates_cpp_array_redaction():
+    """A C++ token with a redacted array element (tag 60) reconstructs in Python.
+
+    Uses the core verifier (not the statement schema) since this is a generic
+    claims set; disclosing the element restores the full array.
+    """
+    if not _ARTIFACT_DIR:
+        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
+    d = Path(_ARTIFACT_DIR) / "array"
+    if not (d / "statement.cbor").exists():
+        pytest.skip(f"C++ array-redaction artifact missing in {d}")
+
+    token = (d / "statement.cbor").read_bytes()
+    disclosures = cbor2.loads((d / "disclosures.cbor").read_bytes())
+    key = _ec2_key_from_pem((d / "signer.pem").read_bytes())
+
+    out = sd_cwt.validate(_present(token, disclosures), key)
+    assert out.clear[1] == "https://ledger.example/tee"
+    assert out.clear[1006] == ["REF_A", "REF_B", "REF_C"]

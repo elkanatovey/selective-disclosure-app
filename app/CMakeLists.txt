@@ -34,6 +34,7 @@ set_property(TARGET qcbor PROPERTY SYSTEM TRUE)
 
 # Sources for the token core, shared by the app and the unit tests.
 set(TOKEN_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cbor_value.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cose.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/sd_cwt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/statement.cpp

@@ -8,9 +8,9 @@ namespace sdcwt::statement
   {
     // Encode a content field's value, or a random garbage sentinel when absent.
     template <typename T>
-    std::vector<uint8_t> or_pad(
+    CborValue or_pad(
       const std::optional<T>& field,
-      const std::function<std::vector<uint8_t>(const T&)>& encode,
+      const std::function<CborValue(const T&)>& encode,
       const RandomSource& rng)
     {
       if (field.has_value())
@@ -27,16 +27,15 @@ namespace sdcwt::statement
     const Fields& f,
     const RandomSource& rng)
   {
-    const auto enc_text =
-      std::function<std::vector<uint8_t>(const std::string&)>(
-        [](const std::string& s) { return value::text(s); });
+    const auto enc_text = std::function<CborValue(const std::string&)>(
+      [](const std::string& s) { return value::text(s); });
     const auto enc_bytes =
-      std::function<std::vector<uint8_t>(const std::vector<uint8_t>&)>(
+      std::function<CborValue(const std::vector<uint8_t>&)>(
         [](const std::vector<uint8_t>& b) { return value::bytes(b); });
-    const auto enc_int = std::function<std::vector<uint8_t>(const int64_t&)>(
+    const auto enc_int = std::function<CborValue(const int64_t&)>(
       [](const int64_t& n) { return value::integer(n); });
     const auto enc_refs =
-      std::function<std::vector<uint8_t>(const std::vector<std::string>&)>(
+      std::function<CborValue(const std::vector<std::string>&)>(
         [](const std::vector<std::string>& r) { return value::text_array(r); });
 
     std::vector<Claim> claims;
@@ -69,6 +68,6 @@ namespace sdcwt::statement
     HashAlg sd_alg,
     const RandomSource& rng)
   {
-    return issue(build_claims(iss, iat, fields, rng), key, sd_alg, rng);
+    return issue(build_claims(iss, iat, fields, rng), key, sd_alg, {}, rng);
   }
 }

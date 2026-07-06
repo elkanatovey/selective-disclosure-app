@@ -360,14 +360,19 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   construction is (re)implemented **in the C++ enclave**; the Python library is
   the **reference oracle** for that C++ code and the **researcher-side offline
   verifier** (see §13).
-- **C++ token core** (`app/src/token/`: `cose`, `sd_cwt`, `statement`) — the
-  in-enclave authoritative construction. Hand-assembles a `COSE_Sign1` with
-  QCBOR and signs the `Sig_structure` via `ccf::crypto` (no `t_cose`). Built as
-  a host `unit_tests` target (`BUILD_TESTS=ON`, no enclave/chain) and gated by
-  conformance against the Python oracle (`tools/sd_cwt/tests/test_cpp_conformance.py`):
-  a pinned Redacted-Claim-Hash vector, plus Python `validate`ing C++ tokens
-  (signature + disclosures). Redaction is top-level-map only (the schema redacts
-  `references` whole), so array-element / nested redaction is not ported.
+- **C++ token core** (`app/src/token/`: `cbor_value`, `cose`, `sd_cwt`,
+  `statement`) — the in-enclave authoritative construction. Hand-assembles a
+  `COSE_Sign1` with QCBOR and signs the `Sig_structure` via `ccf::crypto` (no
+  `t_cose`). Built as a host `unit_tests` target (`BUILD_TESTS=ON`, no
+  enclave/chain) and gated by conformance against the Python oracle
+  (`tools/sd_cwt/tests/test_cpp_conformance.py`): a pinned Redacted-Claim-Hash
+  vector, Python `validate`ing C++ tokens (signature + disclosures), a
+  byte-identical payload check, and cross-validation of array-element (tag 60)
+  redaction. Supports **map, nested-map and array-element (tag 60) redaction**
+  at arbitrary depth via `redact_paths` (the ancestor-disclosure rule), matching
+  the Python reference — so layered disclosures are available (the statement
+  schema still redacts `references` whole for strict uniformity, but the core can
+  redact individual elements when a policy needs it).
 - `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.

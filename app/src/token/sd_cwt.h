@@ -2,12 +2,16 @@
 // Licensed under the MIT License.
 #pragma once
 
+#include "token/cbor_value.h"
+
 #include <ccf/crypto/ec_key_pair.h>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace sdcwt
@@ -34,31 +38,39 @@ namespace sdcwt
   using RandomSource = std::function<std::vector<uint8_t>(size_t)>;
   RandomSource default_random_source();
 
-  // --- CBOR value encoders (produce a single pre-encoded CBOR item) --------
+  // --- CBOR value constructors ---------------------------------------------
   namespace value
   {
-    std::vector<uint8_t> text(std::string_view s);
-    std::vector<uint8_t> integer(int64_t n);
-    std::vector<uint8_t> bytes(std::span<const uint8_t> b);
-    std::vector<uint8_t> text_array(const std::vector<std::string>& items);
+    CborValue text(std::string_view s);
+    CborValue integer(int64_t n);
+    CborValue bytes(std::span<const uint8_t> b);
+    CborValue text_array(const std::vector<std::string>& items);
   }
 
-  // A single top-level claim: its integer key, a pre-encoded CBOR value, and
-  // whether it is selectively-disclosable (redacted) or clear.
+  // A single top-level claim: its integer key, its value, and whether it is
+  // selectively-disclosable (redacted) or clear.
   struct Claim
   {
     int64_t key;
-    std::vector<uint8_t> value_cbor;
+    CborValue value;
     bool redact;
   };
 
-  // A generated Salted Disclosed Claim for a redacted map entry.
+  // A path element: a map key (int or text) or an array index (int).
+  using PathElem = std::variant<int64_t, std::string>;
+  // A redaction path from the claims-map root, e.g. {1006, 1} redacts element 1
+  // of the array claim 1006. A length-1 path redacts a whole top-level claim
+  // (equivalent to Claim::redact); longer paths redact nested map/array members.
+  using Path = std::vector<PathElem>;
+
+  // A generated Salted Disclosed Claim. `key` is absent for a redacted array
+  // element (whose disclosure is `[salt, value]`); present for a map entry
+  // (`[salt, value, key]`).
   struct Disclosure
   {
-    int64_t key;
+    std::optional<CborKey> key;
     std::vector<uint8_t> salt;
-    std::vector<uint8_t> value_cbor;
-    std::vector<uint8_t> encoded; // cbor([salt, value, key])
+    std::vector<uint8_t> encoded; // cbor([salt, value, key]) or cbor([salt, value])
     std::vector<uint8_t> digest; // sd_alg hash of (bstr .cbor encoded)
   };
 
@@ -77,17 +89,21 @@ namespace sdcwt
   std::vector<uint8_t> encode_sdcwt_protected_header(
     int64_t cose_alg, HashAlg sd_alg);
 
-  // Build and sign a redacted SD-CWT over the given top-level claims. Redacted
-  // claims are removed from the payload and represented by sorted Redacted
-  // Claim Hashes under simple(59); their disclosures are returned separately.
-  // The COSE signing algorithm is derived from the key's curve; the redaction
-  // hash is `sd_alg` (default SHA-256).
+  // Build and sign a redacted SD-CWT over the given top-level claims. Each
+  // `Claim` with `redact == true` is redacted whole; `redact_paths` additionally
+  // redacts nested map entries / array elements at arbitrary depth (the
+  // ancestor-disclosure rule applies: a disclosed parent may reveal a
+  // still-redacted child). Redacted map entries become sorted Redacted Claim
+  // Hashes under simple(59); redacted array elements become tag(60) hashes.
+  // Disclosures are returned separately. The COSE signing algorithm is derived
+  // from the key's curve; the redaction hash is `sd_alg` (default SHA-256).
   //
-  // Throws std::invalid_argument (unsupported curve) or std::runtime_error
-  // (CBOR failure).
+  // Throws std::invalid_argument (unsupported curve / path into a non-container)
+  // or std::runtime_error (CBOR failure).
   IssuedToken issue(
     const std::vector<Claim>& claims,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
+    const std::vector<Path>& redact_paths = {},
     const RandomSource& rng = default_random_source());
 }

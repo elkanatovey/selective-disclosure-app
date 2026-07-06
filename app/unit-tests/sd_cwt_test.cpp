@@ -39,7 +39,7 @@ TEST(SdCwt, DisclosureDigestMatchesPythonReference)
   const auto encoded = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
     QCBOREncode_OpenArray(&ctx);
     QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(salt));
-    QCBOREncode_AddEncoded(&ctx, sdcwt::to_ubc(value));
+    sdcwt::encode_value(ctx, value);
     QCBOREncode_AddInt64(&ctx, 1002);
     QCBOREncode_CloseArray(&ctx);
   });
@@ -72,7 +72,8 @@ TEST(SdCwt, RedactedClaimIsHiddenAndDisclosed)
   EXPECT_EQ(haystack.find(needle), std::string::npos);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
-  EXPECT_EQ(issued.disclosures[0].key, 1002);
+  ASSERT_TRUE(issued.disclosures[0].key.has_value());
+  EXPECT_EQ(std::get<int64_t>(*issued.disclosures[0].key), 1002);
   EXPECT_EQ(issued.disclosures[0].salt.size(), sdcwt::SALT_LEN);
   EXPECT_EQ(
     issued.disclosures[0].digest,
@@ -104,4 +105,60 @@ TEST(SdCwt, RedactionHashAgilitySha384)
   const std::string tok(issued.token.begin(), issued.token.end());
   const std::string hdr(expected_hdr.begin(), expected_hdr.end());
   EXPECT_NE(tok.find(hdr), std::string::npos);
+}
+
+namespace
+{
+  bool token_contains(const std::vector<uint8_t>& token, const std::string& s)
+  {
+    const std::string hay(token.begin(), token.end());
+    return hay.find(s) != std::string::npos;
+  }
+}
+
+// Array-element redaction: a redact_path into an array element hides only that
+// element (replaced by a tag(60) hash) and yields a keyless disclosure.
+TEST(SdCwt, ArrayElementRedaction)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  std::vector<sdcwt::Claim> claims = {
+    {1006,
+     sdcwt::value::text_array({"REF_KEEP_A", "REF_HIDE_B", "REF_KEEP_C"}),
+     false},
+  };
+  // Redact element 1 of claim 1006.
+  const std::vector<sdcwt::Path> paths = {{int64_t{1006}, int64_t{1}}};
+
+  const auto issued =
+    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+
+  ASSERT_EQ(issued.disclosures.size(), 1u);
+  EXPECT_FALSE(issued.disclosures[0].key.has_value()); // array element
+  EXPECT_FALSE(token_contains(issued.token, "REF_HIDE_B"));
+  EXPECT_TRUE(token_contains(issued.token, "REF_KEEP_A"));
+  EXPECT_TRUE(token_contains(issued.token, "REF_KEEP_C"));
+  // tag(60) = 0xd8 0x3c precedes the redacted element hash.
+  const std::string tok(issued.token.begin(), issued.token.end());
+  EXPECT_NE(tok.find(std::string("\xd8\x3c", 2)), std::string::npos);
+}
+
+// Nested-map redaction: a redact_path into a nested map entry (text key) hides
+// only that entry, keeping the sibling and the enclosing structure.
+TEST(SdCwt, NestedMapRedaction)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  auto inner = sdcwt::CborValue::Map(
+    {{std::string("keep"), sdcwt::value::text("INNER_KEEP")},
+     {std::string("hide"), sdcwt::value::text("NESTED_HIDE")}});
+  std::vector<sdcwt::Claim> claims = {{500, std::move(inner), false}};
+  const std::vector<sdcwt::Path> paths = {{int64_t{500}, std::string("hide")}};
+
+  const auto issued =
+    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+
+  ASSERT_EQ(issued.disclosures.size(), 1u);
+  ASSERT_TRUE(issued.disclosures[0].key.has_value());
+  EXPECT_EQ(std::get<std::string>(*issued.disclosures[0].key), "hide");
+  EXPECT_FALSE(token_contains(issued.token, "NESTED_HIDE"));
+  EXPECT_TRUE(token_contains(issued.token, "INNER_KEEP"));
 }
