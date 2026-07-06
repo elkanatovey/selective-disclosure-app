@@ -367,12 +367,18 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   enclave/chain) and gated by conformance against the Python oracle
   (`tools/sd_cwt/tests/test_cpp_conformance.py`): a pinned Redacted-Claim-Hash
   vector, Python `validate`ing C++ tokens (signature + disclosures), a
-  byte-identical payload check, and cross-validation of array-element (tag 60)
-  redaction. Supports **map, nested-map and array-element (tag 60) redaction**
+  byte-identical payload check, cross-validation of array-element (tag 60) and
+  deep-nested + ancestor-disclosure redaction, and a byte-identical decoy-padding
+  check. Supports **map, nested-map and array-element (tag 60) redaction**
   at arbitrary depth via `redact_paths` (the ancestor-disclosure rule), matching
   the Python reference — so layered disclosures are available (the statement
   schema still redacts `references` whole for strict uniformity, but the core can
-  redact individual elements when a policy needs it).
+  redact individual elements when a policy needs it). **Decoy padding**
+  (`issue(..., pad_to=N)`) is ported too — pads the top-level Redacted-Claim-Hash
+  count to N with indistinguishable salt-only decoys, byte-identical to the
+  Python reference under fixed salts (conformance-pinned). **KBT is intentionally
+  not ported**: `kbt_sign`/`kbt_verify` are holder-presentation / verifier
+  operations that run off-chain (Python), not in the in-enclave issuer.
 - `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.

@@ -134,6 +134,37 @@ TEST(SdCwt, ConfigurableSaltLength)
   EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
 }
 
+// Decoy padding: pad_to raises the top-level redacted-hash count to the target
+// with salt-only decoy disclosures, without changing the real claim.
+TEST(SdCwt, DecoyPadding)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  std::vector<sdcwt::Claim> claims = {
+    {1, sdcwt::value::text("iss"), false},
+    {1002, sdcwt::value::text("secret"), true},
+  };
+  const auto issued = sdcwt::issue(
+    claims,
+    *key,
+    sdcwt::HashAlg::SHA_256,
+    /*redact_paths=*/{},
+    sdcwt::default_random_source(),
+    sdcwt::SALT_LEN,
+    /*pad_to=*/5);
+
+  // 1 real redacted claim + 4 decoys = 5 disclosures, all with no key.
+  ASSERT_EQ(issued.disclosures.size(), 5u);
+  size_t decoys = 0;
+  for (const auto& d : issued.disclosures)
+  {
+    if (!d.key.has_value())
+    {
+      ++decoys;
+    }
+  }
+  EXPECT_EQ(decoys, 4u);
+}
+
 // A redact_path that resolves to nothing must be rejected (rather than silently
 // producing no redaction).
 TEST(SdCwt, UnmatchedRedactPathRejected)

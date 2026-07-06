@@ -191,3 +191,35 @@ def test_python_validates_cpp_nested_redaction():
     out = sd_cwt.validate(_present(token, disclosures), key)
     assert out.clear[1] == "https://ledger.example/tee"
     assert out.clear[700] == {"a": {"b": "SECRET_CHILD", "c": "KEEP_SIBLING"}}
+
+
+def test_decoy_padding_byte_identical_to_python(monkeypatch):
+    """A C++ token with decoy padding has byte-identical payload to Python's.
+
+    claim 1002 is redacted and the top-level redacted-hash count is padded to 5
+    with salt-only decoy disclosures. With identical fixed salts, the padded +
+    sorted Redacted-Claim-Hash array (and the whole payload) must match exactly,
+    pinning the C++ decoy encoding (cbor([salt])), digest and sort order to the
+    reference. Values MUST stay in sync with
+    app/unit-tests/conformance_test.cpp::emit_decoy.
+    """
+    if not _ARTIFACT_DIR:
+        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
+    d = Path(_ARTIFACT_DIR) / "decoy"
+    if not (d / "statement.cbor").exists():
+        pytest.skip(f"C++ decoy-padding artifact missing in {d}")
+    cpp_token = (d / "statement.cbor").read_bytes()
+
+    from pycose.keys import EC2Key
+    from pycose.keys.curves import P256
+
+    monkeypatch.setattr("sd_cwt.core.csprng", _counter_salt_source())
+    signer = EC2Key.generate_key(crv=P256)
+    py_token, _ = sd_cwt.issue(
+        {1: "https://ledger.example/tee", 1002: "secret body"},
+        {1002},
+        signer,
+        pad_to=5,
+    )
+
+    assert _payload_bytes(cpp_token) == _payload_bytes(py_token)

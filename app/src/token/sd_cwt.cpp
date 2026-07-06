@@ -125,6 +125,17 @@ namespace sdcwt
       });
     }
 
+    // cbor([salt]) for a salt-only decoy disclosure (pads the redacted-hash
+    // count without corresponding to any real claim).
+    std::vector<uint8_t> encode_decoy_disclosure(std::span<const uint8_t> salt)
+    {
+      return cbor_encode([&](QCBOREncodeContext& ctx) {
+        QCBOREncode_OpenArray(&ctx);
+        QCBOREncode_AddBytes(&ctx, to_ubc(salt));
+        QCBOREncode_CloseArray(&ctx);
+      });
+    }
+
     bool elem_matches_key(const PathElem& e, const CborKey& key)
     {
       if (
@@ -323,7 +334,8 @@ namespace sdcwt
     HashAlg sd_alg,
     const std::vector<Path>& redact_paths,
     const RandomSource& rng,
-    size_t salt_len)
+    size_t salt_len,
+    size_t pad_to)
   {
     // Derive the COSE signing algorithm from the key's curve (throws early on
     // an unsupported curve, before any redaction work).
@@ -355,8 +367,25 @@ namespace sdcwt
     }
 
     std::vector<Disclosure> disclosures;
-    const CborValue redacted =
+    CborValue redacted =
       redact_node(root, paths, sd_alg, rng, salt_len, disclosures);
+
+    // Decoy padding: add salt-only decoy disclosures until the top-level
+    // redacted-hash count reaches `pad_to`, so the count leaks nothing about
+    // how many real claims were redacted. Decoys are indistinguishable from
+    // real hashes and are re-sorted in with them.
+    while (redacted.redacted_hashes.size() < pad_to)
+    {
+      Disclosure d;
+      d.key = std::nullopt;
+      d.salt = rng(salt_len);
+      d.encoded = encode_decoy_disclosure(d.salt);
+      d.digest = disclosure_digest(d.encoded, sd_alg);
+      redacted.redacted_hashes.push_back(d.digest);
+      disclosures.push_back(std::move(d));
+    }
+    std::sort(redacted.redacted_hashes.begin(), redacted.redacted_hashes.end());
+
     const auto payload = encode_value(redacted);
 
     const auto phdr = encode_sdcwt_protected_header(cose_alg, sd_alg);

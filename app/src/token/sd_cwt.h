@@ -72,7 +72,7 @@ namespace sdcwt
     std::optional<CborKey> key;
     std::vector<uint8_t> salt;
     std::vector<uint8_t>
-      encoded; // cbor([salt, value, key]) or cbor([salt, value])
+      encoded; // cbor([salt, value, key]), cbor([salt, value]), or cbor([salt])
     std::vector<uint8_t> digest; // sd_alg hash of (bstr .cbor encoded)
   };
 
@@ -101,6 +101,10 @@ namespace sdcwt
   // from the key's curve; the redaction hash is `sd_alg` (default SHA-256);
   // `salt_len` is the per-disclosure salt length in bytes (default 16).
   //
+  // `pad_to`, if non-zero, pads the top-level Redacted-Claim-Hash count up to
+  // that many entries with indistinguishable salt-only decoy disclosures, so
+  // the count does not reveal how many real claims were redacted.
+  //
   // Throws std::invalid_argument (unsupported curve, or a redact_path that does
   // not resolve to an existing claim/element / descends into a non-container)
   // or std::runtime_error (CBOR failure).
@@ -110,5 +114,6 @@ namespace sdcwt
     HashAlg sd_alg = HashAlg::SHA_256,
     const std::vector<Path>& redact_paths = {},
     const RandomSource& rng = default_random_source(),
-    size_t salt_len = SALT_LEN);
+    size_t salt_len = SALT_LEN,
+    size_t pad_to = 0);
 }

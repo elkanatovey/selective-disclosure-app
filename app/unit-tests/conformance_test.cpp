@@ -181,6 +181,45 @@ namespace
     const auto pem = key->public_key_pem().str();
     write("signer.pem", pem.data(), pem.size());
   }
+
+  // Emit a generic token with DECOY PADDING under a DETERMINISTIC salt
+  // source, so the Python reference can byte-compare its own padded payload.
+  // claim 1002 is redacted and the top-level redacted-hash count is padded to
+  // 5 with salt-only decoys. Values MUST stay in sync with
+  // test_cpp_conformance.py::test_decoy_padding_byte_identical_to_python.
+  void emit_decoy(const std::string& base)
+  {
+    auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+
+    std::vector<sdcwt::Claim> claims = {
+      {1, sdcwt::value::text("https://ledger.example/tee"), false},
+      {1002, sdcwt::value::text("secret body"), true},
+    };
+
+    // Counter-based salt source: call i returns n bytes all equal to i.
+    auto counter = std::make_shared<uint8_t>(0);
+    sdcwt::RandomSource det_rng = [counter](size_t n) {
+      std::vector<uint8_t> v(n, *counter);
+      ++(*counter);
+      return v;
+    };
+
+    const auto issued = sdcwt::issue(
+      claims,
+      *key,
+      sdcwt::HashAlg::SHA_256,
+      /*redact_paths=*/{},
+      det_rng,
+      sdcwt::SALT_LEN,
+      /*pad_to=*/5);
+
+    const std::string dir = base + "/decoy";
+    std::filesystem::create_directories(dir);
+    std::ofstream out(dir + "/statement.cbor", std::ios::binary);
+    out.write(
+      reinterpret_cast<const char*>(issued.token.data()),
+      static_cast<std::streamsize>(issued.token.size()));
+  }
 }
 
 // Emit conformance artifacts across signing/redaction-hash suites, so the
@@ -201,6 +240,7 @@ TEST(Conformance, EmitStatementArtifactsForPython)
   emit_deterministic(dir);
   emit_array_redaction(dir);
   emit_nested_redaction(dir);
+  emit_decoy(dir);
 
   SUCCEED();
 }
