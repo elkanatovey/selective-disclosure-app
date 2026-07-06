@@ -58,7 +58,7 @@ namespace sdcwt::statement
   // SHA-256).
   //
   // Throws std::invalid_argument (unsupported curve) or std::runtime_error
-  // (CBOR failure); a CCF endpoint handler MUST catch these.
+  // (CBOR failure).
   IssuedToken issue_statement(
     const std::string& iss,
     int64_t iat,

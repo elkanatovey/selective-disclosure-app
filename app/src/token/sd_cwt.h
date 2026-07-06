@@ -59,7 +59,7 @@ namespace sdcwt
     std::vector<uint8_t> salt;
     std::vector<uint8_t> value_cbor;
     std::vector<uint8_t> encoded; // cbor([salt, value, key])
-    std::vector<uint8_t> digest; // sha256(bstr .cbor encoded)
+    std::vector<uint8_t> digest; // sd_alg hash of (bstr .cbor encoded)
   };
 
   struct IssuedToken
@@ -84,7 +84,7 @@ namespace sdcwt
   // hash is `sd_alg` (default SHA-256).
   //
   // Throws std::invalid_argument (unsupported curve) or std::runtime_error
-  // (CBOR failure); a CCF endpoint handler MUST catch these.
+  // (CBOR failure).
   IssuedToken issue(
     const std::vector<Claim>& claims,
     const ccf::crypto::ECKeyPair& key,

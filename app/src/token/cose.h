@@ -33,9 +33,7 @@ namespace sdcwt
   // fixed-length r||s (IEEE P1363) value, as COSE requires.
   //
   // Throws std::invalid_argument for an unsupported curve, or
-  // std::runtime_error on a CBOR encoding failure. Callers running inside a CCF
-  // endpoint handler MUST catch these so malformed input cannot crash the
-  // enclave transaction.
+  // std::runtime_error on a CBOR encoding failure.
   std::vector<uint8_t> sign_cose_sign1(
     const ccf::crypto::ECKeyPair& key,
     std::span<const uint8_t> protected_header_cbor,
