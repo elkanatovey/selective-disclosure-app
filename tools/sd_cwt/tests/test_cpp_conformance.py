@@ -293,9 +293,7 @@ def test_python_verifies_cpp_kbt():
 
     aud = "https://vendor.example/verify"
     cnonce = bytes([0xA1, 0xB2, 0xC3, 0xD4])
-    result = sd_cwt.kbt_verify(
-        kbt, issuer, expected_aud=aud, expected_cnonce=cnonce
-    )
+    result = sd_cwt.kbt_verify(kbt, issuer, expected_aud=aud, expected_cnonce=cnonce)
 
     assert result.aud == aud
     assert result.cnonce == cnonce
