@@ -6,8 +6,10 @@
 #include "token/cose.h"
 
 #include <algorithm>
+#include <cstring>
 #include <gtest/gtest.h>
 #include <qcbor/qcbor_decode.h>
+#include <qcbor/qcbor_spiffy_decode.h>
 
 namespace
 {
@@ -198,6 +200,65 @@ TEST(SdCwt, PresentAttachesSelectedDisclosures)
   EXPECT_TRUE(contains(presented, issued.disclosures[0].encoded));
   // Presenting nothing yields a decodable token again (no sd_claims header).
   EXPECT_NO_THROW(sdcwt::present(issued.token, {}));
+}
+
+// present() must carry pre-existing unprotected-header entries (e.g. kid,
+// x5chain) through untouched, only managing sd_claims — never silently dropping
+// them (mirrors the Python reference's dict(arr[1]) passthrough).
+TEST(SdCwt, PresentPreservesExistingUnprotectedHeader)
+{
+  const std::vector<uint8_t> kid = {0xAB, 0xCD};
+  const std::vector<uint8_t> cert = {0x01, 0x02, 0x03};
+  const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
+
+  // Hand-build a COSE_Sign1 whose unprotected header already carries kid (4)
+  // and an x5chain-like array (33). The signature/payload are placeholders;
+  // present does not verify them.
+  const auto token = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddTag(&ctx, 18);
+    QCBOREncode_OpenArray(&ctx);
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // phdr
+    QCBOREncode_OpenMap(&ctx);
+    QCBOREncode_AddBytesToMapN(&ctx, 4, sdcwt::to_ubc(kid));
+    QCBOREncode_OpenArrayInMapN(&ctx, 33);
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(cert));
+    QCBOREncode_CloseArray(&ctx);
+    QCBOREncode_CloseMap(&ctx);
+    QCBOREncode_AddBytes(
+      &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // payload
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // sig
+    QCBOREncode_CloseArray(&ctx);
+  });
+
+  const auto presented = sdcwt::present(token, {disclosure});
+
+  // The rebuilt unprotected header must still contain kid(4) and x5chain(33),
+  // and now also sd_claims(17).
+  QCBORDecodeContext dc;
+  QCBORDecode_Init(
+    &dc,
+    UsefulBufC{presented.data(), presented.size()},
+    QCBOR_DECODE_MODE_NORMAL);
+  QCBORDecode_EnterArray(&dc, nullptr);
+  UsefulBufC phdr = NULLUsefulBufC;
+  QCBORDecode_GetByteString(&dc, &phdr);
+  QCBORDecode_EnterMap(&dc, nullptr);
+  UsefulBufC got_kid = NULLUsefulBufC;
+  QCBORDecode_GetByteStringInMapN(&dc, 4, &got_kid);
+  QCBORDecode_EnterArrayFromMapN(&dc, 17); // sd_claims present
+  QCBORDecode_ExitArray(&dc);
+  UsefulBufC got_cert = NULLUsefulBufC;
+  QCBORDecode_EnterArrayFromMapN(&dc, 33); // x5chain present
+  QCBORDecode_GetByteString(&dc, &got_cert);
+  QCBORDecode_ExitArray(&dc);
+  QCBORDecode_ExitMap(&dc);
+  QCBORDecode_ExitArray(&dc);
+  ASSERT_EQ(QCBORDecode_Finish(&dc), QCBOR_SUCCESS);
+
+  ASSERT_EQ(got_kid.len, kid.size());
+  EXPECT_EQ(0, std::memcmp(got_kid.ptr, kid.data(), kid.size()));
+  ASSERT_EQ(got_cert.len, cert.size());
+  EXPECT_EQ(0, std::memcmp(got_cert.ptr, cert.data(), cert.size()));
 }
 
 // kbt_sign requires the draft-08 s8.1 freshness claim (iat or cti).

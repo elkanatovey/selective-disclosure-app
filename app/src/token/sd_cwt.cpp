@@ -138,6 +138,115 @@ namespace sdcwt
       });
     }
 
+    // Re-emit a decoded unprotected-header scalar value under integer `label`.
+    void emit_scalar_to_map(
+      QCBOREncodeContext& ctx, int64_t label, const QCBORItem& v)
+    {
+      switch (v.uDataType)
+      {
+        case QCBOR_TYPE_INT64:
+          QCBOREncode_AddInt64ToMapN(&ctx, label, v.val.int64);
+          break;
+        case QCBOR_TYPE_UINT64:
+          QCBOREncode_AddUInt64ToMapN(&ctx, label, v.val.uint64);
+          break;
+        case QCBOR_TYPE_BYTE_STRING:
+          QCBOREncode_AddBytesToMapN(&ctx, label, v.val.string);
+          break;
+        case QCBOR_TYPE_TEXT_STRING:
+          QCBOREncode_AddTextToMapN(&ctx, label, v.val.string);
+          break;
+        case QCBOR_TYPE_TRUE:
+        case QCBOR_TYPE_FALSE:
+          QCBOREncode_AddBoolToMapN(
+            &ctx, label, v.uDataType == QCBOR_TYPE_TRUE);
+          break;
+        case QCBOR_TYPE_NULL:
+          QCBOREncode_AddNULLToMapN(&ctx, label);
+          break;
+        default:
+          throw std::runtime_error(
+            "present: unsupported unprotected-header value type");
+      }
+    }
+
+    // Copy an issued token's unprotected-header map into `ctx`, preserving
+    // every entry except sd_claims (17), which present() manages itself.
+    // Mirrors the Python reference (dict(arr[1]) then override sd_claims), so
+    // entries such as kid / x5chain survive a present(). Only integer labels
+    // are supported (the COSE norm); a non-integer label throws rather than
+    // being silently dropped. Container values (arrays/maps, e.g. an x5chain
+    // certificate list) are copied verbatim as raw CBOR. The unprotected header
+    // is not signed, so entry order is immaterial and sd_claims is appended
+    // last.
+    void copy_uhdr_except_sd_claims(
+      std::span<const uint8_t> uhdr_cbor, QCBOREncodeContext& ctx)
+    {
+      QCBORDecodeContext dc;
+      QCBORDecode_Init(
+        &dc,
+        UsefulBufC{uhdr_cbor.data(), uhdr_cbor.size()},
+        QCBOR_DECODE_MODE_NORMAL);
+
+      QCBORItem map_item;
+      QCBORDecode_EnterMap(&dc, &map_item);
+      const int count = map_item.val.uCount;
+      for (int i = 0; i < count; ++i)
+      {
+        QCBORItem peek;
+        if (QCBORDecode_PeekNext(&dc, &peek) != QCBOR_SUCCESS)
+        {
+          throw std::runtime_error("present: malformed unprotected header");
+        }
+        if (
+          peek.uLabelType != QCBOR_TYPE_INT64 &&
+          peek.uLabelType != QCBOR_TYPE_UINT64)
+        {
+          throw std::runtime_error(
+            "present: unsupported non-integer unprotected-header label");
+        }
+        const int64_t label = (peek.uLabelType == QCBOR_TYPE_INT64) ?
+          peek.label.int64 :
+          static_cast<int64_t>(peek.label.uint64);
+        const bool drop = (label == SD_CLAIMS_LABEL);
+
+        if (peek.uDataType == QCBOR_TYPE_ARRAY)
+        {
+          QCBORItem it;
+          UsefulBufC raw = NULLUsefulBufC;
+          QCBORDecode_GetArray(&dc, &it, &raw);
+          if (!drop)
+          {
+            QCBOREncode_AddEncodedToMapN(&ctx, label, raw);
+          }
+        }
+        else if (peek.uDataType == QCBOR_TYPE_MAP)
+        {
+          QCBORItem it;
+          UsefulBufC raw = NULLUsefulBufC;
+          QCBORDecode_GetMap(&dc, &it, &raw);
+          if (!drop)
+          {
+            QCBOREncode_AddEncodedToMapN(&ctx, label, raw);
+          }
+        }
+        else
+        {
+          QCBORItem v;
+          QCBORDecode_VGetNext(&dc, &v);
+          if (!drop)
+          {
+            emit_scalar_to_map(ctx, label, v);
+          }
+        }
+      }
+      QCBORDecode_ExitMap(&dc);
+      if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
+      {
+        throw std::runtime_error("present: malformed unprotected header");
+      }
+    }
+
     // Build an RFC 8747 `cnf` claim value `{1: COSE_Key}` holding only the EC2
     // PUBLIC coordinates of `holder` (kty=EC2, crv, x, y). Mirrors the Python
     // reference `_cnf_from_key`.
@@ -430,20 +539,22 @@ namespace sdcwt
     const std::vector<std::vector<uint8_t>>& selected)
   {
     // Decode the tagged COSE_Sign1 [ protected, unprotected, payload, signature
-    // ] into its opaque parts; the unprotected header is rebuilt (our issued
-    // tokens carry an empty one), the rest is copied through verbatim so the
-    // signature stays valid.
+    // ] into its opaque parts. The unprotected header is captured as raw bytes
+    // and re-emitted preserving every entry except sd_claims (which present()
+    // manages); the protected header, payload and signature are copied verbatim
+    // so the signature stays valid.
     QCBORDecodeContext dc;
     QCBORDecode_Init(
       &dc, UsefulBufC{token.data(), token.size()}, QCBOR_DECODE_MODE_NORMAL);
 
     UsefulBufC phdr = NULLUsefulBufC;
+    UsefulBufC uhdr = NULLUsefulBufC;
     UsefulBufC payload = NULLUsefulBufC;
     UsefulBufC sig = NULLUsefulBufC;
+    QCBORItem uhdr_item;
     QCBORDecode_EnterArray(&dc, nullptr);
     QCBORDecode_GetByteString(&dc, &phdr);
-    QCBORDecode_EnterMap(&dc, nullptr); // unprotected header (contents unused)
-    QCBORDecode_ExitMap(&dc);
+    QCBORDecode_GetMap(&dc, &uhdr_item, &uhdr); // capture uhdr raw bytes
     QCBORDecode_GetByteString(&dc, &payload);
     QCBORDecode_GetByteString(&dc, &sig);
     QCBORDecode_ExitArray(&dc);
@@ -452,11 +563,17 @@ namespace sdcwt
       throw std::runtime_error("present: malformed COSE_Sign1 token");
     }
 
+    const std::span<const uint8_t> uhdr_span{
+      static_cast<const uint8_t*>(uhdr.ptr), uhdr.len};
+
     return cbor_encode([&](QCBOREncodeContext& ctx) {
       QCBOREncode_AddTag(&ctx, 18); // COSE_Sign1
       QCBOREncode_OpenArray(&ctx);
       QCBOREncode_AddBytes(&ctx, phdr);
       QCBOREncode_OpenMap(&ctx);
+      // Carry through any pre-existing unprotected-header entries (e.g. kid,
+      // x5chain) so present() never silently drops them.
+      copy_uhdr_except_sd_claims(uhdr_span, ctx);
       if (!selected.empty())
       {
         QCBOREncode_OpenArrayInMapN(&ctx, SD_CLAIMS_LABEL);
