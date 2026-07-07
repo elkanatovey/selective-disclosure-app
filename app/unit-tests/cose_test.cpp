@@ -2,9 +2,11 @@
 // Licensed under the MIT License.
 #include "token/cose.h"
 
+#include <algorithm>
 #include <ccf/crypto/cose_verifier.h>
 #include <ccf/crypto/ec_key_pair.h>
 #include <gtest/gtest.h>
+#include <span>
 
 // A hand-assembled COSE_Sign1 must verify under CCF's own COSE verifier, and
 // the recovered payload must match what we signed. This nails the QCBOR + COSE
@@ -85,7 +87,8 @@ TEST(Cose, ExternalAadIsBound)
   EXPECT_TRUE(verifier->verify(no_aad, content));
 }
 
-// A signature over a different payload must not verify against tampered bytes.
+// A COSE_Sign1 verifies when intact, and fails when its payload is tampered or
+// the envelope is truncated.
 TEST(Cose, TamperedPayloadFailsVerification)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
@@ -93,14 +96,22 @@ TEST(Cose, TamperedPayloadFailsVerification)
   const std::vector<uint8_t> payload = {0xa1, 0x01, 0x02};
 
   auto token = sdcwt::sign_cose_sign1(*key, phdr, payload);
-  // Flip a byte in the encoded payload region (last-but-one field). Rather than
-  // hunt the offset, re-sign a different payload and swap the signature.
-  const std::vector<uint8_t> other = {0xa1, 0x01, 0x03};
-  auto other_token = sdcwt::sign_cose_sign1(*key, phdr, other);
-
   auto verifier =
     ccf::crypto::make_cose_verifier_from_key(key->public_key_pem());
+
+  // The intact token verifies (positive control).
   std::span<uint8_t> content;
+  EXPECT_TRUE(verifier->verify(token, content));
+
+  // Flipping a byte inside the embedded payload breaks the signature: the
+  // payload is signed over the RFC 9052 Sig_structure.
+  auto tampered = token;
+  const auto it = std::search(
+    tampered.begin(), tampered.end(), payload.begin(), payload.end());
+  ASSERT_NE(it, tampered.end());
+  *it ^= 0xff;
+  EXPECT_FALSE(verifier->verify(tampered, content));
+
   // Truncating the envelope must fail cleanly (not crash).
   std::vector<uint8_t> truncated(
     token.begin(), token.begin() + token.size() / 2);

@@ -57,13 +57,13 @@ jobs:
       - name: Work around git safe.directory in container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      # The ccf_devel RPM installs CCF's CMake package; discover its prefix
-      # rather than hard-coding a path.
+      # The ccf_devel RPM installs CCF's CMake package; query the package for
+      # the exact config path (fast and deterministic) rather than scanning /.
       - name: Locate CCF install
         id: ccf
         run: |
           set -ex
-          cfg=$(find / -name ccf-config.cmake 2>/dev/null | head -1)
+          cfg=$(rpm -ql ccf_devel | grep -m1 '/ccf-config\.cmake$')
           test -n "$cfg"
           echo "prefix=$(dirname "$(dirname "$cfg")")" >> "$GITHUB_OUTPUT"
 

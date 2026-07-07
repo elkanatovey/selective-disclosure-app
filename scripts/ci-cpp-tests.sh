@@ -13,7 +13,14 @@ INSTALL_DIR=${INSTALL_DIR:-/workspace/.ccf-install}
 BUILD_DIR=${BUILD_DIR:-app/build-test}
 CC=${CC:-clang}
 CXX=${CXX:-clang++}
-ARTIFACT_DIR=${SDCWT_ARTIFACT_DIR:-$(mktemp -d)}
+# Use the caller's artifact dir when set; otherwise make a temp one and remove
+# it on exit (don't delete a user-specified directory).
+if [ -n "${SDCWT_ARTIFACT_DIR:-}" ]; then
+  ARTIFACT_DIR=$SDCWT_ARTIFACT_DIR
+else
+  ARTIFACT_DIR=$(mktemp -d)
+  trap 'rm -rf "$ARTIFACT_DIR"' EXIT
+fi
 
 echo "== Configuring $BUILD_DIR (BUILD_TESTS=ON) =="
 cmake -GNinja -S app -B "$BUILD_DIR" \

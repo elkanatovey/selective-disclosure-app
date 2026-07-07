@@ -49,18 +49,21 @@ def _present(token: bytes, disclosures: list) -> bytes:
 
 
 def _ec2_key_from_pem(pem: bytes):
-    """Build a pycose EC2Key from a PEM public key, curve inferred from its size."""
+    """Build a pycose EC2Key from a PEM public key, curve inferred from its name."""
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
     from pycose.keys import EC2Key
     from pycose.keys.curves import P256, P384, P521
 
     pub = load_pem_public_key(pem)
     curve_name = pub.curve.name  # e.g. "secp256r1"
-    crv, size = {
+    mapping = {
         "secp256r1": (P256, 32),
         "secp384r1": (P384, 48),
         "secp521r1": (P521, 66),
-    }[curve_name]
+    }
+    if curve_name not in mapping:
+        raise ValueError(f"unsupported EC curve: {curve_name}")
+    crv, size = mapping[curve_name]
     nums = pub.public_numbers()
     x = nums.x.to_bytes(size, "big")
     y = nums.y.to_bytes(size, "big")
