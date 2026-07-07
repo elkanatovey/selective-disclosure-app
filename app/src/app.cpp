@@ -10,6 +10,7 @@
 #include "ccf/json_handler.h"
 #include "ccf/receipt.h"
 #include "ccf/tx_status.h"
+#include "report_parse.h"
 #include "reports.h"
 
 #include <ctime>
@@ -64,24 +65,16 @@ namespace selectivedisclosure
       // --- submit_report: parse raw JSON content, build + sign a redacted
       // statement, store it, and return its transaction id on commit. --------
       auto submit_report = [this](ccf::endpoints::EndpointContext& ctx) {
-        nlohmann::json body;
+        statement::Fields fields;
         try
         {
-          body = nlohmann::json::parse(ctx.rpc_ctx->get_request_body());
+          fields = parse_report_fields(ctx.rpc_ctx->get_request_body());
         }
-        catch (const std::exception&)
+        catch (const std::exception& e)
         {
           ctx.rpc_ctx->set_error(
-            HTTP_STATUS_BAD_REQUEST,
-            ccf::errors::InvalidInput,
-            "Request body must be JSON.");
+            HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput, e.what());
           return;
-        }
-
-        statement::Fields fields;
-        if (!parse_fields(body, fields, ctx))
-        {
-          return; // error already set
         }
 
         int64_t iat = 0;
@@ -247,84 +240,6 @@ namespace selectivedisclosure
       const auto& pem = key->private_key_pem();
       handle->put(std::vector<uint8_t>(pem.str().begin(), pem.str().end()));
       return key;
-    }
-
-    // Map the submission JSON onto the statement schema. Returns false and sets
-    // an HTTP error when a field has the wrong type.
-    bool parse_fields(
-      const nlohmann::json& body,
-      statement::Fields& fields,
-      ccf::endpoints::EndpointContext& ctx)
-    {
-      const auto bad = [&](std::string msg) {
-        ctx.rpc_ctx->set_error(
-          HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput, std::move(msg));
-        return false;
-      };
-
-      const auto opt_str = [&](const char* key) -> std::optional<std::string> {
-        if (body.contains(key) && body[key].is_string())
-        {
-          return body[key].get<std::string>();
-        }
-        return std::nullopt;
-      };
-
-      fields.title = opt_str("title");
-      fields.body = opt_str("body");
-      fields.component = opt_str("component");
-      fields.severity = opt_str("severity");
-      fields.patch = opt_str("patch");
-
-      // fingerprint: stored as raw UTF-8 string bytes (not hex-decoded).
-      if (const auto fp = opt_str("fingerprint"))
-      {
-        fields.fingerprint = std::vector<uint8_t>(fp->begin(), fp->end());
-      }
-
-      // parent: hex string decoded to the parent statement's hash bytes.
-      if (body.contains("parent"))
-      {
-        if (!body["parent"].is_string())
-        {
-          return bad("`parent` must be a hex string.");
-        }
-        const auto decoded = from_hex(body["parent"].get<std::string>());
-        if (!decoded.has_value())
-        {
-          return bad("`parent` must be valid hex.");
-        }
-        fields.parent = decoded;
-      }
-
-      if (body.contains("references"))
-      {
-        if (!body["references"].is_array())
-        {
-          return bad("`references` must be an array of strings.");
-        }
-        std::vector<std::string> refs;
-        for (const auto& ref : body["references"])
-        {
-          if (!ref.is_string())
-          {
-            return bad("`references` must contain only strings.");
-          }
-          refs.push_back(ref.get<std::string>());
-        }
-        fields.references = refs;
-      }
-
-      if (body.contains("patch_date"))
-      {
-        if (!body["patch_date"].is_number_integer())
-        {
-          return bad("`patch_date` must be an integer.");
-        }
-        fields.patch_date = body["patch_date"].get<int64_t>();
-      }
-
-      return true;
     }
   };
 }

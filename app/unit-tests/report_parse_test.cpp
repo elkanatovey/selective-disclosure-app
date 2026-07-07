@@ -1,0 +1,107 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+#include "report_parse.h"
+
+#include "token/cbor.h"
+
+#include <functional>
+#include <gtest/gtest.h>
+
+using selectivedisclosure::parse_report_fields;
+
+namespace
+{
+  // Encode a submission CBOR map for the tests, mirroring what a client sends.
+  std::vector<uint8_t> body(const std::function<void(QCBOREncodeContext&)>& add)
+  {
+    return sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
+      QCBOREncode_OpenMap(&ctx);
+      add(ctx);
+      QCBOREncode_CloseMap(&ctx);
+    });
+  }
+}
+
+// A full, well-typed CBOR submission maps onto Fields with native types.
+TEST(ReportParse, DecodesAllFields)
+{
+  const std::vector<uint8_t> fp = {0xde, 0xad, 0xbe, 0xef};
+  const auto cbor = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddSZStringToMap(&ctx, "title", "heap overflow");
+    QCBOREncode_AddSZStringToMap(&ctx, "body", "details");
+    QCBOREncode_AddSZStringToMap(&ctx, "component", "parser");
+    QCBOREncode_AddSZStringToMap(&ctx, "severity", "high");
+    QCBOREncode_AddSZStringToMap(&ctx, "patch", "fixed");
+    QCBOREncode_AddBytesToMap(&ctx, "fingerprint", sdcwt::to_ubc(fp));
+    QCBOREncode_OpenArrayInMap(&ctx, "references");
+    QCBOREncode_AddSZString(&ctx, "CVE-2025-1");
+    QCBOREncode_AddSZString(&ctx, "CVE-2025-2");
+    QCBOREncode_CloseArray(&ctx);
+    QCBOREncode_AddInt64ToMap(&ctx, "patch_date", 1700100000);
+  });
+
+  const auto f = parse_report_fields(cbor);
+  EXPECT_EQ(f.title, "heap overflow");
+  EXPECT_EQ(f.body, "details");
+  EXPECT_EQ(f.component, "parser");
+  EXPECT_EQ(f.severity, "high");
+  EXPECT_EQ(f.patch, "fixed");
+  ASSERT_TRUE(f.fingerprint.has_value());
+  EXPECT_EQ(*f.fingerprint, fp);
+  ASSERT_TRUE(f.references.has_value());
+  EXPECT_EQ(
+    *f.references, (std::vector<std::string>{"CVE-2025-1", "CVE-2025-2"}));
+  EXPECT_EQ(f.patch_date, 1700100000);
+}
+
+// All fields are optional: an empty map yields an all-empty Fields.
+TEST(ReportParse, MissingFieldsAreNullopt)
+{
+  const auto cbor = body([](QCBOREncodeContext&) {});
+  const auto f = parse_report_fields(cbor);
+  EXPECT_FALSE(f.title.has_value());
+  EXPECT_FALSE(f.fingerprint.has_value());
+  EXPECT_FALSE(f.references.has_value());
+  EXPECT_FALSE(f.patch_date.has_value());
+}
+
+// fingerprint is a native byte string, not hex text.
+TEST(ReportParse, FingerprintIsBytes)
+{
+  const std::vector<uint8_t> fp = {0x00, 0x01, 0x02, 0xff};
+  const auto cbor = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddBytesToMap(&ctx, "fingerprint", sdcwt::to_ubc(fp));
+  });
+  const auto f = parse_report_fields(cbor);
+  ASSERT_TRUE(f.fingerprint.has_value());
+  EXPECT_EQ(*f.fingerprint, fp);
+}
+
+// A wrong-typed field is rejected (title as int, not text).
+TEST(ReportParse, WrongFieldTypeThrows)
+{
+  const auto cbor = body([](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddInt64ToMap(&ctx, "title", 42);
+  });
+  EXPECT_THROW(parse_report_fields(cbor), std::invalid_argument);
+}
+
+// A non-map body is rejected.
+TEST(ReportParse, NonMapBodyThrows)
+{
+  const auto cbor = sdcwt::cbor_encode([](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddSZString(&ctx, "not a map");
+  });
+  EXPECT_THROW(parse_report_fields(cbor), std::invalid_argument);
+}
+
+// references with a non-string element is rejected.
+TEST(ReportParse, ReferencesMustBeStrings)
+{
+  const auto cbor = body([](QCBOREncodeContext& ctx) {
+    QCBOREncode_OpenArrayInMap(&ctx, "references");
+    QCBOREncode_AddInt64(&ctx, 7);
+    QCBOREncode_CloseArray(&ctx);
+  });
+  EXPECT_THROW(parse_report_fields(cbor), std::invalid_argument);
+}

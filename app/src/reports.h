@@ -34,35 +34,4 @@ namespace selectivedisclosure
   {
     return ccf::crypto::make_ec_key_pair(ccf::crypto::Pem(pem_bytes));
   }
-
-  // Decode a lowercase/uppercase hex string to bytes; std::nullopt if invalid.
-  inline std::optional<std::vector<uint8_t>> from_hex(const std::string& s)
-  {
-    if (s.size() % 2 != 0)
-    {
-      return std::nullopt;
-    }
-    const auto nibble = [](char c) -> int {
-      if (c >= '0' && c <= '9')
-        return c - '0';
-      if (c >= 'a' && c <= 'f')
-        return c - 'a' + 10;
-      if (c >= 'A' && c <= 'F')
-        return c - 'A' + 10;
-      return -1;
-    };
-    std::vector<uint8_t> out;
-    out.reserve(s.size() / 2);
-    for (size_t i = 0; i < s.size(); i += 2)
-    {
-      const int hi = nibble(s[i]);
-      const int lo = nibble(s[i + 1]);
-      if (hi < 0 || lo < 0)
-      {
-        return std::nullopt;
-      }
-      out.push_back(static_cast<uint8_t>((hi << 4) | lo));
-    }
-    return out;
-  }
 }

@@ -34,12 +34,19 @@ set(TOKEN_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/statement.cpp
 )
 
+# App-level pure logic (CBOR submission parsing, ...), unit-testable without CCF
+# KV/endpoints; shared by the enclave app and the host unit tests.
+set(APP_LOGIC_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/report_parse.cpp
+)
+
 # --- The CCF application ----------------------------------------------------
 add_ccf_app(
   selective_disclosure
   SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
        ${TOKEN_SRCS}
+       ${APP_LOGIC_SRCS}
   INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src
   LINK_LIBS qcbor
 )
@@ -58,7 +65,7 @@ if(BUILD_TESTS)
   enable_testing()
 
   file(GLOB UNIT_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit-tests/*.cpp)
-  add_executable(unit_tests ${UNIT_TEST_SOURCES} ${TOKEN_SRCS})
+  add_executable(unit_tests ${UNIT_TEST_SOURCES} ${TOKEN_SRCS} ${APP_LOGIC_SRCS})
   target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   # The ccfcrypto imported target only exposes its quickjs 3rdparty include; the
   # main CCF headers live under the install prefix, so add them explicitly.

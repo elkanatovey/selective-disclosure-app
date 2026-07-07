@@ -7,7 +7,6 @@ key. Proves the full on-chain pipeline (token core + endpoints + receipt) works
 on a live node, and that the harness reports green on known-good behaviour.
 """
 
-import json
 from hashlib import sha256
 
 import cbor2
@@ -74,16 +73,16 @@ def _verify_receipt(transparent: bytes, service_cert_pem: bytes) -> None:
 def test_submit_retrieve_verify(network):
     client = network.client()
 
-    # 1. Submit a report (current JSON body).
+    # 1. Submit a report as CBOR (native types; fingerprint is a byte string).
     report = {
         "title": "heap overflow in parser",
         "body": "crafted input overflows the token buffer",
         "component": "parser",
         "severity": "high",
-        "fingerprint": "deadbeef",
+        "fingerprint": b"\xde\xad\xbe\xef",
         "references": ["CVE-2025-9999"],
     }
-    resp = client.post("/reports", json.dumps(report).encode(), "application/json")
+    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
     assert resp.status == 200, resp.body
     txid = resp.json()["transaction_id"]
 
@@ -123,9 +122,7 @@ def test_receipt_rejects_wrong_digest(network):
     from cryptography.x509 import load_pem_x509_certificate
 
     client = network.client()
-    resp = client.post(
-        "/reports", json.dumps({"title": "x"}).encode(), "application/json"
-    )
+    resp = client.post("/reports", cbor2.dumps({"title": "x"}), "application/cbor")
     txid = resp.json()["transaction_id"]
     token = client.get_historical(f"/statements/{txid}").body
 
