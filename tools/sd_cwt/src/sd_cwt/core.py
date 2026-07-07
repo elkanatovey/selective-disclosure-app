@@ -102,6 +102,44 @@ class HashAlg(IntEnum):
 ClaimKey = Union[int, str]
 
 
+def _cde(obj: Any) -> Any:
+    """Return a copy of ``obj`` with every map's keys in CBOR Common
+    Deterministic Encoding order (RFC 8949 §4.2.1): entries sorted by the
+    bytewise-lexicographic order of their encoded key. Recurses into nested
+    maps and arrays; scalars, byte strings and tags are returned unchanged.
+
+    Applied to everything the Issuer/Holder *emits* (SD-CWT payload, KBT
+    payload, Salted Disclosed Claims) so this reference oracle is byte-identical
+    to the deterministic C++ token core.
+
+    Note: cbor2's own ``canonical=True`` uses length-first ordering (RFC 8949
+    §4.2.3), which differs from CDE when a map mixes multi-byte unsigned and
+    negative keys, so ordering is done explicitly here.
+    """
+    if isinstance(obj, dict):
+        return {
+            k: _cde(v)
+            for k, v in sorted(obj.items(), key=lambda kv: cbor2.dumps(kv[0]))
+        }
+    if isinstance(obj, list):
+        return [_cde(v) for v in obj]
+    return obj
+
+
+def _cde_header(phdr: dict) -> dict:
+    """Reorder a COSE protected-header dict into CDE key order. Header keys may
+    be raw integers or pycose header classes (which carry their label as
+    ``.identifier``); both are sorted by the encoded integer label. pycose
+    preserves a dict's insertion order when encoding, so the emitted protected
+    header is deterministic.
+    """
+
+    def label(key: Any) -> int:
+        return key if isinstance(key, int) else key.identifier
+
+    return dict(sorted(phdr.items(), key=lambda kv: cbor2.dumps(label(kv[0]))))
+
+
 @dataclass
 class Disclosure:
     """A Salted Disclosed Claim. `key` is None for redacted array elements."""
@@ -349,7 +387,7 @@ def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> 
             )
             if key in direct:
                 salt = csprng(SALT_LEN)
-                encoded = cbor2.dumps([salt, child, key])
+                encoded = cbor2.dumps(_cde([salt, child, key]))
                 dig = _disclosure_digest(sd_alg, encoded)
                 disclosures.append(
                     Disclosure(
@@ -374,7 +412,7 @@ def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> 
             )
             if i in direct:
                 salt = csprng(SALT_LEN)
-                encoded = cbor2.dumps([salt, child])
+                encoded = cbor2.dumps(_cde([salt, child]))
                 dig = _disclosure_digest(sd_alg, encoded)
                 disclosures.append(
                     Disclosure(
@@ -452,7 +490,9 @@ def issue(
     if protected_extra:
         phdr.update(protected_extra)
 
-    msg = Sign1Message(phdr=phdr, uhdr={}, payload=cbor2.dumps(payload))
+    msg = Sign1Message(
+        phdr=_cde_header(phdr), uhdr={}, payload=cbor2.dumps(_cde(payload))
+    )
     msg.key = signer
     return msg.encode(), disclosures
 
@@ -693,7 +733,9 @@ def kbt_sign(
     if cnonce is not None:
         payload[CNONCE] = cnonce
 
-    msg = Sign1Message(phdr=phdr, uhdr={}, payload=cbor2.dumps(payload))
+    msg = Sign1Message(
+        phdr=_cde_header(phdr), uhdr={}, payload=cbor2.dumps(_cde(payload))
+    )
     msg.key = holder
     return msg.encode()
 

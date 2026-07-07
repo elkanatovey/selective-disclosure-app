@@ -159,9 +159,15 @@ out-of-band trust anchors; salts high-entropy.
 - **CCF receipt** — service-signed inclusion proof binding the **claims digest**;
   offline-verifiable with the service cert.
 - **SHA-256** + **CBOR**.
-- Present in the built CCF (call directly): COSE sign/verify, `ccf::cose::edit::
-  set_unprotected_header`, receipt APIs (`describe_merkle_proof_v1`,
-  `describe_cose_signature_v1`, `build_receipt_for_committed_tx`), SHA-256.
+- Present in the built CCF (call directly): COSE **verify**
+  (`ccf::crypto::cose_verifier`), `ccf::cose::edit::set_unprotected_header`,
+  receipt APIs (`describe_merkle_proof_v1`, `describe_cose_signature_v1`,
+  `build_receipt_for_committed_tx`), SHA-256 (`ccf::crypto::sha256`), EC signing
+  (`ccf::crypto::ECKeyPair::sign_hash`), CSPRNG (`ccf::crypto::get_entropy()`).
+- **COSE_Sign1 _creation_ is NOT exposed by CCF** (public `cose.h` only edits
+  headers; SCITT signs client-side in Python). Under Model A we hand-assemble the
+  `COSE_Sign1` with QCBOR and sign the `Sig_structure` via `ccf::crypto` — no
+  `t_cose` dependency.
 - **CBOR encode/decode is NOT exposed by CCF** for general use — we vendor
   **QCBOR** via CMake `FetchContent` (as SCITT does) to build/parse token bytes.
 - CCF-source modification is **last resort**.
@@ -274,18 +280,39 @@ are chain logic that *consumes* those tokens.
 0. **Define the statement schema** ✔ (todo: define-report-fields) — unified
    report/note fields, clear vs SD per field, redacted-always-present
    `parent`, strict uniformity. **Done** (§1; `sd_cwt.statement`).
-1. **Off-chain: build + sign a plain CWT** — schema-valid CBOR claims set wrapped
-   in COSE_Sign1; verify round-trip. Standalone lib + CLI + unit tests, no chain.
-   (Nails the QCBOR + COSE + signing pipeline.)
-2. **Off-chain: SD-CWT redaction** — add salts / disclosures / Redacted Claim
-   Hashes; round-trip: build → redact → disclose subset → verify. Still no chain.
-3. **On-chain: submit + receipt** — `submit_report` consumes a token: sanity
-   check, store the blob, bind claims digest, return **seqno + receipt**.
-   (Receipt/seqno are chain logic layered on top of steps 1–2.)
+1. **Off-chain token layer (Python) ✔ DONE** — `sd_cwt` + `sd_cwt.statement`
+   already build / sign / redact / present / verify / validate schema-valid
+   tokens off-chain (73 tests). Under **Model A** this Python layer is the
+   **reference/conformance oracle** and the **researcher-side verifier**, not
+   the in-enclave signer.
+2. **C++ token core (port of build+sign+redaction) — host build, no chain.**
+   Reimplement the authoritative construction in C++ so the **service (TEE)** can
+   sign in-enclave: build the CBOR claims set, garbage-pad to strict uniformity,
+   CSPRNG salts, `sd_alg` redaction (`redacted_claim_keys`), and hand-assemble a
+   `COSE_Sign1` **signed via `ccf::crypto`** (no `t_cose`: encode the
+   `Sig_structure` with QCBOR, hash, `ECKeyPair::sign_hash`, assemble the
+   array). **Algorithm-agile** like the Python lib: the COSE signing algorithm
+   (ES256/384/512) is derived from the key's curve and the redaction hash
+   (SHA-256/384/512, default SHA-256) is a parameter written to `sd_alg`. Maps
+   are emitted in **deterministic (CDE, RFC 8949 §4.2.1 bytewise) key order** on
+   **both** sides — the Python reference canonicalises its emitted CBOR to match
+   (see §13). Deterministic encoding is not an SD-CWT wire-format MUST (only
+   definite-length is, draft-08 §5.1); it is the spec's recommended **privacy
+   profiling** choice (§15.2/§16.7) that closes the issuer covert channel from
+   map-key ordering — relevant here because the TEE is the issuer. Built
+   as a standalone host/virtual test target (no enclave, no chain)
+   and gated by **cross-impl conformance** against the Python oracle: Python
+   `validate`s C++ tokens (both ES256/SHA-256 and ES384/SHA-384 suites), and
+   with **injected fixed salts** the C++ **protected header and payload** are
+   **byte-identical** to Python `issue()` (the ECDSA signature is randomised, so
+   it is validated, not byte-compared). (Vendor **QCBOR** via `FetchContent`.)
+3. **On-chain: submit + receipt** — `submit_report` constructs+signs via the
+   C++ token core, stores the redacted blob, binds the **claims digest**, returns
+   **seqno + receipt**. (Receipt/seqno are chain logic layered on top of 1–2.)
 4. **Follow-ups & linkage** — `append_follow_up`, redacted `parent`,
    `NotesIndex`, seqno ordering.
-5. **Disclosure & duplicate proof** — offline `make_disclosure` + `verify`;
-   end-to-end demo.
+5. **Disclosure & duplicate proof** — Operator `make_disclosure` + researcher
+   `verify`; end-to-end demo.
 6. **(optional) hardening** — `store_unredacted` OFF (Operator self-custody) or
    encrypt-to-Operator, redact linkage, config-pinned issuer authorization,
    anti-spam controls, KBT for external subjects (**already implemented in the
@@ -338,6 +365,37 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   construction is (re)implemented **in the C++ enclave**; the Python library is
   the **reference oracle** for that C++ code and the **researcher-side offline
   verifier** (see §13).
+- **C++ token core** (`app/src/token/`: `cbor_value`, `cose`, `sd_cwt`,
+  `statement`) — the in-enclave authoritative construction. Hand-assembles a
+  `COSE_Sign1` with QCBOR and signs the `Sig_structure` via `ccf::crypto` (no
+  `t_cose`). Built as a host `unit_tests` target (`BUILD_TESTS=ON`, no
+  enclave/chain) and gated by conformance against the Python oracle
+  (`tools/sd_cwt/tests/test_cpp_conformance.py`): a pinned Redacted-Claim-Hash
+  vector, Python `validate`ing C++ tokens (signature + disclosures), a
+  byte-identical payload check, cross-validation of array-element (tag 60) and
+  deep-nested + ancestor-disclosure redaction, a byte-identical decoy-padding
+  check, a `cnf` key-binding check (Python recovers the embedded holder key), and
+  a full KBT check (Python `kbt_verify` accepts a C++-signed Key Binding Token).
+  Supports **map, nested-map and array-element (tag 60) redaction**
+  at arbitrary depth via `redact_paths` (the ancestor-disclosure rule), matching
+  the Python reference — so layered disclosures are available (the statement
+  schema still redacts `references` whole for strict uniformity, but the core can
+  redact individual elements when a policy needs it). **Decoy padding**
+  (`issue(..., pad_to=N)`) is ported too — pads the top-level Redacted-Claim-Hash
+  count to N with indistinguishable salt-only decoys, byte-identical to the
+  Python reference under fixed salts (conformance-pinned). **Key binding**: the
+  issuer can bind a token to a holder key by embedding the RFC 8747 confirmation
+  claim (`issue(..., holder=pub)` → clear `8: {1: COSE_Key}`), so the enclave
+  issues fully standards-compliant, key-binding-capable SD-CWTs; a conformance
+  test recovers the `cnf` key in Python and checks its coordinates + fixed-length
+  encoding. **Presentation + Key Binding Token signing** are also ported:
+  `present()` attaches selected disclosures to the SD-CWT unprotected header
+  (`sd_claims`, 17) without re-signing, and `kbt_sign()` wraps the presented
+  SD-CWT in the KBT `kcwt` (13) protected header and signs it (typ
+  application/kb+cwt) with the holder key — a conformance test has the Python
+  reference `kbt_verify` accept a C++-signed KBT end-to-end (issuer signature,
+  `cnf` proof-of-possession, audience/cnonce, selective disclosure). Only
+  `kbt_verify` stays Python: it is the *verifier's* check, off-chain by design.
 - `make_disclosure` / `verify` off-chain tooling.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
@@ -382,6 +440,15 @@ unified report/note schema (§1) + strict-uniformity / `parent` rules live in th
   nesting depth ≤16 (s5.5); plus duplicate disclosed-key rejection and both the
   KBT and SD-CWT audience checks (s9).
 - **CSPRNG for all crypto randomness** (salts, decoys) via `secrets`.
+- **Deterministic (CDE) emission:** everything the issuer/holder emits — the
+  SD-CWT and KBT protected headers and payloads, and every Salted Disclosed
+  Claim — is canonicalised to **RFC 8949 §4.2.1 bytewise** map-key order (`_cde`
+  / `_cde_header`), so the reference is **byte-identical** to the C++ token core
+  (headers included), and the issuer covert channel from key ordering (§15.2/
+  §16.7) is closed. This is a **privacy profile** choice, not a wire-format MUST
+  (only definite-length is). Note: cbor2's own `canonical=True` uses length-first
+  ordering (§4.2.3), which diverges from CDE for maps mixing multi-byte unsigned
+  and negative keys, so ordering is done explicitly.
 
 **Deliberately omitted:** temporal *validity* comparison (`exp`/`nbf`/`iat`
 against a clock — the ledger receipt/seqno covers ordering; only the s5.2
