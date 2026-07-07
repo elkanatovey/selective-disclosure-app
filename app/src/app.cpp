@@ -7,11 +7,13 @@
 #include "ccf/crypto/cose.h"
 #include "ccf/historical_queries_adapter.h"
 #include "ccf/http_consts.h"
+#include "ccf/indexing/strategies/seqnos_by_key_bucketed.h"
 #include "ccf/json_handler.h"
 #include "ccf/receipt.h"
 #include "ccf/tx_status.h"
 #include "report_parse.h"
 #include "reports.h"
+#include "token/cbor.h"
 
 #include <ctime>
 #include <nlohmann/json.hpp>
@@ -56,6 +58,12 @@ namespace selectivedisclosure
         "Confidential, append-only bug-report transparency ledger built on "
         "SD-CWT: reports are registered as redacted, service-signed tokens.";
       openapi_info.document_version = "0.0.1";
+
+      // Index the seqnos at which the issuer public key was (re)registered, so
+      // GET /signing-key can fetch the registration transaction's receipt.
+      signing_key_index = std::make_shared<SigningKeyIndex>(
+        SIGNING_KEY_HISTORY, context, 10000, 20);
+      context.get_indexing_strategies().install_strategy(signing_key_index);
     }
 
     void init_handlers() override
@@ -193,26 +201,78 @@ namespace selectivedisclosure
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Always)
         .install();
 
-      // --- signing key: the issuer public key (trust anchor). ----------------
-      auto get_signing_key = [](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
-        auto* handle =
-          ctx.tx.template ro<SigningKeyHistory>(SIGNING_KEY_HISTORY);
-        const auto stored = handle->get();
-        if (!stored.has_value())
+      // --- signing key: the issuer public key PLUS its on-ledger endorsement
+      // (the registration transaction's receipt, whose claims digest is
+      // hash(pubkey)). A verifier checks the receipt against the service
+      // identity, then trusts statements signed by this key without their own
+      // receipts (DESIGN §4). Returns CBOR { "key": pem, "receipt": cose }.
+      // ----
+      auto get_signing_key = [](
+                               ccf::endpoints::ReadOnlyEndpointContext& ctx,
+                               ccf::historical::StatePtr state) {
+        auto htx = state->store->create_read_only_tx();
+        auto* handle = htx.template ro<SigningKeyHistory>(SIGNING_KEY_HISTORY);
+        const auto pubkey = handle->get();
+        if (!pubkey.has_value())
         {
           ctx.rpc_ctx->set_error(
             HTTP_STATUS_NOT_FOUND,
             ccf::errors::ResourceNotFound,
-            "Issuer key not initialised; POST /signing-key first.");
+            "No issuer key at the registration seqno.");
           return;
         }
+        const auto receipt = make_cose_receipt(state->receipt);
+        const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
+          QCBOREncode_OpenMap(&c);
+          QCBOREncode_AddBytesToMap(&c, "key", sdcwt::to_ubc(*pubkey));
+          QCBOREncode_AddBytesToMap(&c, "receipt", sdcwt::to_ubc(receipt));
+          QCBOREncode_CloseMap(&c);
+        });
         ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
         ctx.rpc_ctx->set_response_header(
-          ccf::http::headers::CONTENT_TYPE, "application/x-pem-file");
-        ctx.rpc_ctx->set_response_body(stored.value());
+          ccf::http::headers::CONTENT_TYPE,
+          ccf::http::headervalues::contenttype::CBOR);
+        ctx.rpc_ctx->set_response_body(body);
       };
+
+      auto key_is_committed =
+        [this](ccf::View view, ccf::SeqNo seqno, std::string& reason) {
+          return ccf::historical::is_tx_committed_v2(
+            consensus, view, seqno, reason);
+        };
+      // Resolve the txid of the LATEST issuer-key registration from the index.
+      auto key_txid = [this](ccf::endpoints::ReadOnlyEndpointContext&)
+        -> std::optional<ccf::TxID> {
+        const auto watermark = signing_key_index->get_indexed_watermark();
+        if (watermark.seqno == 0)
+        {
+          return std::nullopt; // not indexed yet
+        }
+        const auto seqnos =
+          signing_key_index->get_write_txs_in_range(1, watermark.seqno);
+        if (!seqnos.has_value() || seqnos->empty())
+        {
+          return std::nullopt;
+        }
+        ccf::SeqNo reg_seqno = 0; // set is ascending; last is the most recent
+        for (const auto s : *seqnos)
+        {
+          reg_seqno = s;
+        }
+        ccf::View view = 0;
+        if (get_view_for_seqno_v1(reg_seqno, view) != ccf::ApiResult::OK)
+        {
+          return std::nullopt;
+        }
+        return ccf::TxID{view, reg_seqno};
+      };
+
       make_read_only_endpoint(
-        "/signing-key", HTTP_GET, get_signing_key, {ccf::empty_auth_policy})
+        "/signing-key",
+        HTTP_GET,
+        ccf::historical::read_only_adapter_v4(
+          get_signing_key, context, key_is_committed, key_txid),
+        {ccf::empty_auth_policy})
         .install();
 
       // --- get_statement: retrieve a registered statement + its receipt by
@@ -278,6 +338,11 @@ namespace selectivedisclosure
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
     }
+
+  private:
+    using SigningKeyIndex =
+      ccf::indexing::strategies::SeqnosForValue_Bucketed<SigningKeyHistory>;
+    std::shared_ptr<SigningKeyIndex> signing_key_index;
   };
 }
 

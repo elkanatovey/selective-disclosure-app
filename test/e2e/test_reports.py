@@ -70,6 +70,27 @@ def _verify_receipt(transparent: bytes, service_cert_pem: bytes) -> None:
     ccf.cose.verify_receipt(receipts[0], service_key, claim_digest)
 
 
+def _service_key(service_cert_pem: bytes):
+    from cryptography.x509 import load_pem_x509_certificate
+
+    return load_pem_x509_certificate(service_cert_pem).public_key()
+
+
+def _verify_endorsed_key(resp_body: bytes, service_cert_pem: bytes) -> bytes:
+    """Parse GET /signing-key ({key, receipt} CBOR); verify the receipt endorses
+    the key (claims digest = hash(pubkey)) against the service identity; return
+    the key PEM. This is what lets a verifier trust the issuer key — and thus a
+    statement's own signature — without the statement's receipt."""
+    import ccf.cose
+
+    obj = cbor2.loads(resp_body)
+    key_pem, receipt = obj["key"], obj["receipt"]
+    ccf.cose.verify_receipt(
+        receipt, _service_key(service_cert_pem), sha256(key_pem).digest()
+    )
+    return key_pem
+
+
 def test_submit_retrieve_verify(network):
     client = network.client()
 
@@ -86,10 +107,14 @@ def test_submit_retrieve_verify(network):
     assert resp.status == 200, resp.body
     txid = resp.json()["transaction_id"]
 
-    # 2. Fetch the issuer key (now initialised) and build a verification key.
-    key_resp = client.get("/signing-key")
+    # 2. Fetch the issuer key AND verify its on-ledger endorsement against the
+    #    service identity, then build a verification key from the endorsed PEM.
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key_resp = client.get_historical("/signing-key")
     assert key_resp.status == 200, key_resp.body
-    key = _ec2_key_from_pem(key_resp.body)
+    key_pem = _verify_endorsed_key(key_resp.body, service_cert)
+    key = _ec2_key_from_pem(key_pem)
 
     # 3. Retrieve the transparent statement (historical query; retries on 202).
     stmt_resp = client.get_historical(f"/statements/{txid}")
@@ -134,3 +159,26 @@ def test_receipt_rejects_wrong_digest(network):
     _verify_receipt(token, open(network.service_cert, "rb").read())
     with pytest.raises(Exception):
         ccf.cose.verify_receipt(receipts[0], key, b"\x00" * 32)
+
+
+def test_signing_key_is_endorsed(network):
+    """GET /signing-key returns the issuer key + its on-ledger endorsement; the
+    endorsement receipt verifies against the service identity (claims digest =
+    hash(pubkey)), and a wrong-key digest is rejected (real, not a no-op)."""
+    import ccf.cose
+
+    client = network.client()
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+
+    resp = client.get_historical("/signing-key")
+    assert resp.status == 200, resp.body
+    key_pem = _verify_endorsed_key(resp.body, service_cert)  # positive
+    assert b"BEGIN PUBLIC KEY" in key_pem
+
+    # Negative: the endorsement must not verify for a different key.
+    receipt = cbor2.loads(resp.body)["receipt"]
+    with pytest.raises(Exception):
+        ccf.cose.verify_receipt(
+            receipt, _service_key(service_cert), sha256(b"not-the-key").digest()
+        )
