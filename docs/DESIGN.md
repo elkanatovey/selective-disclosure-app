@@ -115,10 +115,23 @@ The service is a **notary + signer**, not an identity authority.
   expose the service identity private key to app code (it signs receipts
   internally), so the app holds **its own EC P-256 issuer key** in a private
   (encrypted, replicated) KV table, lazily generated on first use so any primary
-  can sign; its public key is published (`GET /signing-key`) as the issuer trust
-  anchor. Two independent, service-rooted anchors result: the **statement**
+  can sign. Two independent, service-rooted anchors result: the **statement**
   signature (app key, binds the Redacted Claim Hashes) and the **receipt** (CCF
   service identity, proves inclusion + seqno).
+- **The issuer key is service-identity-endorsed via the ledger.** On generation
+  the issuer **public** key is written to a public KV history table; that
+  registration transaction gets a **receipt** signed by the CCF service identity,
+  which *is* the endorsement (same trust root as statement receipts — no bespoke
+  cert-signing needed, which the app couldn't do anyway). `GET /signing-key`
+  returns the public key **plus its endorsement (receipt)**, so a verifier trusts
+  the issuer key by checking it against the **service identity**, not by trusting
+  the endpoint. This makes the app key follow the service-key trust logic.
+- **Key rotation follows the service-key pattern.** Rotating the issuer key is a
+  governance-audited action that **registers a new public key** (new receipt) and
+  **retains the old ones** in the history table, so statements signed under a
+  previous key stay verifiable against their (still-endorsed) key — mirroring
+  CCF's service-identity endorsement chain, and inheriting service-identity
+  rotation across recovery for free (the receipts do). (See §12.)
 - **No key enrollment.** Submitter identity is not a CCF user set; the receipt
   proves "this statement existed at seqno T", signed by the service.
 - **Verification is receipt-anchored** (`validate_trusted`): a verifier trusts
@@ -200,11 +213,18 @@ COSE_Sign1 (service-signed, TEE):
 ```
 
 ## 8. Data model (KV tables)
-| Table | Visibility | Key → Value |
+Statements/disclosures are written as **per-transaction `Value`s** and read back
+by **historical query** at the txid's seqno (not a map keyed by id); a **seqno
+index** enables the Operator stream. Concrete names in `app/src/reports.h`.
+
+| Table | Visibility | Contents |
 |---|---|---|
-| `ReportsTable` | public | id → **redacted SD-CWT** bytes (blob write, à la SCITT `EntryTable`) |
-| `NotesIndex` | public | report id → [follow-up seqnos] |
-| `ConfidentialTable` | private (encrypted) | id → the report's **full list of per-field/per-element disclosures** (each `[salt,value,key]` or `[salt,value]`, annotated with its **path**) — **feature-flagged, default ON** |
+| `StatementTable` (`public:sd.statement`) | public | the redacted SD-CWT bytes (per-tx `Value`) |
+| `DisclosureTable` | private (encrypted) | the statement's disclosures (`[salt,value,key]` bytes) — the **confidential store**; **write-only** from submit, **read-only** from Operator egress; feature-flagged (`store_unredacted`, default ON) |
+| `SigningKeyTable` (`sd.signing_key`) | private (encrypted) | the issuer **private** key (PEM) |
+| `SigningKeyHistory` | public | issuer **public** key registration(s) — endorsed by their receipts (§4); supports rotation (append new, keep old) |
+| `NotesIndex` | public | parent statement → [follow-up seqnos] |
+| statement **seqno index** | public | for `get_statements_since` (SCITT-style `SeqnosForValue`) |
 
 - **Signing:** the **service (TEE)** constructs and signs the SD-CWT (trust roots
   in attestation); researchers submit raw content over an authenticated channel.
@@ -249,33 +269,44 @@ COSE_Sign1 (service-signed, TEE):
   precedence **by seqno**.
 
 ## 9. Endpoints & off-chain tooling
-**Implemented so far (Phase 2, app-managed signing key):**
-- `POST /reports` — open submission of raw JSON content; the service builds +
-  signs the strict-uniformity SD-CWT, stores the redacted token, binds the
-  claims digest, and returns the **transaction id** on commit.
-- `GET /statements/{txid}` — public read: the redacted statement with its CCF
-  receipt embedded in the unprotected header (transparent statement).
-- `GET /signing-key` — the app issuer public key (trust anchor).
-- *Not yet built:* the confidential store, `append_follow_up`, the Operator-only
-  confidential-egress endpoints, and `make_disclosure` (below).
+Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
+**pending** = format/endpoint changes agreed but not yet coded.
 
-**Service endpoints (target design):**
-- `submit_report` (reporter, direct): store redacted token (public) + the report's
-  disclosures (confidential), set claims digest → **return seqno + receipt to the
-  reporter** (their proof-of-registration and precedence anchor).
-- `append_follow_up` (Operator): store redacted follow-up (`parent` set),
-  set claims digest → return receipt; index under parent.
-- `get_statements_since(cursor_seqno, limit)` (**Operator only**): the unredacted
-  stream — **all** statements (original reports **and** follow-ups) registered
-  after `cursor_seqno`, in seqno order, each with its receipt. The Operator keeps
-  its own cursor (high-water seqno) and advances it; service-side stateless,
-  idempotent to replay. Reuses CCF seqno-indexed historical queries.
-- `get_statement(id)` (**Operator only**): pull a single unredacted statement +
-  receipt by id.
-- `make_disclosure(id, target_paths)` (**Operator only**): assemble
-  `{ redacted token, receipt, disclosures for target_paths + their ancestors }`
-  from the confidential store, for the Operator to hand a researcher. *(Reverts to
-  offline Operator-side tooling when `store_unredacted` is OFF — self-custody.)*
+**Public (no auth):**
+- `POST /reports` — **CBOR** body: a content-fields map (`title`/`body`/
+  `component`/`severity`/`fingerprint`(bstr)/`references`/`patch`/`patch_date`;
+  named keys, native types, **no `parent`**). Builds + signs the strict-uniformity
+  SD-CWT, stores the redacted token **and its disclosures** (confidential store),
+  binds the claims digest, returns the **transaction id** on commit. *(Live, but
+  body is pending JSON→CBOR.)*
+- `GET /statements/{txid}` — the redacted statement with its CCF receipt embedded
+  (transparent statement, `application/cose`). *(Live.)*
+- `GET /signing-key` — the issuer public key **plus its endorsement** (the receipt
+  of its on-ledger registration), so verifiers validate it against the service
+  identity (§4). *(Live, but pending bare-PEM→endorsed.)*
+
+**Operator-gated** (caller is the Operator **CCF user**, `user_cert_auth`; the
+Operator user is added by governance — §12.2):
+- `POST /reports/{parent_txid}/follow-ups` — CBOR content body (same shape as
+  `/reports`). Child statement; **`parent` = SHA-256 of `{parent_txid}`'s token**,
+  server-derived and salted+redacted like any field; indexed under parent;
+  returns transaction id + receipt. *(Pending.)*
+- `GET /operator/statements/{txid}` — a single **unredacted** transparent
+  statement (all disclosures present + receipt). *(Pending.)*
+- `GET /operator/statements?since={seqno}&limit={n}` — the unredacted stream:
+  **all** statements (reports **and** follow-ups) committed after `since`, in
+  seqno order, each with its receipt; response carries a **next cursor / latest
+  seqno**. Operator holds its own high-water cursor; stateless + replay-idempotent.
+  Reuses CCF seqno-indexed historical queries. *(Pending.)*
+- `POST /operator/statements/{txid}/disclosure` — body `{fields:[names]}`; returns
+  a single **presented + transparent** COSE artifact (targeted disclosures
+  attached, receipt embedded) for the Operator to hand a researcher.
+  `make_disclosure`. *(Reverts to offline Operator-side tooling if
+  `store_unredacted` is OFF — self-custody.) (Pending.)*
+
+**Trust/ordering note:** precedence and duplicate ordering use the **seqno**
+(receipt-anchored, trusted). The `iat` clear claim is untrusted host wall-clock —
+a convenience timestamp only, never a precedence anchor.
 
 **Confidential-egress authorization:** `get_statements_since`, `get_statement`,
 and `make_disclosure` return confidential plaintext and MUST be gated to the
@@ -381,6 +412,13 @@ on-ledger, auditable):
   A/B decision below.
 - *(Optional)* a **schema-version pin** if we ever want the current version to be
   runtime-configurable rather than purely code-bound.
+
+**Issuer-key rotation** (control-plane, §4): the app issuer key is registered
+on-ledger (public key in a history table, endorsed by its registration receipt).
+Rotation is a governance-audited action that appends a **new** registered key and
+**keeps the old ones**, so statements under a prior key stay verifiable — the
+app-key analogue of CCF's service-identity endorsement chain. Recovery is handled
+by CCF for the receipt side; the issuer key is KV data that survives recovery.
 
 ### 12.1 Schema / statement versioning
 A verifier must know *which schema* a statement used in order to interpret its
