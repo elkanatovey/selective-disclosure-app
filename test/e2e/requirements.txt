@@ -1,0 +1,13 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# Dependencies for the report-ledger e2e tests. Run them from a venv that also
+# has the in-repo `sd_cwt` package installed (it pulls in cbor2 + pycose), e.g.:
+#
+#   tools/sd_cwt/.venv/bin/pip install -r test/e2e/requirements.txt
+#   tools/sd_cwt/.venv/bin/python -m pytest test/e2e -v
+#
+# The node itself is launched via the CCF sandbox (.ccf-install/bin/sandbox.sh),
+# which manages its own .venv_ccf_sandbox — separate from this one.
+requests
+pytest
