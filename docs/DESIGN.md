@@ -314,7 +314,7 @@ are chain logic that *consumes* those tokens.
    (SHA-256/384/512, default SHA-256) is a parameter written to `sd_alg`. Maps
    are emitted in **deterministic (CDE, RFC 8949 §4.2.1 bytewise) key order** on
    **both** sides — the Python reference canonicalises its emitted CBOR to match
-   (see §13). Deterministic encoding is not an SD-CWT wire-format MUST (only
+   (see §14). Deterministic encoding is not an SD-CWT wire-format MUST (only
    definite-length is, draft-08 §5.1); it is the spec's recommended **privacy
    profiling** choice (§15.2/§16.7) that closes the issuer covert channel from
    map-key ordering — relevant here because the TEE is the issuer. Built
@@ -349,7 +349,71 @@ are chain logic that *consumes* those tokens.
   service holds plaintext in an encrypted private table.
 - Each layer is standard; only the embedded *combination* is non-standard.
 
-## 12. Implementation: reuse map & layering
+## 12. Governance & versioning
+Even with a **single entity** operating the ledger, governance is not optional —
+CCF always runs under a **constitution + ≥1 member**, and the point of a
+transparency service is that *rule changes are themselves recorded on the
+append-only ledger*, so the operator cannot silently change behaviour. We split
+governance into two planes and deliberately keep only one of them:
+
+- **Data-plane governance (NOT used).** SCITT-style *who-may-submit* control —
+  accepted issuers, trust anchors, a registration **policy engine**. Our
+  notary / Model-A stance (open submission, **service is the sole signer**, §4)
+  removes the need for this entirely. We do **not** reuse SCITT's registration
+  policy / governance endpoints (§13).
+- **Control-plane governance (used).** *Changing the rules*: app/code upgrades,
+  schema/format changes, config (incl. the Operator identity), signing-key
+  rotation, and service lifecycle / recovery. This is mostly **CCF's built-in
+  governance**; we add only a small amount of custom config.
+
+**What CCF's built-in governance already covers** (member proposals, recorded
+on-ledger, auditable):
+- **Open service**, add/remove members & users, disaster **recovery**.
+- **Code upgrade** — a new app binary is a new **code measurement**; nodes
+  running it are trusted only once governance accepts that measurement. Because
+  our **schema is compile-time** (`statement.h`: field IDs 1000–1008,
+  `CONTENT_FIELD_COUNT`, default `sd_alg`), **a schema change *is* a code
+  upgrade** and inherits this audited path.
+- Node certs, JWT issuers, and other CCF-native config.
+
+**Custom governance-set config we add** (small KV surface, member-writable):
+- **Operator identity** for the confidential-egress endpoints (§4/§9). See the
+  A/B decision below.
+- *(Optional)* a **schema-version pin** if we ever want the current version to be
+  runtime-configurable rather than purely code-bound.
+
+### 12.1 Schema / statement versioning
+A verifier must know *which schema* a statement used in order to interpret its
+fields, and that binding must survive receipts and format changes. Approach:
+- **Explicit version claim.** Every statement carries a **clear** schema/profile
+  version (a fixed CWT-style claim, present in *all* statements). It is a *clear*
+  claim, so it does **not** affect the redacted-uniformity invariant (uniformity
+  is over the redacted content fields, §1). Self-describing and cheap.
+- **Authoritative binding = code measurement.** The version claim is a
+  convenience label; the *authoritative* statement of "what schema/behaviour
+  produced this" is the app **code measurement**, which is governance-audited and
+  on-ledger. A verifier can map measurement → schema version if it wants to
+  distrust a self-asserted label.
+- **Migration is forward-only.** The ledger is append-only: statements keep the
+  version they were signed under. A schema upgrade (governance-accepted new
+  measurement) affects **new** statements only; verifiers must retain the ability
+  to validate historical versions.
+
+### 12.2 Open decision — Operator identity mechanism
+The egress gate (§4/§9) is the one authorization we must pin. Two options:
+- **A. Config-pinned** — Operator cert set in node/app config at deploy; the app
+  checks the caller against it. Simplest, zero governance surface, but rotation =
+  reconfigure/redeploy (and is **not** independently recorded as a governance
+  action).
+- **B. Governance-set** — a governance proposal writes the Operator cert into a
+  KV table; a custom auth policy reads it. Rotatable, member-approved, and
+  **auditable on-ledger** — consistent with the control-plane philosophy above.
+- **Lean:** start with **A** to unblock the egress endpoints (single-operator
+  dev), but **B is the principled target** — a security-critical authorization
+  change *should* be an auditable governance action, not a silent config edit.
+  The switch is localized (only where the auth policy reads the Operator cert).
+
+## 13. Implementation: reuse map & layering
 **Two layers, built in order:**
 1. **Off-chain token layer (build first):** create + sign + redact + verify the
    COSE_Sign1 / SD-CWT tokens. Pure client-side crypto (CBOR + COSE + SHA-256),
@@ -382,7 +446,7 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
   Since the **service is the sole signer (Model A)**, authoritative statement
   construction is (re)implemented **in the C++ enclave**; the Python library is
   the **reference oracle** for that C++ code and the **researcher-side offline
-  verifier** (see §13).
+  verifier** (see §14).
 - **C++ token core** (`app/src/token/`: `cbor_value`, `cose`, `sd_cwt`,
   `statement`) — the in-enclave authoritative construction. Hand-assembles a
   `COSE_Sign1` with QCBOR and signs the `Sig_structure` via `ccf::crypto` (no
@@ -418,7 +482,7 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
 
-## 13. Off-chain token tooling: `sd_cwt` (Python)
+## 14. Off-chain token tooling: `sd_cwt` (Python)
 **Decision (Model A — service signs):** every statement is **constructed and
 signed by the service (TEE) in C++**, not by the submitter; researchers submit
 **raw content**. The Python token tooling (issue/sign/redact/present/verify/
