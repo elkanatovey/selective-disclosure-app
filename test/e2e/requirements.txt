@@ -1,13 +1,27 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Dependencies for the report-ledger e2e tests. Run them from a venv that also
-# has the in-repo `sd_cwt` package installed (it pulls in cbor2 + pycose), e.g.:
+# The report-ledger e2e tests need, in one interpreter:
+#   - requests            HTTP client
+#   - cbor2, pycose       CBOR/COSE + sd_cwt statement verification
+#   - sd_cwt (in-repo)    reference statement verifier
+#   - ccf                 CCF receipt verification (ccf.cose.verify_receipt)
 #
-#   tools/sd_cwt/.venv/bin/pip install -r test/e2e/requirements.txt
-#   tools/sd_cwt/.venv/bin/python -m pytest test/e2e -v
+# Dependency note: sd_cwt pins cbor2<5.6 (pycose 1.1.0 breaks on cbor2>=5.6),
+# while ccf's metadata asks for cbor2>=5.6. In practice ccf.cose.verify_receipt
+# works with cbor2 5.5.1, so both coexist; pip prints a compatibility warning
+# that is safe to ignore. (If pycose ever supports cbor2>=5.6, drop the pin.)
 #
-# The node itself is launched via the CCF sandbox (.ccf-install/bin/sandbox.sh),
-# which manages its own .venv_ccf_sandbox — separate from this one.
+# The simplest venv is the CCF sandbox's own (.venv_ccf_sandbox already has ccf +
+# requests), augmented with our verifier:
+#
+#   .venv_ccf_sandbox/bin/pip install pycose "cbor2<5.6" -e tools/sd_cwt
+#   .venv_ccf_sandbox/bin/python -m pytest test/e2e -v
+#
+# The node itself is launched by the CCF sandbox (.ccf-install/bin/sandbox.sh),
+# which manages that same venv.
 requests
+pycose
+cbor2<5.6
+ccf
 pytest

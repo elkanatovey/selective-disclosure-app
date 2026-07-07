@@ -63,13 +63,15 @@ class LedgerClient:
     def get(self, path: str) -> Response:
         return self._request("GET", path)
 
-    def get_historical(self, path: str, timeout_s: float = 15.0) -> Response:
-        """GET an endpoint that may return 202 (Accepted) while CCF fetches the
-        historical state; retry until it resolves or the timeout elapses."""
+    def get_historical(self, path: str, timeout_s: float = 20.0) -> Response:
+        """GET an endpoint backed by a CCF historical query, retrying while the
+        ledger entry is still being fetched. CCF signals "not ready yet" with a
+        202 (Accepted) or a 503 (TransactionNotCached); retry until it resolves
+        or the timeout elapses."""
         deadline = time.time() + timeout_s
         while True:
             resp = self.get(path)
-            if resp.status != 202:
+            if resp.status not in (202, 503):
                 return resp
             if time.time() >= deadline:
                 return resp

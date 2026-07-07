@@ -52,21 +52,21 @@ class Network:
         return LedgerClient(self.base_url, self.service_cert, client_cert)
 
 
-def _wait_for_open(log_path: Path) -> str:
-    """Poll the sandbox log until the network is open; return the node URL."""
+def _wait_for_node_url(log_path: Path) -> str:
+    """Poll the sandbox log until the node advertises its URL; return it. The
+    authoritative readiness gate is an endpoint poll (see the fixture); this only
+    discovers the address the sandbox chose."""
     deadline = time.time() + STARTUP_TIMEOUT_S
     node_re = re.compile(r"Node \[0\] = (https://\S+)")
     while time.time() < deadline:
         if log_path.exists():
-            text = log_path.read_text(errors="replace")
-            # Printed once the network is up and accepting app transactions.
-            if "issue business transactions" in text:
-                m = node_re.search(text)
-                if m:
-                    return m.group(1)
+            m = node_re.search(log_path.read_text(errors="replace"))
+            if m:
+                return m.group(1)
         time.sleep(0.5)
     raise TimeoutError(
-        f"sandbox did not open within {STARTUP_TIMEOUT_S}s; see {log_path}"
+        f"sandbox did not report a node URL within {STARTUP_TIMEOUT_S}s; "
+        f"see {log_path}"
     )
 
 
@@ -89,19 +89,28 @@ def network(tmp_path_factory):
             start_new_session=True,  # own process group, for clean teardown
         )
         try:
-            base_url = _wait_for_open(log_path)
+            base_url = _wait_for_node_url(log_path)
             net = Network(
                 base_url=base_url,
                 service_cert=str(COMMON_DIR / "service_cert.pem"),
                 common_dir=str(COMMON_DIR),
             )
-            # Readiness: the app frontend answers.
+            # Authoritative readiness: the app frontend answers /app/commit.
             client = net.client()
             deadline = time.time() + 30
+            ready = False
             while time.time() < deadline:
-                if client.get("/commit").status == 200:
-                    break
+                try:
+                    if client.get("/commit").status == 200:
+                        ready = True
+                        break
+                except Exception:
+                    pass
                 time.sleep(0.3)
+            if not ready:
+                raise TimeoutError(
+                    f"app frontend not ready at {base_url}; see {log_path}"
+                )
             yield net
         finally:
             try:

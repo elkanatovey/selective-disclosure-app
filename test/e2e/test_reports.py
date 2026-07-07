@@ -8,9 +8,10 @@ on a live node, and that the harness reports green on known-good behaviour.
 """
 
 import json
+from hashlib import sha256
 
 import cbor2
-import sd_cwt
+import pytest
 from sd_cwt import statement as st
 
 SERVICE_ISS = "https://selective-disclosure.example/service"
@@ -47,6 +48,29 @@ def _uhdr(token: bytes) -> dict:
     return arr[1] or {}
 
 
+def _bare_statement(transparent: bytes) -> bytes:
+    """Reconstruct the original signed statement (empty unprotected header) from a
+    transparent statement, by dropping the embedded receipt. The CCF claims digest
+    was bound over these bytes, so this is what the receipt attests."""
+    obj = cbor2.loads(transparent)
+    arr = list(obj.value)
+    arr[1] = {}  # issued.token carried an empty unprotected header
+    return cbor2.dumps(cbor2.CBORTag(obj.tag, arr))
+
+
+def _verify_receipt(transparent: bytes, service_cert_pem: bytes) -> None:
+    """Cryptographically verify the embedded CCF receipt: the Merkle inclusion
+    proof ties the statement's claims digest to a tree root the service identity
+    signed. Raises on any failure."""
+    import ccf.cose
+    from cryptography.x509 import load_pem_x509_certificate
+
+    receipts = _uhdr(transparent)[RECEIPTS_LABEL]
+    service_key = load_pem_x509_certificate(service_cert_pem).public_key()
+    claim_digest = sha256(_bare_statement(transparent)).digest()
+    ccf.cose.verify_receipt(receipts[0], service_key, claim_digest)
+
+
 def test_submit_retrieve_verify(network):
     client = network.client()
 
@@ -80,9 +104,36 @@ def test_submit_retrieve_verify(network):
     assert out.clear[st.ISS] == SERVICE_ISS
     assert st.IAT in out.clear
 
-    # 5. The statement is transparent: the CCF receipt is embedded (uhdr 394).
+    # 5. The statement is transparent: the CCF receipt is embedded (uhdr 394)
+    #    AND it cryptographically verifies (Merkle proof + service signature).
     assert RECEIPTS_LABEL in _uhdr(token)
+    with open(network.service_cert, "rb") as f:
+        _verify_receipt(token, f.read())
 
     # 6. Strict uniformity: all content fields are redacted.
     _, n_redacted = st.redacted_shape(token)
     assert n_redacted == len(st.CONTENT_FIELDS)
+
+
+def test_receipt_rejects_wrong_digest(network):
+    """Negative control: the embedded receipt must NOT verify against a wrong
+    claims digest — proving the receipt check in the round-trip test is real,
+    not a no-op."""
+    import ccf.cose
+    from cryptography.x509 import load_pem_x509_certificate
+
+    client = network.client()
+    resp = client.post(
+        "/reports", json.dumps({"title": "x"}).encode(), "application/json"
+    )
+    txid = resp.json()["transaction_id"]
+    token = client.get_historical(f"/statements/{txid}").body
+
+    receipts = _uhdr(token)[RECEIPTS_LABEL]
+    with open(network.service_cert, "rb") as f:
+        key = load_pem_x509_certificate(f.read()).public_key()
+
+    # The real digest verifies; a corrupted one must be rejected.
+    _verify_receipt(token, open(network.service_cert, "rb").read())
+    with pytest.raises(Exception):
+        ccf.cose.verify_receipt(receipts[0], key, b"\x00" * 32)
