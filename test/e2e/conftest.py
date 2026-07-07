@@ -111,6 +111,12 @@ def network(tmp_path_factory):
                 raise TimeoutError(
                     f"app frontend not ready at {base_url}; see {log_path}"
                 )
+            # Initialise + endorse the issuer key on-ledger (submit requires it).
+            init = client.post("/signing-key", b"", "application/cbor")
+            if init.status != 200:
+                raise RuntimeError(
+                    f"signing-key init failed: {init.status} {init.body!r}"
+                )
             yield net
         finally:
             try:

@@ -86,7 +86,17 @@ namespace selectivedisclosure
 
         try
         {
-          auto key = get_or_create_signing_key(ctx.tx);
+          auto* keys = ctx.tx.template rw<SigningKeyTable>(SIGNING_KEY_TABLE);
+          const auto stored = keys->get();
+          if (!stored.has_value())
+          {
+            ctx.rpc_ctx->set_error(
+              HTTP_STATUS_SERVICE_UNAVAILABLE,
+              ccf::errors::InternalError,
+              "Issuer key not initialised; POST /signing-key first.");
+            return;
+          }
+          auto key = load_signing_key(stored.value());
           const auto issued =
             statement::issue_statement(SERVICE_ISS, iat, fields, *key);
 
@@ -137,25 +147,69 @@ namespace selectivedisclosure
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Always)
         .install();
 
-      // --- signing key: publish the app's issuer public key (trust anchor). --
+      // --- register signing key: generate the app issuer key once and endorse
+      // it on-ledger. The transaction's claims digest is hash(pubkey), so its
+      // receipt endorses the key against the service identity (DESIGN §4/§12).
+      // Idempotent: a no-op once initialised. --------------------------------
+      auto register_signing_key = [](ccf::endpoints::EndpointContext& ctx) {
+        auto* priv = ctx.tx.template rw<SigningKeyTable>(SIGNING_KEY_TABLE);
+        if (priv->get().has_value())
+        {
+          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+          return;
+        }
+        auto key =
+          ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+        const auto privpem = key->private_key_pem().str();
+        priv->put(std::vector<uint8_t>(privpem.begin(), privpem.end()));
+
+        const auto pubpem = key->public_key_pem().str();
+        std::vector<uint8_t> pub(pubpem.begin(), pubpem.end());
+        auto* hist = ctx.tx.template rw<SigningKeyHistory>(SIGNING_KEY_HISTORY);
+        hist->put(pub);
+
+        // Endorse: bind hash(pubkey) as this transaction's claims digest, so
+        // its receipt is a service-identity endorsement of the key.
+        ctx.rpc_ctx->set_claims_digest(ccf::ClaimsDigest::Digest(pub));
+
+        ctx.rpc_ctx->set_consensus_committed_function(
+          [](ccf::endpoints::CommittedTxInfo& info) {
+            nlohmann::json result;
+            result["transaction_id"] = info.tx_id.to_str();
+            const auto dumped = result.dump();
+            info.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+            info.rpc_ctx->set_response_header(
+              ccf::http::headers::CONTENT_TYPE,
+              ccf::http::headervalues::contenttype::JSON);
+            info.rpc_ctx->set_response_body(
+              std::vector<uint8_t>(dumped.begin(), dumped.end()));
+          });
+      };
+      make_endpoint(
+        "/signing-key",
+        HTTP_POST,
+        register_signing_key,
+        {ccf::empty_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Always)
+        .install();
+
+      // --- signing key: the issuer public key (trust anchor). ----------------
       auto get_signing_key = [](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
-        auto* handle = ctx.tx.template ro<SigningKeyTable>(SIGNING_KEY_TABLE);
+        auto* handle =
+          ctx.tx.template ro<SigningKeyHistory>(SIGNING_KEY_HISTORY);
         const auto stored = handle->get();
         if (!stored.has_value())
         {
           ctx.rpc_ctx->set_error(
             HTTP_STATUS_NOT_FOUND,
             ccf::errors::ResourceNotFound,
-            "No signing key yet; submit a report to initialise it.");
+            "Issuer key not initialised; POST /signing-key first.");
           return;
         }
-        const auto key = load_signing_key(stored.value());
-        const auto& pub = key->public_key_pem();
         ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
         ctx.rpc_ctx->set_response_header(
           ccf::http::headers::CONTENT_TYPE, "application/x-pem-file");
-        ctx.rpc_ctx->set_response_body(
-          std::vector<uint8_t>(pub.str().begin(), pub.str().end()));
+        ctx.rpc_ctx->set_response_body(stored.value());
       };
       make_read_only_endpoint(
         "/signing-key", HTTP_GET, get_signing_key, {ccf::empty_auth_policy})
@@ -223,23 +277,6 @@ namespace selectivedisclosure
         {ccf::empty_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
-    }
-
-  private:
-    // Read the app signing key, lazily generating (and storing) a P-256 key on
-    // first use so any node can sign when it is primary.
-    ccf::crypto::ECKeyPairPtr get_or_create_signing_key(ccf::kv::Tx& tx)
-    {
-      auto* handle = tx.template rw<SigningKeyTable>(SIGNING_KEY_TABLE);
-      const auto existing = handle->get();
-      if (existing.has_value())
-      {
-        return load_signing_key(existing.value());
-      }
-      auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
-      const auto& pem = key->private_key_pem();
-      handle->put(std::vector<uint8_t>(pem.str().begin(), pem.str().end()));
-      return key;
     }
   };
 }

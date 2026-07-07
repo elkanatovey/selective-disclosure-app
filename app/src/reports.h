@@ -25,6 +25,13 @@ namespace selectivedisclosure
   using SigningKeyTable = ccf::kv::Value<std::vector<uint8_t>>;
   static constexpr auto SIGNING_KEY_TABLE = "sd.signing_key";
 
+  // The issuer PUBLIC key(s), written on registration so the transaction's
+  // receipt (claims digest = hash(pubkey)) endorses the key against the service
+  // identity (DESIGN.md §4/§12). Public + seqno-indexed so GET /signing-key can
+  // return the registration receipt; rotation appends new writes.
+  using SigningKeyHistory = ccf::kv::Value<std::vector<uint8_t>>;
+  static constexpr auto SIGNING_KEY_HISTORY = "public:sd.signing_key_history";
+
   // Value written as the clear `iss` claim of every statement.
   static constexpr auto SERVICE_ISS =
     "https://selective-disclosure.example/service";
