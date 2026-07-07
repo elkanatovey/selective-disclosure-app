@@ -4,6 +4,7 @@
 
 #include "token/cbor.h"
 #include "token/cose.h"
+#include "token/sd_cwt_internal.h"
 
 #include <algorithm>
 #include <ccf/crypto/entropy.h>
@@ -459,7 +460,7 @@ namespace sdcwt
     }
   }
 
-  IssuedToken issue(
+  IssuedToken detail::issue(
     const std::vector<Claim>& claims,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
@@ -532,6 +533,26 @@ namespace sdcwt
     out.token = sign_cose_sign1(key, phdr, payload);
     out.disclosures = std::move(disclosures);
     return out;
+  }
+
+  IssuedToken issue(
+    const std::vector<Claim>& claims,
+    const ccf::crypto::ECKeyPair& key,
+    HashAlg sd_alg,
+    const std::vector<Path>& redact_paths,
+    size_t salt_len,
+    size_t pad_to,
+    const ccf::crypto::ECPublicKey* holder)
+  {
+    return detail::issue(
+      claims,
+      key,
+      sd_alg,
+      redact_paths,
+      default_random_source(),
+      salt_len,
+      pad_to,
+      holder);
   }
 
   std::vector<uint8_t> present(

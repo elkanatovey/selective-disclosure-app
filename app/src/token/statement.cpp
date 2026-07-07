@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 #include "token/statement.h"
 
+#include "token/statement_internal.h"
+
 namespace sdcwt::statement
 {
   namespace
@@ -23,7 +25,7 @@ namespace sdcwt::statement
     }
   }
 
-  std::vector<Claim> build_claims(
+  std::vector<Claim> detail::build_claims(
     const std::string& iss,
     int64_t iat,
     const Fields& f,
@@ -67,7 +69,7 @@ namespace sdcwt::statement
     return claims;
   }
 
-  IssuedToken issue_statement(
+  IssuedToken detail::issue_statement(
     const std::string& iss,
     int64_t iat,
     const Fields& fields,
@@ -76,12 +78,31 @@ namespace sdcwt::statement
     const RandomSource& rng,
     size_t salt_len)
   {
-    return issue(
-      build_claims(iss, iat, fields, rng, salt_len),
+    return sdcwt::detail::issue(
+      detail::build_claims(iss, iat, fields, rng, salt_len),
       key,
       sd_alg,
       {},
       rng,
       salt_len);
+  }
+
+  std::vector<Claim> build_claims(
+    const std::string& iss, int64_t iat, const Fields& fields, size_t pad_len)
+  {
+    return detail::build_claims(
+      iss, iat, fields, default_random_source(), pad_len);
+  }
+
+  IssuedToken issue_statement(
+    const std::string& iss,
+    int64_t iat,
+    const Fields& fields,
+    const ccf::crypto::ECKeyPair& key,
+    HashAlg sd_alg,
+    size_t salt_len)
+  {
+    return detail::issue_statement(
+      iss, iat, fields, key, sd_alg, default_random_source(), salt_len);
   }
 }

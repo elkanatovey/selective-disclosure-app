@@ -51,7 +51,6 @@ namespace sdcwt::statement
     const std::string& iss,
     int64_t iat,
     const Fields& fields,
-    const RandomSource& rng = default_random_source(),
     size_t pad_len = SALT_LEN);
 
   // Build + sign a strictly-uniform statement token. The COSE signing algorithm
@@ -67,6 +66,5 @@ namespace sdcwt::statement
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
-    const RandomSource& rng = default_random_source(),
     size_t salt_len = SALT_LEN);
 }

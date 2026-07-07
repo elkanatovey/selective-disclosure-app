@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 #include "token/cbor.h"
 #include "token/statement.h"
+#include "token/statement_internal.h"
 
 #include <ccf/crypto/ec_key_pair.h>
 #include <cstdlib>
@@ -81,7 +82,7 @@ namespace
       return v;
     };
 
-    const auto issued = sdcwt::statement::issue_statement(
+    const auto issued = sdcwt::statement::detail::issue_statement(
       "https://ledger.example/tee",
       1700000000,
       f,
@@ -204,7 +205,7 @@ namespace
       return v;
     };
 
-    const auto issued = sdcwt::issue(
+    const auto issued = sdcwt::detail::issue(
       claims,
       *key,
       sdcwt::HashAlg::SHA_256,
@@ -244,7 +245,6 @@ namespace
       *issuer,
       sdcwt::HashAlg::SHA_256,
       /*redact_paths=*/{},
-      sdcwt::default_random_source(),
       sdcwt::SALT_LEN,
       /*pad_to=*/0,
       holder_pub.get());
@@ -296,7 +296,6 @@ namespace
       *issuer,
       sdcwt::HashAlg::SHA_256,
       /*redact_paths=*/{},
-      sdcwt::default_random_source(),
       sdcwt::SALT_LEN,
       /*pad_to=*/0,
       holder_pub.get());

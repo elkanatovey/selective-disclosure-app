@@ -131,7 +131,6 @@ TEST(SdCwt, ConfigurableSaltLength)
     *key,
     sdcwt::HashAlg::SHA_256,
     /*redact_paths=*/{},
-    sdcwt::default_random_source(),
     /*salt_len=*/32);
   ASSERT_EQ(issued.disclosures.size(), 1u);
   EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
@@ -157,7 +156,6 @@ TEST(SdCwt, CnfEmbedsHolderPublicKey)
     *issuer,
     sdcwt::HashAlg::SHA_256,
     /*redact_paths=*/{},
-    sdcwt::default_random_source(),
     sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
@@ -276,7 +274,6 @@ TEST(SdCwt, KbtSignRequiresIatOrCti)
     *issuer,
     sdcwt::HashAlg::SHA_256,
     /*redact_paths=*/{},
-    sdcwt::default_random_source(),
     sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
@@ -304,7 +301,6 @@ TEST(SdCwt, DecoyPadding)
     *key,
     sdcwt::HashAlg::SHA_256,
     /*redact_paths=*/{},
-    sdcwt::default_random_source(),
     sdcwt::SALT_LEN,
     /*pad_to=*/5);
 

@@ -7,7 +7,6 @@
 #include <ccf/crypto/ec_key_pair.h>
 #include <ccf/crypto/ec_public_key.h>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -45,10 +44,6 @@ namespace sdcwt
     SHA_384 = -43,
     SHA_512 = -44,
   };
-
-  // Source of salt/garbage bytes; overridable in tests for determinism.
-  using RandomSource = std::function<std::vector<uint8_t>(size_t)>;
-  RandomSource default_random_source();
 
   // --- CBOR value constructors ---------------------------------------------
   namespace value
@@ -131,7 +126,6 @@ namespace sdcwt
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
     const std::vector<Path>& redact_paths = {},
-    const RandomSource& rng = default_random_source(),
     size_t salt_len = SALT_LEN,
     size_t pad_to = 0,
     const ccf::crypto::ECPublicKey* holder = nullptr);
