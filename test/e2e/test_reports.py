@@ -563,3 +563,112 @@ def test_follow_up_parent_link_is_salted(network):
         return st.validate_statement(body, key).disclosed[st.PARENT]
 
     assert disclosed_parent(fu1) == disclosed_parent(fu2)
+
+
+def _operator_stream_ids(op, since=0, limit=1000):
+    """All statement txids from the Operator stream, following the cursor."""
+    import time
+
+    ids = []
+    while True:
+        page = cbor2.loads(
+            op.get(f"/operator/statements?since={since}&limit={limit}").body
+        )
+        ids.extend(page["statements"])
+        if len(page["statements"]) < limit or page["next"] == since:
+            break
+        since = page["next"]
+    return ids
+
+
+def _wait_in_stream(op, txid, timeout_s=10):
+    """Poll the stream until `txid` is indexed (the seqno index is async)."""
+    import time
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if txid in _operator_stream_ids(op):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def test_operator_gets_unredacted_statement(network):
+    """GET /operator/statements/{txid} returns the fully-unredacted statement:
+    every set field is revealed, and the CCF receipt still verifies."""
+    client = network.client()
+    op = network.client(user="user0")
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+
+    report = {"title": "t", "body": "b", "references": ["r1", "r2"]}
+    txid = client.post("/reports", cbor2.dumps(report), "application/cbor").tx_id
+
+    resp = op.get_historical(f"/operator/statements/{txid}")
+    assert resp.status == 200, resp.body
+    assert "application/cose" in resp.content_type
+    out = st.validate_statement(resp.body, key)
+    assert out.disclosed[st.TITLE] == "t"
+    assert out.disclosed[st.BODY] == "b"
+    assert out.disclosed[st.REFERENCES] == ["r1", "r2"]
+
+    assert RECEIPTS_LABEL in _uhdr(resp.body)
+    _verify_receipt(resp.body, service_cert)
+
+
+def test_operator_statement_requires_operator(network):
+    """The unredacted single-statement endpoint is Operator-gated."""
+    client = network.client()
+    txid = client.post(
+        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
+    ).tx_id
+    anon = client.get_historical(f"/operator/statements/{txid}")
+    assert anon.status in (401, 403), anon.body
+
+
+def test_operator_stream_lists_in_seqno_order(network):
+    """The Operator stream lists statement txids in seqno order; each txid
+    resolves via the single-statement endpoint."""
+    client = network.client()
+    op = network.client(user="user0")
+    a = client.post("/reports", cbor2.dumps({"title": "A"}), "application/cbor").tx_id
+    b = client.post("/reports", cbor2.dumps({"title": "B"}), "application/cbor").tx_id
+    c = client.post("/reports", cbor2.dumps({"title": "C"}), "application/cbor").tx_id
+
+    assert _wait_in_stream(op, c)  # wait for the async index to catch up
+    ids = _operator_stream_ids(op)
+    assert ids.index(a) < ids.index(b) < ids.index(c)
+
+    # A listed txid resolves to a real unredacted statement.
+    r = op.get_historical(f"/operator/statements/{a}")
+    assert r.status == 200, r.body
+
+
+def test_operator_stream_paginates_with_cursor(network):
+    """`limit` caps a page; passing the returned `next` as `since` advances
+    without repeats (stateless, replay-idempotent)."""
+    client = network.client()
+    op = network.client(user="user0")
+    # Ensure at least two statements exist and are indexed.
+    client.post("/reports", cbor2.dumps({"title": "p1"}), "application/cbor")
+    last = client.post(
+        "/reports", cbor2.dumps({"title": "p2"}), "application/cbor"
+    ).tx_id
+    assert _wait_in_stream(op, last)
+
+    page1 = cbor2.loads(op.get("/operator/statements?since=0&limit=1").body)
+    assert len(page1["statements"]) == 1
+    nxt = page1["next"]
+    page2 = cbor2.loads(op.get(f"/operator/statements?since={nxt}&limit=1").body)
+    assert len(page2["statements"]) == 1
+    assert page2["statements"][0] != page1["statements"][0]
+    assert page2["next"] > nxt
+
+
+def test_operator_stream_requires_operator(network):
+    """The Operator stream is Operator-gated."""
+    anon = network.client().get("/operator/statements?since=0")
+    assert anon.status in (401, 403), anon.body

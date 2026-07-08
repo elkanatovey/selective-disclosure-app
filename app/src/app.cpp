@@ -7,6 +7,7 @@
 #include "ccf/crypto/cose.h"
 #include "ccf/historical_queries_adapter.h"
 #include "ccf/http_consts.h"
+#include "ccf/http_query.h"
 #include "ccf/indexing/strategies/seqnos_by_key_bucketed.h"
 #include "ccf/json_handler.h"
 #include "ccf/receipt.h"
@@ -47,6 +48,26 @@ namespace selectivedisclosure
     return ccf::cose::edit::set_unprotected_header(*signature, inclusion_desc);
   }
 
+  // Build a presented + transparent statement: embed the CCF receipt into the
+  // token's unprotected header (label 394 = array of receipts) to make it
+  // transparent, then attach `selected` disclosures via present() (sd_claims,
+  // label 17), which preserves the receipt. An empty `selected` yields the bare
+  // redacted transparent statement; the full disclosure set yields a fully
+  // unredacted one.
+  inline std::vector<uint8_t> present_transparent(
+    const std::vector<uint8_t>& token,
+    const ccf::TxReceiptImplPtr& receipt,
+    const std::vector<std::vector<uint8_t>>& selected)
+  {
+    const auto cose_receipt = make_cose_receipt(receipt);
+    const int64_t receipts_label = 394;
+    const ccf::cose::edit::desc::Value receipts_desc{
+      ccf::cose::edit::pos::InArray{}, receipts_label, cose_receipt};
+    const auto transparent =
+      ccf::cose::edit::set_unprotected_header(token, receipts_desc);
+    return sdcwt::present(transparent, selected);
+  }
+
   class ReportLedgerHandlers : public ccf::UserEndpointRegistry
   {
   public:
@@ -64,6 +85,13 @@ namespace selectivedisclosure
       signing_key_index = std::make_shared<SigningKeyIndex>(
         SIGNING_KEY_HISTORY, context, 10000, 20);
       context.get_indexing_strategies().install_strategy(signing_key_index);
+
+      // Index the seqnos at which a statement was written (every submit +
+      // follow-up writes StatementTable), so the Operator stream can enumerate
+      // statements in seqno order.
+      statement_index =
+        std::make_shared<StatementIndex>(STATEMENT_TABLE, context, 10000, 20);
+      context.get_indexing_strategies().install_strategy(statement_index);
     }
 
     void init_handlers() override
@@ -340,18 +368,8 @@ namespace selectivedisclosure
         {
           const auto selected = select_disclosures(
             decode_disclosure_store(stored.value()), targets);
-
-          // Embed the receipt first (transparent statement; label 394 = array
-          // of receipts); present() then adds sd_claims (17) while preserving
-          // the receipt — a presented + transparent statement.
-          const auto cose_receipt = make_cose_receipt(state->receipt);
-          const int64_t receipts_label = 394;
-          const ccf::cose::edit::desc::Value receipts_desc{
-            ccf::cose::edit::pos::InArray{}, receipts_label, cose_receipt};
-          const auto transparent = ccf::cose::edit::set_unprotected_header(
-            token.value(), receipts_desc);
-
-          presented = sdcwt::present(transparent, selected);
+          presented =
+            present_transparent(token.value(), state->receipt, selected);
         }
         catch (const std::exception& e)
         {
@@ -456,6 +474,140 @@ namespace selectivedisclosure
         {ccf::user_cert_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Always)
         .install();
+
+      // --- get_operator_statement: a single, FULLY-unredacted transparent
+      // statement (every disclosure presented + receipt), for the Operator.
+      // Same machinery as make_disclosure, but presents all disclosures.
+      // -------
+      auto get_operator_statement =
+        [](
+          ccf::endpoints::ReadOnlyEndpointContext& ctx,
+          ccf::historical::StatePtr state) {
+          auto htx = state->store->create_read_only_tx();
+          const auto token =
+            htx.template ro<StatementTable>(STATEMENT_TABLE)->get();
+          if (!token.has_value())
+          {
+            ctx.rpc_ctx->set_error(
+              HTTP_STATUS_NOT_FOUND,
+              ccf::errors::ResourceNotFound,
+              fmt::format(
+                "Transaction {} is not a statement submission.",
+                state->transaction_id.to_str()));
+            return;
+          }
+
+          std::vector<uint8_t> presented;
+          try
+          {
+            std::vector<std::vector<uint8_t>> all;
+            const auto stored =
+              htx.template ro<DisclosureTable>(DISCLOSURE_TABLE)->get();
+            if (stored.has_value())
+            {
+              for (auto& d : decode_disclosure_store(stored.value()))
+              {
+                all.push_back(std::move(d.encoded));
+              }
+            }
+            presented = present_transparent(token.value(), state->receipt, all);
+          }
+          catch (const std::exception& e)
+          {
+            ctx.rpc_ctx->set_error(
+              HTTP_STATUS_INTERNAL_SERVER_ERROR,
+              ccf::errors::InternalError,
+              fmt::format(
+                "Failed to build unredacted statement: {}", e.what()));
+            return;
+          }
+
+          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+          ctx.rpc_ctx->set_response_header(
+            ccf::http::headers::CONTENT_TYPE,
+            ccf::http::headervalues::contenttype::COSE);
+          ctx.rpc_ctx->set_response_body(presented);
+        };
+
+      make_read_only_endpoint(
+        "/operator/statements/{txid}",
+        HTTP_GET,
+        ccf::historical::read_only_adapter_v4(
+          get_operator_statement, context, is_tx_committed, txid_from_path),
+        {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
+
+      // --- get_statements_since: the Operator stream. Returns the txids of the
+      // statements committed after `since` (up to `limit`), in seqno order,
+      // plus a `next` cursor. The Operator holds its own high-water cursor and
+      // pulls each unredacted statement via GET /operator/statements/{txid}.
+      // Uses the statement seqno index (no per-entry historical fetch here).
+      // ------------
+      auto get_statements_since =
+        [this](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+          const auto pq =
+            ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
+          std::string err;
+          const ccf::SeqNo since =
+            ccf::http::get_query_value_opt<uint64_t>(pq, "since", err)
+              .value_or(0);
+          size_t limit =
+            ccf::http::get_query_value_opt<uint64_t>(pq, "limit", err)
+              .value_or(kDefaultPageLimit);
+          limit = std::min<size_t>(std::max<size_t>(limit, 1), kMaxPageLimit);
+
+          std::vector<std::string> txids;
+          ccf::SeqNo next = since;
+          const auto watermark = statement_index->get_indexed_watermark();
+          if (watermark.seqno > since)
+          {
+            const auto seqnos = statement_index->get_write_txs_in_range(
+              since + 1, watermark.seqno);
+            if (seqnos.has_value())
+            {
+              for (const auto s : *seqnos)
+              {
+                if (txids.size() >= limit)
+                {
+                  break;
+                }
+                ccf::View view = 0;
+                if (get_view_for_seqno_v1(s, view) == ccf::ApiResult::OK)
+                {
+                  txids.push_back(ccf::TxID{view, s}.to_str());
+                  next = s;
+                }
+              }
+            }
+          }
+
+          const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
+            QCBOREncode_OpenMap(&c);
+            QCBOREncode_OpenArrayInMapSZ(&c, "statements");
+            for (const auto& t : txids)
+            {
+              QCBOREncode_AddSZString(&c, t.c_str());
+            }
+            QCBOREncode_CloseArray(&c);
+            QCBOREncode_AddInt64ToMap(&c, "next", static_cast<int64_t>(next));
+            QCBOREncode_CloseMap(&c);
+          });
+
+          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+          ctx.rpc_ctx->set_response_header(
+            ccf::http::headers::CONTENT_TYPE,
+            ccf::http::headervalues::contenttype::CBOR);
+          ctx.rpc_ctx->set_response_body(body);
+        };
+
+      make_read_only_endpoint(
+        "/operator/statements",
+        HTTP_GET,
+        get_statements_since,
+        {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Sometimes)
+        .install();
     }
 
   private:
@@ -535,6 +687,14 @@ namespace selectivedisclosure
     using SigningKeyIndex =
       ccf::indexing::strategies::SeqnosForValue_Bucketed<SigningKeyHistory>;
     std::shared_ptr<SigningKeyIndex> signing_key_index;
+
+    using StatementIndex =
+      ccf::indexing::strategies::SeqnosForValue_Bucketed<StatementTable>;
+    std::shared_ptr<StatementIndex> statement_index;
+
+    // Operator-stream pagination bounds.
+    static constexpr size_t kDefaultPageLimit = 100;
+    static constexpr size_t kMaxPageLimit = 1000;
   };
 }
 

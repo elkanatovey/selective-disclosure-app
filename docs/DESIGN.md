@@ -327,12 +327,21 @@ Operator user is added by governance — §12.2):
   the link lives in the child's redacted, salted `parent` field and follow-ups
   surface via `get_statements_since`.)*
 - `GET /operator/statements/{txid}` — a single **unredacted** transparent
-  statement (all disclosures present + receipt). *(Pending.)*
-- `GET /operator/statements?since={seqno}&limit={n}` — the unredacted stream:
-  **all** statements (reports **and** follow-ups) committed after `since`, in
-  seqno order, each with its receipt; response carries a **next cursor / latest
-  seqno**. Operator holds its own high-water cursor; stateless + replay-idempotent.
-  Reuses CCF seqno-indexed historical queries. *(Pending.)*
+  statement: the redacted token with **all** stored disclosures presented +
+  receipt embedded (`present_transparent` with the full disclosure set). *(Live.)*
+  *(Caveat: uniform padding means absent content fields present as garbage
+  sentinels — string fields are distinguishable by CBOR type, `bstr` fields are
+  not; the Operator relies on out-of-band knowledge of which fields are real.)*
+- `GET /operator/statements?since={seqno}&limit={n}` — the stream. Returns the
+  **txids** of statements (reports **and** follow-ups) committed after `since`,
+  in seqno order (up to `limit`, capped), plus a **`next`** cursor (CBOR
+  `{statements:[txid…], next: seqno}`). The Operator holds its own high-water
+  cursor (pass `next` back as `since`); stateless + replay-idempotent. Uses the
+  statement **seqno index** (`SeqnosForValue_Bucketed<StatementTable>`); the
+  Operator then pulls each unredacted statement via `GET /operator/statements/{txid}`.
+  *(Live. Refinement of the original "full statements in one response" sketch:
+  returning txids + cursor avoids range historical fetches and mirrors SCITT's
+  `/entries/txIds`.)*
 - `POST /operator/statements/{txid}/disclosure` — body `{fields:[ entry, ... ]}`
   where each entry is a field name (whole field) or a path `[name, idx, ...]`
   (a nested array element, e.g. `["references", 0]`); returns a single
