@@ -70,8 +70,9 @@ namespace selectivedisclosure
     {
       CommonEndpointRegistry::init_handlers();
 
-      // --- submit_report: parse raw JSON content, build + sign a redacted
-      // statement, store it, and return its transaction id on commit. --------
+      // --- submit_report: parse the CBOR content body, then build + sign a
+      // redacted statement, store it, and return its transaction id on commit.
+      // -
       auto submit_report = [this](ccf::endpoints::EndpointContext& ctx) {
         statement::Fields fields;
         try
@@ -84,74 +85,7 @@ namespace selectivedisclosure
             HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput, e.what());
           return;
         }
-
-        int64_t iat = 0;
-        ::timespec time{};
-        if (get_untrusted_host_time_v1(time) == ccf::ApiResult::OK)
-        {
-          iat = static_cast<int64_t>(time.tv_sec);
-        }
-
-        try
-        {
-          auto* keys = ctx.tx.template rw<SigningKeyTable>(SIGNING_KEY_TABLE);
-          const auto stored = keys->get();
-          if (!stored.has_value())
-          {
-            ctx.rpc_ctx->set_error(
-              HTTP_STATUS_SERVICE_UNAVAILABLE,
-              ccf::errors::InternalError,
-              "Issuer key not initialised; POST /signing-key first.");
-            return;
-          }
-          auto key = load_signing_key(stored.value());
-          const auto issued =
-            statement::issue_statement(SERVICE_ISS, iat, fields, *key);
-
-          auto* statements =
-            ctx.tx.template rw<StatementTable>(STATEMENT_TABLE);
-          statements->put(issued.token);
-
-          // Confidential store: retain the disclosures (the openings for every
-          // redacted field) in the PRIVATE table so the Operator can later
-          // produce duplicate-proofs. Write-only here (segregation invariant,
-          // DESIGN.md s8): the redacted-token build, digest binding and public
-          // store above never read it.
-          auto* disclosures =
-            ctx.tx.template rw<DisclosureTable>(DISCLOSURE_TABLE);
-          disclosures->put(encode_disclosure_store(issued.disclosures));
-
-          // Bind the token's digest into the Merkle tree for this transaction,
-          // so the receipt attests exactly this redacted statement.
-          ctx.rpc_ctx->set_claims_digest(
-            ccf::ClaimsDigest::Digest(issued.token));
-        }
-        catch (const std::exception& e)
-        {
-          ctx.rpc_ctx->set_error(
-            HTTP_STATUS_INTERNAL_SERVER_ERROR,
-            ccf::errors::InternalError,
-            fmt::format("Failed to register statement: {}", e.what()));
-          return;
-        }
-
-        // Respond once the transaction commits. The txid is returned in the
-        // standard `x-ms-ccf-transaction-id` header (no JSON body), matching
-        // CCF/SCITT convention and the all-CBOR/COSE surface.
-        ctx.rpc_ctx->set_consensus_committed_function(
-          [](ccf::endpoints::CommittedTxInfo& info) {
-            if (info.status == ccf::FinalTxStatus::Invalid)
-            {
-              info.rpc_ctx->set_response_status(
-                HTTP_STATUS_SERVICE_UNAVAILABLE);
-              info.rpc_ctx->set_response_body(
-                std::string("Submission was rolled back; please retry."));
-              return;
-            }
-            info.rpc_ctx->set_response_header(
-              ccf::http::headers::CCF_TX_ID, info.tx_id.to_str());
-            info.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
-          });
+        issue_and_store(ctx, fields);
       };
       make_endpoint(
         "/reports", HTTP_POST, submit_report, {ccf::empty_auth_policy})
@@ -443,9 +377,161 @@ namespace selectivedisclosure
         {ccf::user_cert_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
+
+      // --- append_follow_up: the Operator files a child statement linked to an
+      // existing one. `parent` = SHA-256 of the parent's token (server-derived,
+      // redacted + salted like any field), so the child cryptographically
+      // commits to exactly the statement the parent's receipt attests. Uses a
+      // read-WRITE historical adapter: it reads the parent's token at
+      // {parent_txid} and writes the new statement in the same transaction.
+      // ----
+      auto append_follow_up = [this](
+                                ccf::endpoints::EndpointContext& ctx,
+                                ccf::historical::StatePtr state) {
+        auto ptx = state->store->create_read_only_tx();
+        const auto parent =
+          ptx.template ro<StatementTable>(STATEMENT_TABLE)->get();
+
+        // Confirm {parent_txid} genuinely committed this statement: the
+        // StatementTable is a per-tx Value, so a historical read at an
+        // unrelated seqno would return a stale token. The parent tx's claims
+        // digest is hash(its token) — check it matches what we read.
+        const auto receipt = ccf::describe_receipt_v2(*state->receipt);
+        const auto proof =
+          std::dynamic_pointer_cast<ccf::ProofReceipt>(receipt);
+        const bool is_statement = parent.has_value() && proof != nullptr &&
+          !proof->leaf_components.claims_digest.empty() &&
+          proof->leaf_components.claims_digest.value() ==
+            ccf::ClaimsDigest::Digest(parent.value());
+        if (!is_statement)
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_NOT_FOUND,
+            ccf::errors::ResourceNotFound,
+            fmt::format(
+              "Transaction {} is not a statement submission.",
+              state->transaction_id.to_str()));
+          return;
+        }
+
+        statement::Fields fields;
+        try
+        {
+          fields = parse_report_fields(ctx.rpc_ctx->get_request_body());
+        }
+        catch (const std::exception& e)
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput, e.what());
+          return;
+        }
+
+        // The parent link is the parent's claims digest = SHA-256(its token).
+        const auto digest = ccf::ClaimsDigest::Digest(parent.value());
+        fields.parent = std::vector<uint8_t>(digest.h.begin(), digest.h.end());
+
+        issue_and_store(ctx, fields);
+      };
+
+      auto parent_txid_from_path =
+        [](ccf::endpoints::EndpointContext& ctx) -> std::optional<ccf::TxID> {
+        std::string txid_str;
+        std::string error;
+        if (!ccf::endpoints::get_path_param(
+              ctx.rpc_ctx->get_request_path_params(),
+              "parent_txid",
+              txid_str,
+              error))
+        {
+          return std::nullopt;
+        }
+        return ccf::TxID::from_str(txid_str);
+      };
+
+      make_endpoint(
+        "/reports/{parent_txid}/follow-ups",
+        HTTP_POST,
+        ccf::historical::read_write_adapter_v4(
+          append_follow_up, context, is_tx_committed, parent_txid_from_path),
+        {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Always)
+        .install();
     }
 
   private:
+    // Build + sign a redacted statement from `fields` in this transaction,
+    // store the token (public) and its disclosures (confidential), bind the
+    // claims digest, and arrange a 204 + txid-header response on commit. Sets
+    // an error and returns without a commit callback if the issuer key is
+    // missing (503) or issuance fails (500). Shared by submit_report and
+    // append_follow_up.
+    void issue_and_store(
+      ccf::endpoints::EndpointContext& ctx, const statement::Fields& fields)
+    {
+      int64_t iat = 0;
+      ::timespec time{};
+      if (get_untrusted_host_time_v1(time) == ccf::ApiResult::OK)
+      {
+        iat = static_cast<int64_t>(time.tv_sec);
+      }
+
+      try
+      {
+        auto* keys = ctx.tx.template rw<SigningKeyTable>(SIGNING_KEY_TABLE);
+        const auto stored = keys->get();
+        if (!stored.has_value())
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_SERVICE_UNAVAILABLE,
+            ccf::errors::InternalError,
+            "Issuer key not initialised; POST /signing-key first.");
+          return;
+        }
+        auto key = load_signing_key(stored.value());
+        const auto issued =
+          statement::issue_statement(SERVICE_ISS, iat, fields, *key);
+
+        ctx.tx.template rw<StatementTable>(STATEMENT_TABLE)->put(issued.token);
+
+        // Confidential store: retain the disclosures (the openings for every
+        // redacted field) in the PRIVATE table so the Operator can later
+        // produce duplicate-proofs. Write-only here (segregation invariant,
+        // DESIGN.md s8): the redacted-token build, digest binding and public
+        // store never read it.
+        ctx.tx.template rw<DisclosureTable>(DISCLOSURE_TABLE)
+          ->put(encode_disclosure_store(issued.disclosures));
+
+        // Bind the token's digest into the Merkle tree for this transaction, so
+        // the receipt attests exactly this redacted statement.
+        ctx.rpc_ctx->set_claims_digest(ccf::ClaimsDigest::Digest(issued.token));
+      }
+      catch (const std::exception& e)
+      {
+        ctx.rpc_ctx->set_error(
+          HTTP_STATUS_INTERNAL_SERVER_ERROR,
+          ccf::errors::InternalError,
+          fmt::format("Failed to register statement: {}", e.what()));
+        return;
+      }
+
+      // Respond once the transaction commits. The txid is returned in the
+      // standard `x-ms-ccf-transaction-id` header (no JSON body), matching
+      // CCF/SCITT convention and the all-CBOR/COSE surface.
+      ctx.rpc_ctx->set_consensus_committed_function(
+        [](ccf::endpoints::CommittedTxInfo& info) {
+          if (info.status == ccf::FinalTxStatus::Invalid)
+          {
+            info.rpc_ctx->set_response_status(HTTP_STATUS_SERVICE_UNAVAILABLE);
+            info.rpc_ctx->set_response_body(
+              std::string("Submission was rolled back; please retry."));
+            return;
+          }
+          info.rpc_ctx->set_response_header(
+            ccf::http::headers::CCF_TX_ID, info.tx_id.to_str());
+          info.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
+        });
+    }
+
     using SigningKeyIndex =
       ccf::indexing::strategies::SeqnosForValue_Bucketed<SigningKeyHistory>;
     std::shared_ptr<SigningKeyIndex> signing_key_index;

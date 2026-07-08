@@ -424,3 +424,85 @@ def test_at_rest_shape_is_uniform_regardless_of_references(network):
     # And it is the strict-uniformity shape: all content fields redacted.
     _, n_redacted = none_refs
     assert n_redacted == len(st.CONTENT_FIELDS)
+
+
+def test_operator_appends_follow_up(network):
+    """A follow-up is a child statement whose redacted `parent` field is
+    SHA-256(parent token) — i.e. the parent's claims digest, so it commits to
+    exactly the statement the parent's receipt attests. The link is hidden at
+    rest and revealed only when the Operator discloses `parent`."""
+    client = network.client()
+    op = network.client(user="user0")
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+
+    parent_txid = client.post(
+        "/reports", cbor2.dumps({"title": "root bug"}), "application/cbor"
+    ).tx_id
+
+    # Operator-gated; uses a read-write historical adapter (retry on 202/503).
+    fu = op.post_historical(
+        f"/reports/{parent_txid}/follow-ups",
+        cbor2.dumps({"body": "patched in v1.2.3", "patch": "abc123"}),
+        "application/cbor",
+    )
+    assert fu.status == 204, fu.body
+    fu_txid = fu.tx_id
+    assert fu_txid
+
+    # The follow-up is a normal, uniform statement (all content redacted).
+    fu_token = client.get_historical(f"/statements/{fu_txid}").body
+    st.validate_statement(fu_token, key)
+    _, n_redacted = st.redacted_shape(fu_token)
+    assert n_redacted == len(st.CONTENT_FIELDS)
+
+    # The expected link: SHA-256(parent's bare token) = the parent claims digest.
+    parent_transparent = client.get_historical(f"/statements/{parent_txid}").body
+    parent_link = sha256(_bare_statement(parent_transparent)).digest()
+    assert parent_link not in fu_token  # hidden at rest
+
+    # Operator discloses the follow-up's `parent`; the revealed link matches.
+    disc = op.post_historical(
+        f"/operator/statements/{fu_txid}/disclosure",
+        cbor2.dumps({"fields": ["parent"]}),
+        "application/cbor",
+    )
+    assert disc.status == 200, disc.body
+    out = st.validate_statement(disc.body, key)
+    assert out.disclosed[st.PARENT] == parent_link
+
+
+def test_follow_up_requires_operator(network):
+    """The follow-up endpoint is Operator-gated: anonymous callers are rejected."""
+    client = network.client()
+    parent_txid = client.post(
+        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
+    ).tx_id
+    anon = client.post(
+        f"/reports/{parent_txid}/follow-ups",
+        cbor2.dumps({"body": "y"}),
+        "application/cbor",
+    )
+    assert anon.status in (401, 403), anon.body
+
+
+def test_follow_up_rejects_non_statement_parent(network):
+    """A follow-up whose {parent_txid} is committed but is NOT a statement (here
+    genesis) is rejected — the claims-digest check guards against linking to a
+    stale per-tx Value read at an unrelated seqno."""
+    client = network.client()
+    op = network.client(user="user0")
+    parent_txid = client.post(
+        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
+    ).tx_id
+    view = parent_txid.split(".")[0]
+    non_statement = f"{view}.1"  # genesis tx: committed, not a statement
+    resp = op.post_historical(
+        f"/reports/{non_statement}/follow-ups",
+        cbor2.dumps({"body": "y"}),
+        "application/cbor",
+    )
+    assert resp.status in (400, 404), resp.body

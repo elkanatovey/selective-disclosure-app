@@ -311,9 +311,17 @@ Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
 **Operator-gated** (caller is the Operator **CCF user**, `user_cert_auth`; the
 Operator user is added by governance — §12.2):
 - `POST /reports/{parent_txid}/follow-ups` — CBOR content body (same shape as
-  `/reports`). Child statement; **`parent` = SHA-256 of `{parent_txid}`'s token**,
-  server-derived and salted+redacted like any field; indexed under parent;
-  returns transaction id + receipt. *(Pending.)*
+  `/reports`). Child statement; **`parent` = SHA-256 of `{parent_txid}`'s token**
+  = the parent's **claims digest**, so the child commits to exactly the statement
+  the parent's receipt attests; server-derived and salted+redacted like any
+  field. Uses a **read-write historical adapter** to read the parent at
+  `{parent_txid}` and write the child in one tx; rejects (404) unless
+  `{parent_txid}` genuinely committed a statement (the parent tx's claims digest
+  must equal `hash(token read)`, guarding against a stale per-tx `Value` read).
+  Returns **204 + txid header**. *(Live.)* *(The parent→children `NotesIndex` /
+  list-children query is **deferred** to the Operator stream, where egress
+  confidentiality is handled — until then the link lives in the child's redacted
+  `parent` field and follow-ups surface via `get_statements_since`.)*
 - `GET /operator/statements/{txid}` — a single **unredacted** transparent
   statement (all disclosures present + receipt). *(Pending.)*
 - `GET /operator/statements?since={seqno}&limit={n}` — the unredacted stream:
