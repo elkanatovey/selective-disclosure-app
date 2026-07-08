@@ -457,11 +457,35 @@ governance into two planes and deliberately keep only one of them:
   accepted issuers, trust anchors, a registration **policy engine**. Our
   notary / Model-A stance (open submission, **service is the sole signer**, §4)
   removes the need for this entirely. We do **not** reuse SCITT's registration
-  policy / governance endpoints (§13).
+  policy / governance endpoints (§13). See the note below for when it might be
+  reconsidered — **out of scope for the current PR**.
 - **Control-plane governance (used).** *Changing the rules*: app/code upgrades,
   schema/format changes, config (incl. the Operator identity), signing-key
   rotation, and service lifecycle / recovery. This is mostly **CCF's built-in
   governance**; we add only a small amount of custom config.
+
+**Note — a programmable submission policy (JS/Rego), deferred.** SCITT embeds a
+policy **engine** (a `ccf::js` JavaScript context, or a Rego/OPA interpreter,
+configured via governance) that runs on every `POST /entries` to decide whether a
+submitted *signed statement* is accepted. It exists because SCITT submitters sign
+their own statements, so the service must police adversarial issuers/claims — a
+driver we structurally **do not have** (the service signs; submitters send raw
+content, so there is no submitted signature/identity to gate). Even the plausible
+uses for us (evolvable field validation, an enrolment allow-list, bug-bounty
+scope) are governance-managed **data**, which a C++ handler can read from a KV
+config table — they need no interpreter. An embedded JS/Rego engine only earns its
+keep for governance-managed **logic** we cannot anticipate in code, which realistically
+arises only if the ledger becomes **multi-tenant / consortium-operated** or grows
+**enrolled submission with complex, frequently-changing eligibility rules**. The
+cost is not CPU (a simple policy is sub-ms, dwarfed by the consensus round a
+submission already pays) but **trust surface and operations**: an interpreter on
+the **untrusted-input path inside the TEE** (attack surface + a larger attested
+code measurement), a **tail-latency/DoS** vector that must be bounded (SCITT caps
+JS at 10 MB heap / 1 s, Rego at 10k statements, plus a max input size), and the
+overhead of authoring/testing/governing policies. **Recommendation if the need
+lands:** prefer authenticated submission + a **governance-managed allow-list KV
+table validated in C++** over an embedded engine, and only adopt the engine for
+the genuinely-multi-stakeholder case. Not part of this PR.
 
 **What CCF's built-in governance already covers** (member proposals, recorded
 on-ledger, auditable):
