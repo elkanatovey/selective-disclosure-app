@@ -244,10 +244,26 @@ index** enables the Operator stream. Concrete names in `app/src/reports.h`.
   is resolvable) **and their descendants** (so disclosing a whole field reveals
   its contents) — `select_disclosures`. Statements redact each `references`
   element individually (path `{1006, i}`), so the Operator can disclose a single
-  reference (`["references", i]`) without exposing its siblings, which are omitted
-  entirely (no count/position leak). The top-level redacted shape is unchanged:
-  the whole array is still one Redacted Claim Hash at rest; element hashes live
-  inside it and appear only once the array itself is disclosed.
+  reference (`["references", i]`) revealing **only its value**, not its siblings'
+  values. The top-level redacted shape is unchanged: the whole array is still one
+  Redacted Claim Hash **at rest**; element hashes live inside it and appear only
+  once the array itself is disclosed.
+- **Known limitation — array disclosure leaks length/position (accepted).**
+  Disclosing an array element necessarily discloses its container (ancestor
+  rule), and the container carries one `tag(60)` placeholder **per element**, so
+  the disclosed artifact reveals the array's **length** and lets the recipient
+  match the opening to its **position**. Only sibling *values* stay hidden. This
+  is a **disclosure-time, recipient-only** leak — **nothing leaks at rest** (the
+  `public:` token still shows just one hash), and the recipient is the party we
+  chose to hand a duplicate-proof. We deliberately do **not** hide it, because
+  the value is asymmetric: top-level field-presence uniformity defends against
+  *every* observer of the world-readable ledger permanently, whereas array count
+  reaches only the disclosure recipient. If a future threat model needs it, the
+  fix is small and local: pad each redactable array to a fixed cap with salt-only
+  **decoy element disclosures** at issue (mirrors the existing top-level
+  `pad_to`), so a disclosed array always shows `MAX_REFS` slots and the real
+  count/position is hidden among decoys — at the cost of an arbitrary cap and
+  larger disclosed artifacts.
 - **Segregation invariant (for easy migration):** the redacted-token build,
   claims-digest binding, receipt issuance and the public store **never read**
   the confidential store. It is *write-only* from the submit path and *read-only*
@@ -385,6 +401,9 @@ are chain logic that *consumes* those tokens.
   ON), segregated for easy migration. This dissolves the confidential
   service→Operator delivery channel for the initial implementation.
 - Principle: redacted tokens leak no metadata; keep token shape uniform.
+- ACCEPTED limitation: disclosing an **array element** reveals the array's
+  length/position to the disclosure recipient (never at rest). Not padded — see
+  §8 for the rationale and the (small) decoy-padding fix if ever needed.
 - "Operator can't read confidential state" is deployment/attestation-dependent —
   and now load-bearing for whole reports (not just disclosures), since the
   service holds plaintext in an encrypted private table.
