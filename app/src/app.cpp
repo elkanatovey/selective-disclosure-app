@@ -113,7 +113,7 @@ namespace selectivedisclosure
             HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput, e.what());
           return;
         }
-        issue_and_store(ctx, fields);
+        issue_and_store(ctx, fields, wants_wait(ctx));
       };
       make_endpoint(
         "/reports", HTTP_POST, submit_report, {ccf::empty_auth_policy})
@@ -482,7 +482,7 @@ namespace selectivedisclosure
         const auto digest = ccf::ClaimsDigest::Digest(parent.value());
         fields.parent = std::vector<uint8_t>(digest.h.begin(), digest.h.end());
 
-        issue_and_store(ctx, fields);
+        issue_and_store(ctx, fields, wants_wait(ctx));
       };
 
       auto parent_txid_from_path =
@@ -666,7 +666,9 @@ namespace selectivedisclosure
     // missing (503) or issuance fails (500). Shared by submit_report and
     // append_follow_up.
     void issue_and_store(
-      ccf::endpoints::EndpointContext& ctx, const statement::Fields& fields)
+      ccf::endpoints::EndpointContext& ctx,
+      const statement::Fields& fields,
+      bool wait)
     {
       int64_t iat = 0;
       ::timespec time{};
@@ -714,9 +716,21 @@ namespace selectivedisclosure
         return;
       }
 
-      // Respond once the transaction commits. The txid is returned in the
-      // standard `x-ms-ccf-transaction-id` header (no JSON body), matching
-      // CCF/SCITT convention and the all-CBOR/COSE surface.
+      if (!wait)
+      {
+        // Asynchronous: respond as soon as the transaction commits locally. The
+        // framework's default locally-committed handler adds the txid header,
+        // so the client gets the transaction id without blocking on global
+        // commit; it then polls GET /statements/{txid}/receipt until the
+        // receipt (which needs global commit) is available.
+        ctx.rpc_ctx->set_response_status(HTTP_STATUS_ACCEPTED);
+        return;
+      }
+
+      // Synchronous (default): hold the response until the transaction is
+      // globally committed, then return 204 + the txid header (and surface a
+      // rollback as 503). The txid is in the standard `x-ms-ccf-transaction-id`
+      // header (no JSON body), matching CCF/SCITT convention.
       ctx.rpc_ctx->set_consensus_committed_function(
         [](ccf::endpoints::CommittedTxInfo& info) {
           if (info.status == ccf::FinalTxStatus::Invalid)
@@ -739,6 +753,16 @@ namespace selectivedisclosure
     using StatementIndex =
       ccf::indexing::strategies::SeqnosForValue_Bucketed<StatementTable>;
     std::shared_ptr<StatementIndex> statement_index;
+
+    // Whether the submitter wants to block until global commit (default) or get
+    // an immediate 202 + txid to poll — `?wait=false` for the async path.
+    static bool wants_wait(ccf::endpoints::EndpointContext& ctx)
+    {
+      const auto pq = ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
+      std::string err;
+      return ccf::http::get_query_value_opt<bool>(pq, "wait", err)
+        .value_or(true);
+    }
 
     // Whether the transaction at `state` genuinely committed `token` as a
     // statement: its receipt's claims digest must equal hash(token). Guards the

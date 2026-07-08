@@ -98,8 +98,18 @@ class LedgerClient:
         deadline = time.time() + timeout_s
         while True:
             resp = do_request()
-            if resp.status not in (202, 503):
+            if not self._is_transient(resp):
                 return resp
             if time.time() >= deadline:
                 return resp
             time.sleep(0.2)
+
+    @staticmethod
+    def _is_transient(resp) -> bool:
+        """Whether a historical response is a retryable 'not ready yet' state:
+        202 (Accepted) / 503 (TransactionNotCached), or a 404 for a transaction
+        that is still Pending (e.g. polling right after an async ?wait=false
+        submission, before global commit)."""
+        if resp.status in (202, 503):
+            return True
+        return resp.status == 404 and b"TransactionPendingOrUnknown" in resp.body

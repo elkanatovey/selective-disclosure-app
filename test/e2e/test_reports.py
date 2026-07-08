@@ -792,3 +792,43 @@ def test_receipt_only_endpoint(network):
 
     view = txid.split(".")[0]
     assert client.get_historical(f"/statements/{view}.1/receipt").status == 404
+
+
+def test_async_submission(network):
+    """`?wait=false` returns 202 immediately with the txid header (no blocking on
+    global commit); the receipt becomes available by polling. The default
+    (blocking) path still returns 204."""
+    client = network.client()
+
+    resp = client.post(
+        "/reports?wait=false", cbor2.dumps({"title": "async"}), "application/cbor"
+    )
+    assert resp.status == 202, resp.body
+    txid = resp.tx_id
+    assert txid, "async submit must still return the txid header"
+
+    # The receipt is available once the tx is globally committed (poll).
+    r = client.get_historical(f"/statements/{txid}/receipt")
+    assert r.status == 200, r.body
+
+    # The default path is unchanged (blocking, 204).
+    d = client.post("/reports", cbor2.dumps({"title": "sync"}), "application/cbor")
+    assert d.status == 204, d.body
+    assert d.tx_id
+
+
+def test_async_follow_up(network):
+    """Follow-ups honour ?wait=false too."""
+    client = network.client()
+    op = network.client(user="user0")
+    parent = client.post(
+        "/reports", cbor2.dumps({"title": "p"}), "application/cbor"
+    ).tx_id
+    fu = op.post_historical(
+        f"/reports/{parent}/follow-ups?wait=false",
+        cbor2.dumps({"body": "note"}),
+        "application/cbor",
+    )
+    assert fu.status == 202, fu.body
+    assert fu.tx_id
+    assert client.get_historical(f"/statements/{fu.tx_id}/receipt").status == 200

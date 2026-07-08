@@ -301,12 +301,17 @@ Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
 **pending** = format/endpoint changes agreed but not yet coded.
 
 **Public (no auth):**
-- `POST /reports` — **CBOR** body: a content-fields map (`title`/`body`/
+- `POST /reports[?wait=false]` — **CBOR** body: a content-fields map (`title`/`body`/
   `component`/`severity`/`fingerprint`(bstr)/`references`/`patch`/`patch_date`;
   named keys, native types, **no `parent`**). Builds + signs the strict-uniformity
   SD-CWT, stores the redacted token **and its disclosures** (confidential store),
-  binds the claims digest, returns **204 + the transaction-id header**
-  (`x-ms-ccf-transaction-id`) on commit. *(Live.)*
+  binds the claims digest. **Synchronous by default**: holds the response until
+  global commit, then **204 + the transaction-id header**
+  (`x-ms-ccf-transaction-id`). **`?wait=false`** returns **202 + txid header**
+  immediately (on local commit) for the caller to poll
+  `GET /statements/{txid}/receipt` — SCITT's operations pattern, but reusing the
+  historical receipt endpoint as the poll target (no separate operations
+  resource). *(Live.)*
 - `GET /statements/{txid}` — the redacted statement with its CCF receipt embedded
   (transparent statement, `application/cose`). *(Live.)*
 - `GET /statements/{txid}/receipt` — the CCF receipt **alone** (`application/cose`),
