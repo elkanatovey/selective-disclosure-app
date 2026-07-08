@@ -159,7 +159,8 @@ namespace selectivedisclosure
     return std::nullopt;
   }
 
-  std::vector<std::string> parse_field_selection(std::span<const uint8_t> cbor)
+  std::vector<FieldPath> parse_disclosure_selection(
+    std::span<const uint8_t> cbor)
   {
     QCBORDecodeContext dc;
     QCBORDecode_Init(
@@ -177,12 +178,11 @@ namespace selectivedisclosure
       bad("disclosure request must have a `fields` array");
     }
 
-    std::vector<std::string> names;
+    std::vector<FieldPath> out;
     while (true)
     {
-      UsefulBufC s = NULLUsefulBufC;
-      QCBORDecode_GetTextString(&dc, &s);
-      const QCBORError e = QCBORDecode_GetError(&dc);
+      QCBORItem peek;
+      const QCBORError e = QCBORDecode_PeekNext(&dc, &peek);
       if (e == QCBOR_ERR_NO_MORE_ITEMS)
       {
         QCBORDecode_GetAndResetError(&dc); // normal end of array
@@ -190,9 +190,55 @@ namespace selectivedisclosure
       }
       if (e != QCBOR_SUCCESS)
       {
-        bad("`fields` must contain only strings");
+        bad("malformed `fields` entry");
       }
-      names.emplace_back(static_cast<const char*>(s.ptr), s.len);
+
+      FieldPath fp;
+      if (peek.uDataType == QCBOR_TYPE_TEXT_STRING)
+      {
+        // A bare field name: a whole top-level field.
+        UsefulBufC s = NULLUsefulBufC;
+        QCBORDecode_GetTextString(&dc, &s);
+        fp.name.assign(static_cast<const char*>(s.ptr), s.len);
+      }
+      else if (peek.uDataType == QCBOR_TYPE_ARRAY)
+      {
+        // A path: [name, idx, idx, ...].
+        QCBORDecode_EnterArray(&dc, nullptr);
+        UsefulBufC s = NULLUsefulBufC;
+        QCBORDecode_GetTextString(&dc, &s);
+        if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+        {
+          bad("a `fields` path must start with a field name");
+        }
+        fp.name.assign(static_cast<const char*>(s.ptr), s.len);
+        while (true)
+        {
+          int64_t idx = 0;
+          QCBORDecode_GetInt64(&dc, &idx);
+          const QCBORError ie = QCBORDecode_GetError(&dc);
+          if (ie == QCBOR_ERR_NO_MORE_ITEMS)
+          {
+            QCBORDecode_GetAndResetError(&dc);
+            break;
+          }
+          if (ie != QCBOR_SUCCESS)
+          {
+            bad("a `fields` path index must be an integer");
+          }
+          if (idx < 0)
+          {
+            bad("a `fields` path index must be non-negative");
+          }
+          fp.indices.push_back(idx);
+        }
+        QCBORDecode_ExitArray(&dc);
+      }
+      else
+      {
+        bad("a `fields` entry must be a name or a [name, idx, ...] path");
+      }
+      out.push_back(std::move(fp));
     }
     QCBORDecode_ExitArray(&dc);
 
@@ -201,6 +247,6 @@ namespace selectivedisclosure
     {
       bad("malformed disclosure request");
     }
-    return names;
+    return out;
   }
 }

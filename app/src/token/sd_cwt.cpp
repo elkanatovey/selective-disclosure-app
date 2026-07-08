@@ -348,7 +348,8 @@ namespace sdcwt
       HashAlg sd_alg,
       const RandomSource& rng,
       size_t salt_len,
-      std::vector<Disclosure>& disclosures)
+      std::vector<Disclosure>& disclosures,
+      const Path& prefix = {})
     {
       if (node.kind == CborValue::Kind::Map)
       {
@@ -382,12 +383,18 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             value :
-            redact_node(value, deeper, sd_alg, rng, salt_len, disclosures);
+            redact_node(value, deeper, sd_alg, rng, salt_len, disclosures, [&] {
+              Path p = prefix;
+              p.push_back(key);
+              return p;
+            }());
 
           if (direct)
           {
             Disclosure d;
             d.key = key;
+            d.path = prefix;
+            d.path.push_back(key);
             d.salt = rng(salt_len);
             d.encoded = encode_map_disclosure(d.salt, child, key);
             d.digest = disclosure_digest(d.encoded, sd_alg);
@@ -435,12 +442,18 @@ namespace sdcwt
           const CborValue child = deeper.empty() ?
             node.array_v[i] :
             redact_node(
-              node.array_v[i], deeper, sd_alg, rng, salt_len, disclosures);
+              node.array_v[i], deeper, sd_alg, rng, salt_len, disclosures, [&] {
+                Path p = prefix;
+                p.push_back(static_cast<int64_t>(i));
+                return p;
+              }());
 
           if (direct)
           {
             Disclosure d;
             d.key = std::nullopt;
+            d.path = prefix;
+            d.path.push_back(static_cast<int64_t>(i));
             d.salt = rng(salt_len);
             d.encoded = encode_elem_disclosure(d.salt, child);
             d.digest = disclosure_digest(d.encoded, sd_alg);

@@ -5,48 +5,48 @@
 #include "token/sd_cwt.h"
 
 #include <cstdint>
-#include <optional>
-#include <set>
 #include <span>
 #include <vector>
 
 namespace selectivedisclosure
 {
+  // A disclosure as held in the confidential store: its absolute path from the
+  // claims root (map keys / array indices) and its encoded `[salt, value, key]`
+  // (or `[salt, value]` / `[salt]`) bytes — the exact form `present()`
+  // consumes.
+  struct StoredDisclosure
+  {
+    sdcwt::Path path;
+    std::vector<uint8_t> encoded;
+  };
+
   // Serialise a statement's disclosures for the confidential store: a CBOR
-  // array of the individual disclosure encodings (each is `cbor([salt, value,
-  // key])` for a map entry, or `cbor([salt, value])` / `cbor([salt])`).
+  // array of `[path, encoded]` pairs, where `path` is itself a CBOR array of
+  // the path's elements (ints and/or text). Keeping each disclosure's path lets
+  // the Operator later select an arbitrary subset **at any depth**, pulling in
+  // the ancestor disclosures a nested reveal requires (draft-08 ancestor rule).
   //
-  // Storing the encodings is sufficient and minimal: `present()` consumes
-  // exactly these bytes, and each disclosure's salt / value / key are
-  // recoverable by decoding its entry. This is what the private DisclosureTable
-  // holds — written once on submit, never read on the submit path (the
-  // segregation invariant, DESIGN.md s8).
+  // This is what the private DisclosureTable holds — written once on submit and
+  // never read on the submit path (the segregation invariant, DESIGN.md s8).
   std::vector<uint8_t> encode_disclosure_store(
     const std::vector<sdcwt::Disclosure>& disclosures);
 
-  // Inverse of `encode_disclosure_store`: recover the ordered list of encoded
-  // disclosure byte-strings (the exact form `present()` consumes).
+  // Inverse of `encode_disclosure_store`: recover the ordered list of stored
+  // disclosures (path + encoded bytes).
   //
   // Throws std::invalid_argument if the bytes are not a CBOR array of
-  // byte-strings.
-  std::vector<std::vector<uint8_t>> decode_disclosure_store(
+  // `[path, encoded]` pairs.
+  std::vector<StoredDisclosure> decode_disclosure_store(
     std::span<const uint8_t> cbor);
 
-  // The map-entry key of an encoded disclosure (`cbor([salt, value, key])`),
-  // when that key is an integer claim id. Returns nullopt for a salt-only decoy
-  // (`[salt]`), a redacted array element (`[salt, value]`), or a non-integer
-  // key. Used to select disclosures by statement field id.
-  std::optional<int64_t> disclosure_key_id(std::span<const uint8_t> encoded);
-
-  // From the stored encoded disclosures, return (in stored order) those whose
-  // map-entry key is one of `field_ids` — the openings the Operator chooses to
-  // reveal. Disclosures without a matching integer key are never selected.
-  //
-  // NOTE: statements currently redact only whole top-level fields, so a field's
-  // key uniquely identifies its disclosure. Nested/recursive disclosure would
-  // additionally need to pull ancestor disclosures (the ancestor-disclosure
-  // rule) — future work when `redact_paths` is used.
+  // Select the disclosures to reveal for the requested target paths, returning
+  // their encoded bytes (the form `present()` consumes), ordered shallowest
+  // first. A stored disclosure is selected when it is **comparable** to some
+  // target — i.e. it is an ancestor-or-self of the target (needed so a nested
+  // reveal is resolvable — the ancestor rule) OR a descendant-or-self of it (so
+  // disclosing a whole field reveals its nested contents too). Siblings and
+  // unrelated branches are never selected.
   std::vector<std::vector<uint8_t>> select_disclosures(
-    const std::vector<std::vector<uint8_t>>& encoded_disclosures,
-    const std::set<int64_t>& field_ids);
+    const std::vector<StoredDisclosure>& stored,
+    const std::vector<sdcwt::Path>& targets);
 }

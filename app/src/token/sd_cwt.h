@@ -77,6 +77,10 @@ namespace sdcwt
   struct Disclosure
   {
     std::optional<CborKey> key;
+    // Absolute path from the claims-map root to this disclosure: map keys and
+    // array indices, e.g. {1006} for a whole claim or {1006, 0} for element 0.
+    // Empty for a synthetic decoy. Enables ancestor-aware selective disclosure.
+    Path path;
     std::vector<uint8_t> salt;
     std::vector<uint8_t>
       encoded; // cbor([salt, value, key]), cbor([salt, value]), or cbor([salt])

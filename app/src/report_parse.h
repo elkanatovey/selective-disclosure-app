@@ -29,8 +29,21 @@ namespace selectivedisclosure
   // disclosure. Includes `parent` (disclosable though never submitted).
   std::optional<int64_t> content_field_id(std::string_view name);
 
-  // Decode an Operator disclosure request `{"fields": ["title", ...]}` into the
-  // requested field names, in request order. Throws std::invalid_argument on a
-  // non-map body, a missing/!array `fields`, or a non-string entry.
-  std::vector<std::string> parse_field_selection(std::span<const uint8_t> cbor);
+  // One entry of an Operator disclosure request: a top-level content field name
+  // plus optional deeper array indices addressing a nested element. E.g. the
+  // request entry `"title"` -> {"title", {}}; `["references", 0]` ->
+  // {"references", {0}}.
+  struct FieldPath
+  {
+    std::string name;
+    std::vector<int64_t> indices;
+  };
+
+  // Decode an Operator disclosure request `{"fields": [ entry, ... ]}` where
+  // each entry is either a field name (tstr) or a path array `[name, idx, ...]`
+  // (a tstr followed by integer array indices). Returns the requested paths in
+  // request order. Throws std::invalid_argument on a non-map body, a
+  // missing/!array `fields`, or a malformed entry.
+  std::vector<FieldPath> parse_disclosure_selection(
+    std::span<const uint8_t> cbor);
 }

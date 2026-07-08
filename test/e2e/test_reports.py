@@ -244,3 +244,69 @@ def test_disclosure_requires_operator(network):
         "application/cbor",
     )
     assert anon.status in (401, 403), anon.body
+
+
+def test_operator_discloses_array_element(network):
+    """Recursive/subfield disclosure: the Operator reveals a single `references`
+    element without exposing its siblings. Proves the ancestor rule end-to-end —
+    the array container is disclosed so the element is resolvable, but the other
+    elements stay hidden (omitted, not just blanked)."""
+    client = network.client()
+    report = {
+        "title": "heap overflow",
+        "references": ["CVE-2025-0001", "CVE-2025-0002", "CVE-2025-0003"],
+    }
+    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
+    assert resp.status == 204, resp.body
+    txid = resp.tx_id
+
+    op = network.client(user="user0")
+    disc = op.post_historical(
+        f"/operator/statements/{txid}/disclosure",
+        cbor2.dumps({"fields": [["references", 1]]}),  # only element 1
+        "application/cbor",
+    )
+    assert disc.status == 200, disc.body
+    presented = disc.body
+
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key_pem = _verify_endorsed_key(
+        client.get_historical("/signing-key").body, service_cert
+    )
+    key = _ec2_key_from_pem(key_pem)
+
+    out = st.validate_statement(presented, key)
+    # references is disclosed as a top-level field; only element 1 is revealed,
+    # its siblings are omitted entirely (no count/position leak).
+    assert out.disclosed[st.REFERENCES] == ["CVE-2025-0002"]
+    assert st.TITLE not in out.disclosed  # unrelated field stays redacted
+
+    # Still transparent: the embedded receipt verifies.
+    assert RECEIPTS_LABEL in _uhdr(presented)
+    _verify_receipt(presented, service_cert)
+
+
+def test_operator_discloses_whole_array(network):
+    """Disclosing the whole `references` field reveals all its elements (the
+    field's descendants are pulled in), in contrast to element-level disclosure."""
+    client = network.client()
+    report = {"references": ["CVE-A", "CVE-B"]}
+    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
+    txid = resp.tx_id
+
+    op = network.client(user="user0")
+    disc = op.post_historical(
+        f"/operator/statements/{txid}/disclosure",
+        cbor2.dumps({"fields": ["references"]}),
+        "application/cbor",
+    )
+    assert disc.status == 200, disc.body
+
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+    out = st.validate_statement(disc.body, key)
+    assert out.disclosed[st.REFERENCES] == ["CVE-A", "CVE-B"]

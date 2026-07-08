@@ -343,22 +343,28 @@ namespace selectivedisclosure
       auto make_disclosure = [](
                                ccf::endpoints::ReadOnlyEndpointContext& ctx,
                                ccf::historical::StatePtr state) {
-        std::set<int64_t> ids;
+        std::vector<sdcwt::Path> targets;
         try
         {
-          for (const auto& name :
-               parse_field_selection(ctx.rpc_ctx->get_request_body()))
+          for (const auto& fp :
+               parse_disclosure_selection(ctx.rpc_ctx->get_request_body()))
           {
-            const auto id = content_field_id(name);
+            const auto id = content_field_id(fp.name);
             if (!id.has_value())
             {
               ctx.rpc_ctx->set_error(
                 HTTP_STATUS_BAD_REQUEST,
                 ccf::errors::InvalidInput,
-                fmt::format("Unknown disclosure field '{}'.", name));
+                fmt::format("Unknown disclosure field '{}'.", fp.name));
               return;
             }
-            ids.insert(*id);
+            sdcwt::Path p;
+            p.emplace_back(*id);
+            for (const auto idx : fp.indices)
+            {
+              p.emplace_back(idx);
+            }
+            targets.push_back(std::move(p));
           }
         }
         catch (const std::exception& e)
@@ -398,8 +404,8 @@ namespace selectivedisclosure
         std::vector<uint8_t> presented;
         try
         {
-          const auto selected =
-            select_disclosures(decode_disclosure_store(stored.value()), ids);
+          const auto selected = select_disclosures(
+            decode_disclosure_store(stored.value()), targets);
 
           // Embed the receipt first (transparent statement; label 394 = array
           // of receipts); present() then adds sd_claims (17) while preserving

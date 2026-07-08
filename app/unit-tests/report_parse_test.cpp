@@ -131,48 +131,83 @@ TEST(ContentFieldId, RejectsUnknownName)
   EXPECT_FALSE(content_field_id("").has_value());
 }
 
-// --- parse_field_selection: the Operator disclosure request ---------------
-TEST(FieldSelection, ParsesFieldsArray)
+// --- parse_disclosure_selection: the Operator disclosure request ----------
+TEST(FieldSelection, ParsesBareNames)
 {
-  using selectivedisclosure::parse_field_selection;
+  using selectivedisclosure::parse_disclosure_selection;
   const auto req = body([&](QCBOREncodeContext& ctx) {
     QCBOREncode_OpenArrayInMap(&ctx, "fields");
     QCBOREncode_AddSZString(&ctx, "title");
     QCBOREncode_AddSZString(&ctx, "component");
     QCBOREncode_CloseArray(&ctx);
   });
-  const auto names = parse_field_selection(req);
-  ASSERT_EQ(names.size(), 2u);
-  EXPECT_EQ(names[0], "title");
-  EXPECT_EQ(names[1], "component");
+  const auto sel = parse_disclosure_selection(req);
+  ASSERT_EQ(sel.size(), 2u);
+  EXPECT_EQ(sel[0].name, "title");
+  EXPECT_TRUE(sel[0].indices.empty());
+  EXPECT_EQ(sel[1].name, "component");
+}
+
+TEST(FieldSelection, ParsesNestedPath)
+{
+  using selectivedisclosure::parse_disclosure_selection;
+  const auto req = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_OpenArrayInMap(&ctx, "fields");
+    QCBOREncode_AddSZString(&ctx, "title"); // bare name
+    QCBOREncode_OpenArray(&ctx); // ["references", 2]
+    QCBOREncode_AddSZString(&ctx, "references");
+    QCBOREncode_AddInt64(&ctx, 2);
+    QCBOREncode_CloseArray(&ctx);
+    QCBOREncode_CloseArray(&ctx);
+  });
+  const auto sel = parse_disclosure_selection(req);
+  ASSERT_EQ(sel.size(), 2u);
+  EXPECT_EQ(sel[0].name, "title");
+  EXPECT_TRUE(sel[0].indices.empty());
+  EXPECT_EQ(sel[1].name, "references");
+  ASSERT_EQ(sel[1].indices.size(), 1u);
+  EXPECT_EQ(sel[1].indices[0], 2);
 }
 
 TEST(FieldSelection, ParsesEmptyFieldsArray)
 {
-  using selectivedisclosure::parse_field_selection;
+  using selectivedisclosure::parse_disclosure_selection;
   const auto req = body([&](QCBOREncodeContext& ctx) {
     QCBOREncode_OpenArrayInMap(&ctx, "fields");
     QCBOREncode_CloseArray(&ctx);
   });
-  EXPECT_TRUE(parse_field_selection(req).empty());
+  EXPECT_TRUE(parse_disclosure_selection(req).empty());
 }
 
 TEST(FieldSelection, RejectsMissingFields)
 {
-  using selectivedisclosure::parse_field_selection;
+  using selectivedisclosure::parse_disclosure_selection;
   const auto req = body([&](QCBOREncodeContext& ctx) {
     QCBOREncode_AddSZStringToMap(&ctx, "other", "x");
   });
-  EXPECT_THROW(parse_field_selection(req), std::invalid_argument);
+  EXPECT_THROW(parse_disclosure_selection(req), std::invalid_argument);
 }
 
-TEST(FieldSelection, RejectsNonStringEntry)
+TEST(FieldSelection, RejectsBareIntEntry)
 {
-  using selectivedisclosure::parse_field_selection;
+  using selectivedisclosure::parse_disclosure_selection;
   const auto req = body([&](QCBOREncodeContext& ctx) {
     QCBOREncode_OpenArrayInMap(&ctx, "fields");
     QCBOREncode_AddInt64(&ctx, 7);
     QCBOREncode_CloseArray(&ctx);
   });
-  EXPECT_THROW(parse_field_selection(req), std::invalid_argument);
+  EXPECT_THROW(parse_disclosure_selection(req), std::invalid_argument);
+}
+
+TEST(FieldSelection, RejectsPathWithoutName)
+{
+  using selectivedisclosure::parse_disclosure_selection;
+  const auto req = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_OpenArrayInMap(&ctx, "fields");
+    QCBOREncode_OpenArray(&ctx); // [0] — index without a leading name
+    QCBOREncode_AddInt64(&ctx, 0);
+    QCBOREncode_CloseArray(&ctx);
+    QCBOREncode_CloseArray(&ctx);
+  });
+  EXPECT_THROW(parse_disclosure_selection(req), std::invalid_argument);
 }

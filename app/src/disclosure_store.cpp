@@ -4,12 +4,86 @@
 
 #include "token/cbor.h"
 
+#include <algorithm>
 #include <qcbor/qcbor_decode.h>
 #include <qcbor/qcbor_spiffy_decode.h>
 #include <stdexcept>
+#include <variant>
 
 namespace selectivedisclosure
 {
+  namespace
+  {
+    void encode_path(QCBOREncodeContext& ctx, const sdcwt::Path& path)
+    {
+      QCBOREncode_OpenArray(&ctx);
+      for (const auto& elem : path)
+      {
+        if (std::holds_alternative<int64_t>(elem))
+        {
+          QCBOREncode_AddInt64(&ctx, std::get<int64_t>(elem));
+        }
+        else
+        {
+          QCBOREncode_AddSZString(&ctx, std::get<std::string>(elem).c_str());
+        }
+      }
+      QCBOREncode_CloseArray(&ctx);
+    }
+
+    sdcwt::Path decode_path(QCBORDecodeContext& dc)
+    {
+      QCBORDecode_EnterArray(&dc, nullptr);
+      if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+      {
+        throw std::invalid_argument("disclosure store: path must be an array");
+      }
+      sdcwt::Path path;
+      while (true)
+      {
+        QCBORItem item;
+        QCBORDecode_VGetNext(&dc, &item);
+        const QCBORError e = QCBORDecode_GetError(&dc);
+        if (e == QCBOR_ERR_NO_MORE_ITEMS)
+        {
+          QCBORDecode_GetAndResetError(&dc);
+          break;
+        }
+        if (e != QCBOR_SUCCESS)
+        {
+          throw std::invalid_argument("disclosure store: malformed path");
+        }
+        if (item.uDataType == QCBOR_TYPE_INT64)
+        {
+          path.emplace_back(item.val.int64);
+        }
+        else if (item.uDataType == QCBOR_TYPE_TEXT_STRING)
+        {
+          path.emplace_back(std::string(
+            static_cast<const char*>(item.val.string.ptr),
+            item.val.string.len));
+        }
+        else
+        {
+          throw std::invalid_argument(
+            "disclosure store: path element must be int or text");
+        }
+      }
+      QCBORDecode_ExitArray(&dc);
+      return path;
+    }
+
+    // Is `a` a prefix of (or equal to) `b`?
+    bool is_prefix(const sdcwt::Path& a, const sdcwt::Path& b)
+    {
+      if (a.size() > b.size())
+      {
+        return false;
+      }
+      return std::equal(a.begin(), a.end(), b.begin());
+    }
+  }
+
   std::vector<uint8_t> encode_disclosure_store(
     const std::vector<sdcwt::Disclosure>& disclosures)
   {
@@ -17,13 +91,16 @@ namespace selectivedisclosure
       QCBOREncode_OpenArray(&ctx);
       for (const auto& d : disclosures)
       {
+        QCBOREncode_OpenArray(&ctx);
+        encode_path(ctx, d.path);
         QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
+        QCBOREncode_CloseArray(&ctx);
       }
       QCBOREncode_CloseArray(&ctx);
     });
   }
 
-  std::vector<std::vector<uint8_t>> decode_disclosure_store(
+  std::vector<StoredDisclosure> decode_disclosure_store(
     std::span<const uint8_t> cbor)
   {
     QCBORDecodeContext dc;
@@ -36,24 +113,41 @@ namespace selectivedisclosure
       throw std::invalid_argument("disclosure store must be a CBOR array");
     }
 
-    std::vector<std::vector<uint8_t>> out;
+    std::vector<StoredDisclosure> out;
     while (true)
     {
-      UsefulBufC b = NULLUsefulBufC;
-      QCBORDecode_GetByteString(&dc, &b);
-      const QCBORError e = QCBORDecode_GetError(&dc);
+      QCBORItem peek;
+      const QCBORError e = QCBORDecode_PeekNext(&dc, &peek);
       if (e == QCBOR_ERR_NO_MORE_ITEMS)
       {
-        QCBORDecode_GetAndResetError(&dc); // normal end of array
+        QCBORDecode_GetAndResetError(&dc);
         break;
       }
       if (e != QCBOR_SUCCESS)
       {
+        throw std::invalid_argument("malformed disclosure store");
+      }
+
+      // Each entry is a [path, encoded] pair.
+      QCBORDecode_EnterArray(&dc, nullptr);
+      if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+      {
         throw std::invalid_argument(
-          "disclosure store must contain only byte-strings");
+          "disclosure store entry must be a [path, encoded] pair");
+      }
+      StoredDisclosure d;
+      d.path = decode_path(dc);
+      UsefulBufC b = NULLUsefulBufC;
+      QCBORDecode_GetByteString(&dc, &b);
+      if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+      {
+        throw std::invalid_argument(
+          "disclosure store entry must carry encoded bytes");
       }
       const auto* p = static_cast<const uint8_t*>(b.ptr);
-      out.emplace_back(p, p + b.len);
+      d.encoded.assign(p, p + b.len);
+      QCBORDecode_ExitArray(&dc);
+      out.push_back(std::move(d));
     }
 
     QCBORDecode_ExitArray(&dc);
@@ -64,50 +158,34 @@ namespace selectivedisclosure
     return out;
   }
 
-  std::optional<int64_t> disclosure_key_id(std::span<const uint8_t> encoded)
-  {
-    QCBORDecodeContext dc;
-    QCBORDecode_Init(
-      &dc,
-      UsefulBufC{encoded.data(), encoded.size()},
-      QCBOR_DECODE_MODE_NORMAL);
-
-    QCBORDecode_EnterArray(&dc, nullptr);
-    if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
-    {
-      return std::nullopt; // not a salted-disclosure array
-    }
-
-    QCBORItem item;
-    QCBORDecode_VGetNextConsume(&dc, &item); // salt (bstr)
-    QCBORDecode_VGetNextConsume(&dc, &item); // value (any subtree)
-    QCBORDecode_VGetNextConsume(&dc, &item); // key (map entries only)
-
-    std::optional<int64_t> id;
-    if (
-      QCBORDecode_GetError(&dc) == QCBOR_SUCCESS &&
-      item.uDataType == QCBOR_TYPE_INT64)
-    {
-      id = item.val.int64;
-    }
-
-    QCBORDecode_GetAndResetError(&dc); // tolerate short arrays / non-int keys
-    QCBORDecode_ExitArray(&dc);
-    return id;
-  }
-
   std::vector<std::vector<uint8_t>> select_disclosures(
-    const std::vector<std::vector<uint8_t>>& encoded_disclosures,
-    const std::set<int64_t>& field_ids)
+    const std::vector<StoredDisclosure>& stored,
+    const std::vector<sdcwt::Path>& targets)
   {
-    std::vector<std::vector<uint8_t>> out;
-    for (const auto& enc : encoded_disclosures)
+    // Keep stored order but partition by depth so ancestors precede descendants
+    // (resolution is order-independent, but this is deterministic and clear).
+    std::vector<const StoredDisclosure*> picked;
+    for (const auto& d : stored)
     {
-      const auto id = disclosure_key_id(enc);
-      if (id.has_value() && field_ids.count(*id) != 0)
+      const bool comparable =
+        std::any_of(targets.begin(), targets.end(), [&](const sdcwt::Path& t) {
+          return is_prefix(d.path, t) || is_prefix(t, d.path);
+        });
+      if (comparable)
       {
-        out.push_back(enc);
+        picked.push_back(&d);
       }
+    }
+    std::stable_sort(
+      picked.begin(), picked.end(), [](const auto* a, const auto* b) {
+        return a->path.size() < b->path.size();
+      });
+
+    std::vector<std::vector<uint8_t>> out;
+    out.reserve(picked.size());
+    for (const auto* d : picked)
+    {
+      out.push_back(d->encoded);
     }
     return out;
   }

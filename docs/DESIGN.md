@@ -234,13 +234,20 @@ index** enables the Operator stream. Concrete names in `app/src/reports.h`.
   public token's clear fields this reconstructs the full report). Chosen for
   implementation ease — it dissolves the separate confidential-delivery channel
   and lets the service produce duplicate-proofs directly.
-- **Granular + recursive disclosure:** the store keeps the **individual**
-  disclosures (NOT a monolithic plaintext blob) so `make_disclosure` can reveal
-  an arbitrary subset at any depth. Because nested disclosure follows the
-  ancestor-disclosure rule, each disclosure is annotated with its **full path**,
-  and `make_disclosure(target_paths)` selects the targets **plus their ancestor
-  disclosures**. (Likely a small `sd_cwt` helper: given all disclosures + target
-  paths, return the minimal disclosure set incl. ancestors.)
+- **Granular + recursive disclosure (implemented):** the store keeps the
+  **individual** disclosures (NOT a monolithic plaintext blob) so
+  `make_disclosure` can reveal an arbitrary subset **at any depth**. Because
+  nested disclosure follows the ancestor-disclosure rule, each disclosure is
+  annotated with its **full path** (`sdcwt::Disclosure::path`, recorded at issue
+  time and persisted in the store as `[path, encoded]`), and the disclosure
+  request selects targets **plus their ancestor disclosures** (so a nested reveal
+  is resolvable) **and their descendants** (so disclosing a whole field reveals
+  its contents) — `select_disclosures`. Statements redact each `references`
+  element individually (path `{1006, i}`), so the Operator can disclose a single
+  reference (`["references", i]`) without exposing its siblings, which are omitted
+  entirely (no count/position leak). The top-level redacted shape is unchanged:
+  the whole array is still one Redacted Claim Hash at rest; element hashes live
+  inside it and appear only once the array itself is disclosed.
 - **Segregation invariant (for easy migration):** the redacted-token build,
   claims-digest binding, receipt issuance and the public store **never read**
   the confidential store. It is *write-only* from the submit path and *read-only*
@@ -298,11 +305,14 @@ Operator user is added by governance — §12.2):
   seqno order, each with its receipt; response carries a **next cursor / latest
   seqno**. Operator holds its own high-water cursor; stateless + replay-idempotent.
   Reuses CCF seqno-indexed historical queries. *(Pending.)*
-- `POST /operator/statements/{txid}/disclosure` — body `{fields:[names]}`; returns
-  a single **presented + transparent** COSE artifact (targeted disclosures
-  attached, receipt embedded) for the Operator to hand a researcher.
-  `make_disclosure`. *(Live.)* *(Reverts to offline Operator-side tooling if
-  `store_unredacted` is OFF — self-custody.)*
+- `POST /operator/statements/{txid}/disclosure` — body `{fields:[ entry, ... ]}`
+  where each entry is a field name (whole field) or a path `[name, idx, ...]`
+  (a nested array element, e.g. `["references", 0]`); returns a single
+  **presented + transparent** COSE artifact (targeted disclosures + their
+  required ancestors attached, receipt embedded) for the Operator to hand a
+  researcher. `make_disclosure`. *(Live, incl. subfield/recursive disclosure.)*
+  *(Reverts to offline Operator-side tooling if `store_unredacted` is OFF —
+  self-custody.)*
 
 **Trust/ordering note:** precedence and duplicate ordering use the **seqno**
 (receipt-anchored, trusted). The `iat` clear claim is untrusted host wall-clock —
