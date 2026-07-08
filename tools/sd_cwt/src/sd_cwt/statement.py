@@ -180,7 +180,7 @@ def issue_statement(
     # field) so a single reference can later be disclosed without revealing its
     # siblings. Only when present as a list (an absent field is a garbage
     # sentinel with no elements). Mirrors the C++ token core (statement.cpp).
-    redact_elements = None
+    redact_elements: Optional[dict[Any, set[int]]] = None
     if references is not None:
         redact_elements = {REFERENCES: set(range(len(references)))}
     return issue(
