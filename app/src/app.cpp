@@ -334,6 +334,109 @@ namespace selectivedisclosure
         {ccf::empty_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
+
+      // --- make_disclosure: the Operator reveals a chosen subset of a
+      // statement's fields, returning a presented + transparent statement.
+      // Reads the confidential store (private) — the only reader, upholding the
+      // segregation invariant — and is gated to the Operator (a CCF user).
+      // -----
+      auto make_disclosure = [](
+                               ccf::endpoints::ReadOnlyEndpointContext& ctx,
+                               ccf::historical::StatePtr state) {
+        std::set<int64_t> ids;
+        try
+        {
+          for (const auto& name :
+               parse_field_selection(ctx.rpc_ctx->get_request_body()))
+          {
+            const auto id = content_field_id(name);
+            if (!id.has_value())
+            {
+              ctx.rpc_ctx->set_error(
+                HTTP_STATUS_BAD_REQUEST,
+                ccf::errors::InvalidInput,
+                fmt::format("Unknown disclosure field '{}'.", name));
+              return;
+            }
+            ids.insert(*id);
+          }
+        }
+        catch (const std::exception& e)
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput, e.what());
+          return;
+        }
+
+        auto historical_tx = state->store->create_read_only_tx();
+        auto* stmt_handle =
+          historical_tx.template ro<StatementTable>(STATEMENT_TABLE);
+        const auto token = stmt_handle->get();
+        if (!token.has_value())
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_NOT_FOUND,
+            ccf::errors::ResourceNotFound,
+            fmt::format(
+              "Transaction {} is not a statement submission.",
+              state->transaction_id.to_str()));
+          return;
+        }
+
+        auto* disc_handle =
+          historical_tx.template ro<DisclosureTable>(DISCLOSURE_TABLE);
+        const auto stored = disc_handle->get();
+        if (!stored.has_value())
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_NOT_FOUND,
+            ccf::errors::ResourceNotFound,
+            "No confidential disclosures were retained for this statement.");
+          return;
+        }
+
+        std::vector<uint8_t> presented;
+        try
+        {
+          const auto selected =
+            select_disclosures(decode_disclosure_store(stored.value()), ids);
+
+          // Embed the receipt first (transparent statement; label 394 = array
+          // of receipts); present() then adds sd_claims (17) while preserving
+          // the receipt — a presented + transparent statement.
+          const auto cose_receipt = make_cose_receipt(state->receipt);
+          const int64_t receipts_label = 394;
+          const ccf::cose::edit::desc::Value receipts_desc{
+            ccf::cose::edit::pos::InArray{}, receipts_label, cose_receipt};
+          const auto transparent = ccf::cose::edit::set_unprotected_header(
+            token.value(), receipts_desc);
+
+          presented = sdcwt::present(transparent, selected);
+        }
+        catch (const std::exception& e)
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_INTERNAL_SERVER_ERROR,
+            ccf::errors::InternalError,
+            fmt::format("Failed to build disclosure: {}", e.what()));
+          return;
+        }
+
+        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+        ctx.rpc_ctx->set_response_header(
+          ccf::http::headers::CONTENT_TYPE,
+          ccf::http::headervalues::contenttype::COSE);
+        ctx.rpc_ctx->set_response_body(presented);
+      };
+
+      make_read_only_endpoint(
+        "/operator/statements/{txid}/disclosure",
+        HTTP_POST,
+        ccf::historical::read_only_adapter_v4(
+          make_disclosure, context, is_tx_committed, txid_from_path),
+        {ccf::user_cert_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
     }
 
   private:

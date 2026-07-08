@@ -2,9 +2,13 @@
 // Licensed under the MIT License.
 #include "report_parse.h"
 
+#include "token/statement.h"
+
+#include <array>
 #include <qcbor/qcbor_decode.h>
 #include <qcbor/qcbor_spiffy_decode.h>
 #include <stdexcept>
+#include <utility>
 
 namespace selectivedisclosure
 {
@@ -129,5 +133,74 @@ namespace selectivedisclosure
       bad("malformed CBOR request body");
     }
     return f;
+  }
+
+  std::optional<int64_t> content_field_id(std::string_view name)
+  {
+    namespace st = sdcwt::statement;
+    static const std::array<std::pair<std::string_view, int64_t>, 9> kMap = {{
+      {"parent", st::PARENT},
+      {"title", st::TITLE},
+      {"body", st::BODY},
+      {"component", st::COMPONENT},
+      {"severity", st::SEVERITY},
+      {"fingerprint", st::FINGERPRINT},
+      {"references", st::REFERENCES},
+      {"patch", st::PATCH},
+      {"patch_date", st::PATCH_DATE},
+    }};
+    for (const auto& [n, id] : kMap)
+    {
+      if (n == name)
+      {
+        return id;
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::vector<std::string> parse_field_selection(std::span<const uint8_t> cbor)
+  {
+    QCBORDecodeContext dc;
+    QCBORDecode_Init(
+      &dc, UsefulBufC{cbor.data(), cbor.size()}, QCBOR_DECODE_MODE_NORMAL);
+
+    QCBORDecode_EnterMap(&dc, nullptr);
+    if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+    {
+      bad("disclosure request must be a CBOR map");
+    }
+
+    QCBORDecode_EnterArrayFromMapSZ(&dc, "fields");
+    if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+    {
+      bad("disclosure request must have a `fields` array");
+    }
+
+    std::vector<std::string> names;
+    while (true)
+    {
+      UsefulBufC s = NULLUsefulBufC;
+      QCBORDecode_GetTextString(&dc, &s);
+      const QCBORError e = QCBORDecode_GetError(&dc);
+      if (e == QCBOR_ERR_NO_MORE_ITEMS)
+      {
+        QCBORDecode_GetAndResetError(&dc); // normal end of array
+        break;
+      }
+      if (e != QCBOR_SUCCESS)
+      {
+        bad("`fields` must contain only strings");
+      }
+      names.emplace_back(static_cast<const char*>(s.ptr), s.len);
+    }
+    QCBORDecode_ExitArray(&dc);
+
+    QCBORDecode_ExitMap(&dc);
+    if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
+    {
+      bad("malformed disclosure request");
+    }
+    return names;
   }
 }

@@ -183,3 +183,64 @@ def test_signing_key_is_endorsed(network):
         ccf.cose.verify_receipt(
             receipt, _service_key(service_cert), sha256(b"not-the-key").digest()
         )
+
+
+def test_operator_discloses_subset(network):
+    """The Operator reveals a chosen subset of a statement's fields. The result
+    is a presented + transparent statement: it verifies under the endorsed key,
+    the CCF receipt still verifies, exactly the requested fields are disclosed,
+    and the rest stay redacted (the confidential store never leaks them)."""
+    client = network.client()
+    report = {
+        "title": "heap overflow in parser",
+        "body": "secret exploit details",
+        "component": "parser",
+        "severity": "high",
+    }
+    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
+    assert resp.status == 204, resp.body
+    txid = resp.tx_id
+
+    # The Operator (a CCF user) selectively discloses two fields.
+    op = network.client(user="user0")
+    disc = op.post_historical(
+        f"/operator/statements/{txid}/disclosure",
+        cbor2.dumps({"fields": ["title", "component"]}),
+        "application/cbor",
+    )
+    assert disc.status == 200, disc.body
+    assert "application/cose" in disc.content_type
+    presented = disc.body
+
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key_pem = _verify_endorsed_key(
+        client.get_historical("/signing-key").body, service_cert
+    )
+    key = _ec2_key_from_pem(key_pem)
+
+    # Signature verifies; exactly the requested fields are revealed.
+    out = st.validate_statement(presented, key)
+    assert out.disclosed[st.TITLE] == "heap overflow in parser"
+    assert out.disclosed[st.COMPONENT] == "parser"
+    assert st.BODY not in out.disclosed
+    assert st.SEVERITY not in out.disclosed
+
+    # Still transparent: the embedded receipt verifies against the service.
+    assert RECEIPTS_LABEL in _uhdr(presented)
+    _verify_receipt(presented, service_cert)
+
+
+def test_disclosure_requires_operator(network):
+    """The disclosure endpoint is Operator-gated: an anonymous caller (no client
+    certificate) is rejected before any confidential state is touched."""
+    client = network.client()
+    resp = client.post("/reports", cbor2.dumps({"title": "x"}), "application/cbor")
+    txid = resp.tx_id
+
+    anon = client.post(
+        f"/operator/statements/{txid}/disclosure",
+        cbor2.dumps({"fields": ["title"]}),
+        "application/cbor",
+    )
+    assert anon.status in (401, 403), anon.body

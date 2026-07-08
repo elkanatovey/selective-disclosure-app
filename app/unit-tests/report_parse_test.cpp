@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <gtest/gtest.h>
+#include <stdexcept>
 
 using selectivedisclosure::parse_report_fields;
 
@@ -104,4 +105,74 @@ TEST(ReportParse, ReferencesMustBeStrings)
     QCBOREncode_CloseArray(&ctx);
   });
   EXPECT_THROW(parse_report_fields(cbor), std::invalid_argument);
+}
+
+// --- content_field_id: the name<->id source of truth ----------------------
+TEST(ContentFieldId, MapsEveryContentField)
+{
+  using selectivedisclosure::content_field_id;
+  namespace st = sdcwt::statement;
+  EXPECT_EQ(content_field_id("parent"), st::PARENT);
+  EXPECT_EQ(content_field_id("title"), st::TITLE);
+  EXPECT_EQ(content_field_id("body"), st::BODY);
+  EXPECT_EQ(content_field_id("component"), st::COMPONENT);
+  EXPECT_EQ(content_field_id("severity"), st::SEVERITY);
+  EXPECT_EQ(content_field_id("fingerprint"), st::FINGERPRINT);
+  EXPECT_EQ(content_field_id("references"), st::REFERENCES);
+  EXPECT_EQ(content_field_id("patch"), st::PATCH);
+  EXPECT_EQ(content_field_id("patch_date"), st::PATCH_DATE);
+}
+
+TEST(ContentFieldId, RejectsUnknownName)
+{
+  using selectivedisclosure::content_field_id;
+  EXPECT_FALSE(content_field_id("nope").has_value());
+  EXPECT_FALSE(content_field_id("iss").has_value());
+  EXPECT_FALSE(content_field_id("").has_value());
+}
+
+// --- parse_field_selection: the Operator disclosure request ---------------
+TEST(FieldSelection, ParsesFieldsArray)
+{
+  using selectivedisclosure::parse_field_selection;
+  const auto req = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_OpenArrayInMap(&ctx, "fields");
+    QCBOREncode_AddSZString(&ctx, "title");
+    QCBOREncode_AddSZString(&ctx, "component");
+    QCBOREncode_CloseArray(&ctx);
+  });
+  const auto names = parse_field_selection(req);
+  ASSERT_EQ(names.size(), 2u);
+  EXPECT_EQ(names[0], "title");
+  EXPECT_EQ(names[1], "component");
+}
+
+TEST(FieldSelection, ParsesEmptyFieldsArray)
+{
+  using selectivedisclosure::parse_field_selection;
+  const auto req = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_OpenArrayInMap(&ctx, "fields");
+    QCBOREncode_CloseArray(&ctx);
+  });
+  EXPECT_TRUE(parse_field_selection(req).empty());
+}
+
+TEST(FieldSelection, RejectsMissingFields)
+{
+  using selectivedisclosure::parse_field_selection;
+  const auto req = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddSZStringToMap(&ctx, "other", "x");
+  });
+  EXPECT_THROW(parse_field_selection(req), std::invalid_argument);
+}
+
+TEST(FieldSelection, RejectsNonStringEntry)
+{
+  using selectivedisclosure::parse_field_selection;
+  const auto req = body([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_OpenArrayInMap(&ctx, "fields");
+    QCBOREncode_AddInt64(&ctx, 7);
+    QCBOREncode_CloseArray(&ctx);
+  });
+  EXPECT_THROW(parse_field_selection(req), std::invalid_argument);
 }

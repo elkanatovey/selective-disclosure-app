@@ -277,13 +277,13 @@ Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
   `component`/`severity`/`fingerprint`(bstr)/`references`/`patch`/`patch_date`;
   named keys, native types, **no `parent`**). Builds + signs the strict-uniformity
   SD-CWT, stores the redacted token **and its disclosures** (confidential store),
-  binds the claims digest, returns the **transaction id** on commit. *(Live, but
-  body is pending JSON→CBOR.)*
+  binds the claims digest, returns **204 + the transaction-id header**
+  (`x-ms-ccf-transaction-id`) on commit. *(Live.)*
 - `GET /statements/{txid}` — the redacted statement with its CCF receipt embedded
   (transparent statement, `application/cose`). *(Live.)*
 - `GET /signing-key` — the issuer public key **plus its endorsement** (the receipt
   of its on-ledger registration), so verifiers validate it against the service
-  identity (§4). *(Live, but pending bare-PEM→endorsed.)*
+  identity (§4). *(Live.)*
 
 **Operator-gated** (caller is the Operator **CCF user**, `user_cert_auth`; the
 Operator user is added by governance — §12.2):
@@ -301,8 +301,8 @@ Operator user is added by governance — §12.2):
 - `POST /operator/statements/{txid}/disclosure` — body `{fields:[names]}`; returns
   a single **presented + transparent** COSE artifact (targeted disclosures
   attached, receipt embedded) for the Operator to hand a researcher.
-  `make_disclosure`. *(Reverts to offline Operator-side tooling if
-  `store_unredacted` is OFF — self-custody.) (Pending.)*
+  `make_disclosure`. *(Live.)* *(Reverts to offline Operator-side tooling if
+  `store_unredacted` is OFF — self-custody.)*
 
 **Trust/ordering note:** precedence and duplicate ordering use the **seqno**
 (receipt-anchored, trusted). The `iat` clear claim is untrusted host wall-clock —

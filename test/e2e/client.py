@@ -79,9 +79,25 @@ class LedgerClient:
         ledger entry is still being fetched. CCF signals "not ready yet" with a
         202 (Accepted) or a 503 (TransactionNotCached); retry until it resolves
         or the timeout elapses."""
+        return self._retry_historical(lambda: self.get(path), timeout_s)
+
+    def post_historical(
+        self,
+        path: str,
+        body: bytes,
+        content_type: str,
+        timeout_s: float = 20.0,
+    ) -> Response:
+        """POST to an endpoint backed by a CCF historical query (e.g. Operator
+        disclosure), retrying while the ledger entry is still being fetched."""
+        return self._retry_historical(
+            lambda: self.post(path, body, content_type), timeout_s
+        )
+
+    def _retry_historical(self, do_request, timeout_s: float) -> Response:
         deadline = time.time() + timeout_s
         while True:
-            resp = self.get(path)
+            resp = do_request()
             if resp.status not in (202, 503):
                 return resp
             if time.time() >= deadline:
