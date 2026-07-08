@@ -303,6 +303,43 @@ namespace selectivedisclosure
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
 
+      // --- get_statement_receipt: the CCF receipt alone (COSE), for a verifier
+      // that only needs the inclusion/ordering proof without the (redacted)
+      // statement bytes. Mirrors SCITT's GET /entries/{txid}. -----------------
+      auto get_statement_receipt =
+        [](
+          ccf::endpoints::ReadOnlyEndpointContext& ctx,
+          ccf::historical::StatePtr state) {
+          auto htx = state->store->create_read_only_tx();
+          const auto entry =
+            htx.template ro<StatementTable>(STATEMENT_TABLE)->get();
+          if (!entry.has_value() || !commits_statement(state, entry.value()))
+          {
+            ctx.rpc_ctx->set_error(
+              HTTP_STATUS_NOT_FOUND,
+              ccf::errors::ResourceNotFound,
+              fmt::format(
+                "Transaction {} is not a statement submission.",
+                state->transaction_id.to_str()));
+            return;
+          }
+          const auto receipt = make_cose_receipt(state->receipt);
+          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+          ctx.rpc_ctx->set_response_header(
+            ccf::http::headers::CONTENT_TYPE,
+            ccf::http::headervalues::contenttype::COSE);
+          ctx.rpc_ctx->set_response_body(receipt);
+        };
+
+      make_read_only_endpoint(
+        "/statements/{txid}/receipt",
+        HTTP_GET,
+        ccf::historical::read_only_adapter_v4(
+          get_statement_receipt, context, is_tx_committed, txid_from_path),
+        {ccf::empty_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
+
       // --- make_disclosure: the Operator reveals a chosen subset of a
       // statement's fields, returning a presented + transparent statement.
       // Reads the confidential store (private) — the only reader, upholding the

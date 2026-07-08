@@ -309,6 +309,9 @@ Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
   (`x-ms-ccf-transaction-id`) on commit. *(Live.)*
 - `GET /statements/{txid}` — the redacted statement with its CCF receipt embedded
   (transparent statement, `application/cose`). *(Live.)*
+- `GET /statements/{txid}/receipt` — the CCF receipt **alone** (`application/cose`),
+  for a verifier that only needs the inclusion/ordering proof, not the (redacted)
+  statement bytes. Mirrors SCITT's `GET /entries/{txid}`. *(Live.)*
 - `GET /signing-key[?at={seqno}]` — the issuer public key **plus its endorsement**
   (the receipt of its on-ledger registration), so verifiers validate it against
   the service identity (§4). Default returns the **latest** registration; `?at=`

@@ -758,3 +758,37 @@ def test_signing_key_rotation(network):
     st.validate_statement(a_tok, _ec2_key_from_pem(key1_pem))
     with pytest.raises(Exception):
         st.validate_statement(a_tok, _ec2_key_from_pem(key2_pem))
+
+
+def test_receipt_only_endpoint(network):
+    """GET /statements/{txid}/receipt returns just the COSE receipt (no token),
+    and it cryptographically verifies against the service identity for the
+    statement's claim digest. A wrong digest is rejected; a non-statement txid
+    is 404."""
+    import ccf.cose
+    from cryptography.x509 import load_pem_x509_certificate
+
+    client = network.client()
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    service_key = load_pem_x509_certificate(service_cert).public_key()
+
+    txid = client.post(
+        "/reports", cbor2.dumps({"title": "r"}), "application/cbor"
+    ).tx_id
+
+    resp = client.get_historical(f"/statements/{txid}/receipt")
+    assert resp.status == 200, resp.body
+    assert "application/cose" in resp.content_type
+    receipt = resp.body
+
+    # The receipt attests the statement's claim digest = SHA-256(bare token).
+    transparent = client.get_historical(f"/statements/{txid}").body
+    claim_digest = sha256(_bare_statement(transparent)).digest()
+    ccf.cose.verify_receipt(receipt, service_key, claim_digest)  # raises on fail
+
+    with pytest.raises(Exception):
+        ccf.cose.verify_receipt(receipt, service_key, b"\x00" * 32)
+
+    view = txid.split(".")[0]
+    assert client.get_historical(f"/statements/{view}.1/receipt").status == 404
