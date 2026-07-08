@@ -506,3 +506,60 @@ def test_follow_up_rejects_non_statement_parent(network):
         "application/cbor",
     )
     assert resp.status in (400, 404), resp.body
+
+
+def _redacted_hashes(token: bytes) -> list:
+    """The top-level Redacted Claim Hashes (simple(59) array) of a token's
+    payload — what an at-rest observer of the public statement sees."""
+    obj = cbor2.loads(token)
+    arr = obj.value if hasattr(obj, "value") else obj
+    payload = cbor2.loads(arr[2])
+    return payload.get(cbor2.CBORSimpleValue(59), [])
+
+
+def test_follow_up_parent_link_is_salted(network):
+    """The child->parent link is salted, and that is load-bearing: the parent
+    hash is derived from the PUBLIC parent token, so without a per-field random
+    salt an observer could brute-force the link by hashing every public
+    statement. Proof: two follow-ups of the SAME parent have DISJOINT redacted
+    hashes at rest (uncorrelatable), yet both disclose to the SAME parent link
+    (the value is deterministic; only the disclosure wrapper is salted)."""
+    client = network.client()
+    op = network.client(user="user0")
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+
+    parent_txid = client.post(
+        "/reports", cbor2.dumps({"title": "root"}), "application/cbor"
+    ).tx_id
+
+    def follow_up(body):
+        return op.post_historical(
+            f"/reports/{parent_txid}/follow-ups",
+            cbor2.dumps({"body": body}),
+            "application/cbor",
+        ).tx_id
+
+    fu1, fu2 = follow_up("a"), follow_up("b")
+    tok1 = client.get_historical(f"/statements/{fu1}").body
+    tok2 = client.get_historical(f"/statements/{fu2}").body
+
+    # At rest: every redacted claim is independently salted, so the two
+    # siblings share no redacted hash — the shared parent is not correlatable.
+    h1 = {bytes(h) for h in _redacted_hashes(tok1)}
+    h2 = {bytes(h) for h in _redacted_hashes(tok2)}
+    assert h1 and h2 and h1.isdisjoint(h2)
+
+    # On disclosure: both reveal the SAME parent identity (deterministic value).
+    def disclosed_parent(fu_txid):
+        body = op.post_historical(
+            f"/operator/statements/{fu_txid}/disclosure",
+            cbor2.dumps({"fields": ["parent"]}),
+            "application/cbor",
+        ).body
+        return st.validate_statement(body, key).disclosed[st.PARENT]
+
+    assert disclosed_parent(fu1) == disclosed_parent(fu2)

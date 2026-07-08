@@ -223,8 +223,13 @@ index** enables the Operator stream. Concrete names in `app/src/reports.h`.
 | `DisclosureTable` | private (encrypted) | the statement's disclosures (`[salt,value,key]` bytes) — the **confidential store**; **write-only** from submit, **read-only** from Operator egress; feature-flagged (`store_unredacted`, default ON) |
 | `SigningKeyTable` (`sd.signing_key`) | private (encrypted) | the issuer **private** key (PEM) |
 | `SigningKeyHistory` | public | issuer **public** key registration(s) — endorsed by their receipts (§4); supports rotation (append new, keep old) |
-| `NotesIndex` | public | parent statement → [follow-up seqnos] |
 | statement **seqno index** | public | for `get_statements_since` (SCITT-style `SeqnosForValue`) |
+
+*(No parent→children index: we deliberately do **not** maintain a
+parent-to-follow-ups mapping. Such an index would leak thread structure — parent
+hashes are derivable from the public tokens — and it is not needed: the link
+lives in the child's redacted, salted `parent` field, and follow-ups surface via
+`get_statements_since`.)*
 
 - **Signing:** the **service (TEE)** constructs and signs the SD-CWT (trust roots
   in attestation); researchers submit raw content over an authenticated channel.
@@ -318,10 +323,9 @@ Operator user is added by governance — §12.2):
   `{parent_txid}` and write the child in one tx; rejects (404) unless
   `{parent_txid}` genuinely committed a statement (the parent tx's claims digest
   must equal `hash(token read)`, guarding against a stale per-tx `Value` read).
-  Returns **204 + txid header**. *(Live.)* *(The parent→children `NotesIndex` /
-  list-children query is **deferred** to the Operator stream, where egress
-  confidentiality is handled — until then the link lives in the child's redacted
-  `parent` field and follow-ups surface via `get_statements_since`.)*
+  Returns **204 + txid header**. *(Live.)* *(No parent→children index — see §8;
+  the link lives in the child's redacted, salted `parent` field and follow-ups
+  surface via `get_statements_since`.)*
 - `GET /operator/statements/{txid}` — a single **unredacted** transparent
   statement (all disclosures present + receipt). *(Pending.)*
 - `GET /operator/statements?since={seqno}&limit={n}` — the unredacted stream:
@@ -392,8 +396,8 @@ are chain logic that *consumes* those tokens.
 3. **On-chain: submit + receipt** — `submit_report` constructs+signs via the
    C++ token core, stores the redacted blob, binds the **claims digest**, returns
    **seqno + receipt**. (Receipt/seqno are chain logic layered on top of 1–2.)
-4. **Follow-ups & linkage** — `append_follow_up`, redacted `parent`,
-   `NotesIndex`, seqno ordering.
+4. **Follow-ups & linkage** — `append_follow_up`, redacted+salted `parent`
+   (no parent→children index), seqno ordering.
 5. **Disclosure & duplicate proof** — Operator `make_disclosure` + researcher
    `verify`; end-to-end demo.
 6. **(optional) hardening** — `store_unredacted` OFF (Operator self-custody) or
