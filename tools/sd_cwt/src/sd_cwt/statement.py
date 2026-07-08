@@ -36,9 +36,11 @@ oracle and the researcher-side verification tooling.
 from typing import Any, Optional
 
 import cbor2
-from cbor2 import CBORSimpleValue
+from cbor2 import CBORSimpleValue, CBORTag
 
 from .core import (
+    REDACTED_CLAIM_KEYS,
+    REDACTED_ELEMENT_TAG,
     Disclosure,
     ValidatedClaims,
     csprng,
@@ -174,17 +176,68 @@ def issue_statement(
         PATCH_DATE: patch_date,
     }
     claims = build_claims(iss, iat, fields)
-    return issue(claims, redact=set(CONTENT_FIELDS), signer=signer)
+    # Redact each `references` element individually (in addition to the whole
+    # field) so a single reference can later be disclosed without revealing its
+    # siblings. Only when present as a list (an absent field is a garbage
+    # sentinel with no elements). Mirrors the C++ token core (statement.cpp).
+    redact_elements = None
+    if references is not None:
+        redact_elements = {REFERENCES: set(range(len(references)))}
+    return issue(
+        claims,
+        redact=set(CONTENT_FIELDS),
+        signer=signer,
+        redact_elements=redact_elements,
+    )
+
+
+def _nested_hashes(value: Any) -> list[bytes]:
+    """The Redacted Claim Hashes referenced inside a disclosure's value: tag(60)
+    array elements and simple(59) map-entry hashes, recursively."""
+    out: list[bytes] = []
+    if isinstance(value, list):
+        for elem in value:
+            if isinstance(elem, CBORTag) and elem.tag == REDACTED_ELEMENT_TAG:
+                out.append(elem.value)
+            else:
+                out.extend(_nested_hashes(elem))
+    elif isinstance(value, dict):
+        redacted_key = CBORSimpleValue(REDACTED_CLAIM_KEYS)
+        for key, val in value.items():
+            if key == redacted_key:
+                out.extend(val)  # list of map-entry hashes
+            else:
+                out.extend(_nested_hashes(val))
+    return out
 
 
 def disclosures_for(discs: list[Disclosure], *names: str) -> list[Disclosure]:
-    """Select disclosures for the named content fields (e.g. ``"fingerprint"``)."""
+    """Select the disclosures needed to reveal the named content fields, e.g.
+    ``"fingerprint"`` or ``"references"``. Naming a field reveals its whole
+    value, so this pulls in the field's disclosure **and its descendant
+    disclosures** (e.g. the individually-redacted ``references`` elements) by
+    following the Redacted Claim Hashes nested in each included disclosure."""
     keys = set()
     for name in names:
         if name not in FIELD_BY_NAME:
             raise ValueError(f"unknown field name: {name!r}")
         keys.add(FIELD_BY_NAME[name])
-    return [d for d in discs if d.key in keys]
+
+    by_digest = {d.digest: d for d in discs}
+    selected: list[Disclosure] = []
+    seen: set[bytes] = set()
+    frontier = [d for d in discs if d.key in keys]
+    while frontier:
+        d = frontier.pop()
+        if d.digest in seen:
+            continue
+        seen.add(d.digest)
+        selected.append(d)
+        for h in _nested_hashes(d.value):
+            child = by_digest.get(h)
+            if child is not None and child.digest not in seen:
+                frontier.append(child)
+    return selected
 
 
 def _payload_of(token: bytes) -> dict:
