@@ -11,6 +11,7 @@
 #include "ccf/json_handler.h"
 #include "ccf/receipt.h"
 #include "ccf/tx_status.h"
+#include "disclosure_store.h"
 #include "report_parse.h"
 #include "reports.h"
 #include "token/cbor.h"
@@ -110,6 +111,15 @@ namespace selectivedisclosure
           auto* statements =
             ctx.tx.template rw<StatementTable>(STATEMENT_TABLE);
           statements->put(issued.token);
+
+          // Confidential store: retain the disclosures (the openings for every
+          // redacted field) in the PRIVATE table so the Operator can later
+          // produce duplicate-proofs. Write-only here (segregation invariant,
+          // DESIGN.md s8): the redacted-token build, digest binding and public
+          // store above never read it.
+          auto* disclosures =
+            ctx.tx.template rw<DisclosureTable>(DISCLOSURE_TABLE);
+          disclosures->put(encode_disclosure_store(issued.disclosures));
 
           // Bind the token's digest into the Merkle tree for this transaction,
           // so the receipt attests exactly this redacted statement.

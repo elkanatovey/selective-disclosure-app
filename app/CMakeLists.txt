@@ -38,6 +38,7 @@ set(TOKEN_SRCS
 # KV/endpoints; shared by the enclave app and the host unit tests.
 set(APP_LOGIC_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/report_parse.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/disclosure_store.cpp
 )
 
 # --- The CCF application ----------------------------------------------------

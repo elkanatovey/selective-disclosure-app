@@ -19,6 +19,15 @@ namespace selectivedisclosure
   using StatementTable = ccf::kv::Value<std::vector<uint8_t>>;
   static constexpr auto STATEMENT_TABLE = "public:sd.statement";
 
+  // The confidential store: the submission's disclosures (the encoded
+  // `[salt, value, key]` openings for every redacted field), in a PRIVATE
+  // (encrypted) per-transaction table. Written once on submit and never read on
+  // the submit path (segregation invariant, DESIGN.md s8) — read only by the
+  // Operator egress path to produce duplicate-proofs. Feature:
+  // `store_unredacted` (default ON).
+  using DisclosureTable = ccf::kv::Value<std::vector<uint8_t>>;
+  static constexpr auto DISCLOSURE_TABLE = "sd.disclosures";
+
   // The app's issuer signing key (private key PEM), in a PRIVATE (encrypted,
   // replicated) table so whichever node is primary can sign. See DESIGN.md §4
   // for why the app manages its own key rather than the CCF service identity.
