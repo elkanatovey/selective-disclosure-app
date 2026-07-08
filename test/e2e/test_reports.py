@@ -798,21 +798,24 @@ def test_async_submission(network):
     """`?wait=false` returns 202 immediately with the txid header (no blocking on
     global commit); the receipt becomes available by polling. The default
     (blocking) path still returns 204."""
-    client = network.client()
+    submitter = network.client()
 
-    resp = client.post(
+    resp = submitter.post(
         "/reports?wait=false", cbor2.dumps({"title": "async"}), "application/cbor"
     )
     assert resp.status == 202, resp.body
     txid = resp.tx_id
     assert txid, "async submit must still return the txid header"
 
-    # The receipt is available once the tx is globally committed (poll).
-    r = client.get_historical(f"/statements/{txid}/receipt")
+    # The txid is the only thing carried from submit to poll. The receipt
+    # endpoint is public, so an INDEPENDENT client (not the submitter) can poll
+    # it once the tx is globally committed — the two roles are decoupled.
+    poller = network.client()
+    r = poller.get_historical(f"/statements/{txid}/receipt")
     assert r.status == 200, r.body
 
     # The default path is unchanged (blocking, 204).
-    d = client.post("/reports", cbor2.dumps({"title": "sync"}), "application/cbor")
+    d = submitter.post("/reports", cbor2.dumps({"title": "sync"}), "application/cbor")
     assert d.status == 204, d.body
     assert d.tx_id
 
