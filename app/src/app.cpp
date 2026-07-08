@@ -123,12 +123,21 @@ namespace selectivedisclosure
       // --- register signing key: generate the app issuer key once and endorse
       // it on-ledger. The transaction's claims digest is hash(pubkey), so its
       // receipt endorses the key against the service identity (DESIGN §4/§12).
-      // Idempotent: a no-op once initialised. --------------------------------
+      // Idempotent init by default; `?rotate=true` registers a NEW key (old
+      // registrations are kept — resolvable via GET /signing-key?at={seqno} —
+      // so statements signed under a previous key still verify). Member-gated.
       auto register_signing_key = [](ccf::endpoints::EndpointContext& ctx) {
+        const auto pq =
+          ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
+        std::string err;
+        const bool rotate =
+          ccf::http::get_query_value_opt<bool>(pq, "rotate", err)
+            .value_or(false);
+
         auto* priv = ctx.tx.template rw<SigningKeyTable>(SIGNING_KEY_TABLE);
-        if (priv->get().has_value())
+        if (priv->get().has_value() && !rotate)
         {
-          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK); // idempotent init
           return;
         }
         auto key =
@@ -199,10 +208,18 @@ namespace selectivedisclosure
           return ccf::historical::is_tx_committed_v2(
             consensus, view, seqno, reason);
         };
-      // Resolve the txid of the LATEST issuer-key registration from the index.
-      auto key_txid = [this](ccf::endpoints::ReadOnlyEndpointContext&)
+      // Resolve the txid of the issuer-key registration to return: the LATEST
+      // by default, or the one active at `?at={seqno}` (the greatest
+      // registration seqno <= at) so a verifier can fetch the key that signed a
+      // statement committed before a later rotation.
+      auto key_txid = [this](ccf::endpoints::ReadOnlyEndpointContext& ctx)
         -> std::optional<ccf::TxID> {
-        const auto reg = latest_indexed_write(*signing_key_index);
+        const auto pq =
+          ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
+        std::string err;
+        const ccf::SeqNo at =
+          ccf::http::get_query_value_opt<uint64_t>(pq, "at", err).value_or(0);
+        const auto reg = latest_indexed_write(*signing_key_index, at);
         if (!reg.has_value())
         {
           return std::nullopt; // not indexed yet / no registration
@@ -701,20 +718,25 @@ namespace selectivedisclosure
         ccf::ClaimsDigest::Digest(token);
     }
 
-    // The highest seqno at which `index` recorded a write, or nullopt if none.
-    // Walks the indexed range backward in windows no larger than the index's
-    // max_requestable_range, because querying an unbounded range throws once
-    // the ledger grows past that bound.
+    // The highest seqno at most `upper` (or unbounded if `upper == 0`) at which
+    // `index` recorded a write, or nullopt if none. Walks the indexed range
+    // backward in windows no larger than the index's max_requestable_range,
+    // because querying an unbounded range throws once the ledger grows past it.
     template <typename Index>
-    static std::optional<ccf::SeqNo> latest_indexed_write(Index& index)
+    static std::optional<ccf::SeqNo> latest_indexed_write(
+      Index& index, ccf::SeqNo upper = 0)
     {
       const ccf::SeqNo head = index.get_indexed_watermark().seqno;
       if (head == 0)
       {
         return std::nullopt;
       }
+      ccf::SeqNo hi = (upper == 0) ? head : std::min<ccf::SeqNo>(upper, head);
+      if (hi == 0)
+      {
+        return std::nullopt;
+      }
       const auto span = std::max<ccf::SeqNo>(index.max_requestable_range(), 1);
-      ccf::SeqNo hi = head;
       while (true)
       {
         const ccf::SeqNo lo = (hi > span) ? (hi - span) : 1;

@@ -309,9 +309,17 @@ Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
   (`x-ms-ccf-transaction-id`) on commit. *(Live.)*
 - `GET /statements/{txid}` — the redacted statement with its CCF receipt embedded
   (transparent statement, `application/cose`). *(Live.)*
-- `GET /signing-key` — the issuer public key **plus its endorsement** (the receipt
-  of its on-ledger registration), so verifiers validate it against the service
-  identity (§4). *(Live.)*
+- `GET /signing-key[?at={seqno}]` — the issuer public key **plus its endorsement**
+  (the receipt of its on-ledger registration), so verifiers validate it against
+  the service identity (§4). Default returns the **latest** registration; `?at=`
+  returns the registration active at a given seqno (the greatest registration
+  seqno ≤ `at`), so a statement signed **before** a rotation is verified under the
+  key that signed it. *(Live.)*
+- `POST /signing-key[?rotate=true]` — **member-gated** (control-plane, §12).
+  Idempotent init by default (no-op → 200 if already initialised); `?rotate=true`
+  registers a **new** key (204). Old registrations are kept (each endorsed by its
+  own receipt), so the `?at=` resolution above keeps pre-rotation statements
+  verifiable. *(Live.)*
 
 **Operator-gated** (caller is the Operator **CCF user**, `user_cert_auth`; the
 Operator user is added by governance — §12.2):

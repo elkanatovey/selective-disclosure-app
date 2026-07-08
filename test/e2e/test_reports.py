@@ -706,3 +706,55 @@ def test_signing_key_registration_is_member_gated(network):
     assert anon.status in (401, 403), anon.body
     user = network.client(user="user0").post("/signing-key", b"", "application/cbor")
     assert user.status in (401, 403), user.body
+
+
+def test_signing_key_rotation(network):
+    """Rotate the issuer key and prove the endorsement chain holds across it:
+    - GET /signing-key returns the NEW key after ?rotate=true (endorsed).
+    - a statement signed BEFORE the rotation still verifies, under the key
+      resolved at its seqno (GET /signing-key?at={seqno}), not the new key.
+    - a statement signed AFTER verifies under the new key.
+    """
+    member = network.client(user="member0")
+    client = network.client()
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+
+    # key1 is already initialised by the fixture.
+    key1_pem = _verify_endorsed_key(
+        client.get_historical("/signing-key").body, service_cert
+    )
+
+    # A statement signed under key1.
+    a_txid = client.post(
+        "/reports", cbor2.dumps({"title": "A"}), "application/cbor"
+    ).tx_id
+    a_seqno = int(a_txid.split(".")[1])
+
+    # Rotate -> key2 (member-gated, explicit).
+    rot = member.post("/signing-key?rotate=true", b"", "application/cbor")
+    assert rot.status == 204, rot.body
+
+    # GET /signing-key now returns the new, endorsed key.
+    key2_pem = _verify_endorsed_key(
+        client.get_historical("/signing-key").body, service_cert
+    )
+    assert key2_pem != key1_pem
+
+    # A statement signed under key2.
+    b_txid = client.post(
+        "/reports", cbor2.dumps({"title": "B"}), "application/cbor"
+    ).tx_id
+    b_tok = client.get_historical(f"/statements/{b_txid}").body
+    st.validate_statement(b_tok, _ec2_key_from_pem(key2_pem))  # verifies under key2
+
+    # The pre-rotation statement resolves the key active at its seqno = key1,
+    # and still verifies under it — but NOT under the new key.
+    key_at_a = _verify_endorsed_key(
+        client.get_historical(f"/signing-key?at={a_seqno}").body, service_cert
+    )
+    assert key_at_a == key1_pem
+    a_tok = client.get_historical(f"/statements/{a_txid}").body
+    st.validate_statement(a_tok, _ec2_key_from_pem(key1_pem))
+    with pytest.raises(Exception):
+        st.validate_statement(a_tok, _ec2_key_from_pem(key2_pem))
