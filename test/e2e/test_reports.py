@@ -104,8 +104,9 @@ def test_submit_retrieve_verify(network):
         "references": ["CVE-2025-9999"],
     }
     resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
-    assert resp.status == 200, resp.body
-    txid = resp.json()["transaction_id"]
+    assert resp.status == 204, resp.body
+    txid = resp.tx_id
+    assert txid, "no transaction id header on submit"
 
     # 2. Fetch the issuer key AND verify its on-ledger endorsement against the
     #    service identity, then build a verification key from the endorsed PEM.
@@ -148,7 +149,7 @@ def test_receipt_rejects_wrong_digest(network):
 
     client = network.client()
     resp = client.post("/reports", cbor2.dumps({"title": "x"}), "application/cbor")
-    txid = resp.json()["transaction_id"]
+    txid = resp.tx_id
     token = client.get_historical(f"/statements/{txid}").body
 
     receipts = _uhdr(token)[RECEIPTS_LABEL]

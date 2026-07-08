@@ -16,7 +16,6 @@
 #include "token/cbor.h"
 
 #include <ctime>
-#include <nlohmann/json.hpp>
 
 namespace selectivedisclosure
 {
@@ -126,7 +125,9 @@ namespace selectivedisclosure
           return;
         }
 
-        // Respond once the transaction commits, returning its txid.
+        // Respond once the transaction commits. The txid is returned in the
+        // standard `x-ms-ccf-transaction-id` header (no JSON body), matching
+        // CCF/SCITT convention and the all-CBOR/COSE surface.
         ctx.rpc_ctx->set_consensus_committed_function(
           [](ccf::endpoints::CommittedTxInfo& info) {
             if (info.status == ccf::FinalTxStatus::Invalid)
@@ -137,17 +138,9 @@ namespace selectivedisclosure
                 std::string("Submission was rolled back; please retry."));
               return;
             }
-            nlohmann::json result;
-            result["transaction_id"] = info.tx_id.to_str();
-            const auto dumped = result.dump();
-            info.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-            info.rpc_ctx->set_response_header(
-              ccf::http::headers::CONTENT_TYPE,
-              ccf::http::headervalues::contenttype::JSON);
             info.rpc_ctx->set_response_header(
               ccf::http::headers::CCF_TX_ID, info.tx_id.to_str());
-            info.rpc_ctx->set_response_body(
-              std::vector<uint8_t>(dumped.begin(), dumped.end()));
+            info.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
           });
       };
       make_endpoint(
@@ -182,15 +175,9 @@ namespace selectivedisclosure
 
         ctx.rpc_ctx->set_consensus_committed_function(
           [](ccf::endpoints::CommittedTxInfo& info) {
-            nlohmann::json result;
-            result["transaction_id"] = info.tx_id.to_str();
-            const auto dumped = result.dump();
-            info.rpc_ctx->set_response_status(HTTP_STATUS_OK);
             info.rpc_ctx->set_response_header(
-              ccf::http::headers::CONTENT_TYPE,
-              ccf::http::headervalues::contenttype::JSON);
-            info.rpc_ctx->set_response_body(
-              std::vector<uint8_t>(dumped.begin(), dumped.end()));
+              ccf::http::headers::CCF_TX_ID, info.tx_id.to_str());
+            info.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
           });
       };
       make_endpoint(

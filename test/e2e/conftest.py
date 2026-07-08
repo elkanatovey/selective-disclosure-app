@@ -113,7 +113,7 @@ def network(tmp_path_factory):
                 )
             # Initialise + endorse the issuer key on-ledger (submit requires it).
             init = client.post("/signing-key", b"", "application/cbor")
-            if init.status != 200:
+            if init.status not in (200, 204):
                 raise RuntimeError(
                     f"signing-key init failed: {init.status} {init.body!r}"
                 )

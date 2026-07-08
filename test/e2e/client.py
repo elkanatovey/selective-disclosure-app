@@ -23,6 +23,12 @@ class Response:
     status: int
     content_type: str
     body: bytes
+    headers: dict
+
+    @property
+    def tx_id(self) -> Optional[str]:
+        """The committed transaction id, from CCF's standard header."""
+        return self.headers.get("x-ms-ccf-transaction-id")
 
     def json(self):
         import json
@@ -53,7 +59,12 @@ class LedgerClient:
             timeout=10,
             **kwargs,
         )
-        return Response(r.status_code, r.headers.get("content-type", ""), r.content)
+        return Response(
+            r.status_code,
+            r.headers.get("content-type", ""),
+            r.content,
+            {k.lower(): v for k, v in r.headers.items()},
+        )
 
     def post(self, path: str, body: bytes, content_type: str) -> Response:
         return self._request(
