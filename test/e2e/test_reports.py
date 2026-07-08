@@ -696,3 +696,13 @@ def test_read_endpoints_reject_non_statement_txid(network):
         ).status
         == 404
     )
+
+
+def test_signing_key_registration_is_member_gated(network):
+    """Key registration is control-plane: an anonymous caller and a plain user
+    (non-member) are both rejected. (The key is already initialised by the
+    member fixture, so this only checks the auth gate, not a re-init.)"""
+    anon = network.client().post("/signing-key", b"", "application/cbor")
+    assert anon.status in (401, 403), anon.body
+    user = network.client(user="user0").post("/signing-key", b"", "application/cbor")
+    assert user.status in (401, 403), user.body

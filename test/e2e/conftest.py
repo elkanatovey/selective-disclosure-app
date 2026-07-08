@@ -112,7 +112,9 @@ def network(tmp_path_factory):
                     f"app frontend not ready at {base_url}; see {log_path}"
                 )
             # Initialise + endorse the issuer key on-ledger (submit requires it).
-            init = client.post("/signing-key", b"", "application/cbor")
+            # Key lifecycle is control-plane governance, so this is member-gated.
+            client_member = net.client(user="member0")
+            init = client_member.post("/signing-key", b"", "application/cbor")
             if init.status not in (200, 204):
                 raise RuntimeError(
                     f"signing-key init failed: {init.status} {init.body!r}"

@@ -156,7 +156,7 @@ namespace selectivedisclosure
         "/signing-key",
         HTTP_POST,
         register_signing_key,
-        {ccf::empty_auth_policy})
+        {ccf::member_cert_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Always)
         .install();
 
