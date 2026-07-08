@@ -202,28 +202,17 @@ namespace selectivedisclosure
       // Resolve the txid of the LATEST issuer-key registration from the index.
       auto key_txid = [this](ccf::endpoints::ReadOnlyEndpointContext&)
         -> std::optional<ccf::TxID> {
-        const auto watermark = signing_key_index->get_indexed_watermark();
-        if (watermark.seqno == 0)
+        const auto reg = latest_indexed_write(*signing_key_index);
+        if (!reg.has_value())
         {
-          return std::nullopt; // not indexed yet
-        }
-        const auto seqnos =
-          signing_key_index->get_write_txs_in_range(1, watermark.seqno);
-        if (!seqnos.has_value() || seqnos->empty())
-        {
-          return std::nullopt;
-        }
-        ccf::SeqNo reg_seqno = 0; // set is ascending; last is the most recent
-        for (const auto s : *seqnos)
-        {
-          reg_seqno = s;
+          return std::nullopt; // not indexed yet / no registration
         }
         ccf::View view = 0;
-        if (get_view_for_seqno_v1(reg_seqno, view) != ccf::ApiResult::OK)
+        if (get_view_for_seqno_v1(*reg, view) != ccf::ApiResult::OK)
         {
           return std::nullopt;
         }
-        return ccf::TxID{view, reg_seqno};
+        return ccf::TxID{view, *reg};
       };
 
       make_read_only_endpoint(
@@ -243,7 +232,7 @@ namespace selectivedisclosure
         auto* handle =
           historical_tx.template ro<StatementTable>(STATEMENT_TABLE);
         const auto entry = handle->get();
-        if (!entry.has_value())
+        if (!entry.has_value() || !commits_statement(state, entry.value()))
         {
           ctx.rpc_ctx->set_error(
             HTTP_STATUS_NOT_FOUND,
@@ -340,7 +329,7 @@ namespace selectivedisclosure
         auto* stmt_handle =
           historical_tx.template ro<StatementTable>(STATEMENT_TABLE);
         const auto token = stmt_handle->get();
-        if (!token.has_value())
+        if (!token.has_value() || !commits_statement(state, token.value()))
         {
           ctx.rpc_ctx->set_error(
             HTTP_STATUS_NOT_FOUND,
@@ -410,18 +399,9 @@ namespace selectivedisclosure
         const auto parent =
           ptx.template ro<StatementTable>(STATEMENT_TABLE)->get();
 
-        // Confirm {parent_txid} genuinely committed this statement: the
-        // StatementTable is a per-tx Value, so a historical read at an
-        // unrelated seqno would return a stale token. The parent tx's claims
-        // digest is hash(its token) — check it matches what we read.
-        const auto receipt = ccf::describe_receipt_v2(*state->receipt);
-        const auto proof =
-          std::dynamic_pointer_cast<ccf::ProofReceipt>(receipt);
-        const bool is_statement = parent.has_value() && proof != nullptr &&
-          !proof->leaf_components.claims_digest.empty() &&
-          proof->leaf_components.claims_digest.value() ==
-            ccf::ClaimsDigest::Digest(parent.value());
-        if (!is_statement)
+        // Confirm {parent_txid} genuinely committed this statement (guards the
+        // per-tx `Value` staleness trap — see commits_statement).
+        if (!parent.has_value() || !commits_statement(state, parent.value()))
         {
           ctx.rpc_ctx->set_error(
             HTTP_STATUS_NOT_FOUND,
@@ -486,7 +466,7 @@ namespace selectivedisclosure
           auto htx = state->store->create_read_only_tx();
           const auto token =
             htx.template ro<StatementTable>(STATEMENT_TABLE)->get();
-          if (!token.has_value())
+          if (!token.has_value() || !commits_statement(state, token.value()))
           {
             ctx.rpc_ctx->set_error(
               HTTP_STATUS_NOT_FOUND,
@@ -560,26 +540,40 @@ namespace selectivedisclosure
           std::vector<std::string> txids;
           ccf::SeqNo next = since;
           const auto watermark = statement_index->get_indexed_watermark();
-          if (watermark.seqno > since)
+          const auto span =
+            std::max<ccf::SeqNo>(statement_index->max_requestable_range(), 1);
+          // Walk the seqno range in windows no larger than the index's
+          // max_requestable_range (querying an unbounded range throws), until
+          // we fill the page or reach the watermark.
+          ccf::SeqNo from = since + 1;
+          bool stop = false;
+          while (!stop && from <= watermark.seqno && txids.size() < limit)
           {
-            const auto seqnos = statement_index->get_write_txs_in_range(
-              since + 1, watermark.seqno);
-            if (seqnos.has_value())
+            const ccf::SeqNo to = std::min(watermark.seqno, from + span);
+            const auto seqnos =
+              statement_index->get_write_txs_in_range(from, to);
+            if (!seqnos.has_value())
             {
-              for (const auto s : *seqnos)
-              {
-                if (txids.size() >= limit)
-                {
-                  break;
-                }
-                ccf::View view = 0;
-                if (get_view_for_seqno_v1(s, view) == ccf::ApiResult::OK)
-                {
-                  txids.push_back(ccf::TxID{view, s}.to_str());
-                  next = s;
-                }
-              }
+              break; // window not populated yet
             }
+            for (const auto s : *seqnos)
+            {
+              if (txids.size() >= limit)
+              {
+                break;
+              }
+              ccf::View view = 0;
+              if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
+              {
+                // Don't advance past an unresolved seqno, or it would be
+                // permanently skipped; the Operator retries it next poll.
+                stop = true;
+                break;
+              }
+              txids.push_back(ccf::TxID{view, s}.to_str());
+              next = s;
+            }
+            from = to + 1;
           }
 
           const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
@@ -691,6 +685,56 @@ namespace selectivedisclosure
     using StatementIndex =
       ccf::indexing::strategies::SeqnosForValue_Bucketed<StatementTable>;
     std::shared_ptr<StatementIndex> statement_index;
+
+    // Whether the transaction at `state` genuinely committed `token` as a
+    // statement: its receipt's claims digest must equal hash(token). Guards the
+    // per-tx `Value` staleness trap — a historical read of StatementTable at an
+    // unrelated seqno returns a carried-over token that this rejects.
+    static bool commits_statement(
+      const ccf::historical::StatePtr& state, const std::vector<uint8_t>& token)
+    {
+      const auto receipt = ccf::describe_receipt_v2(*state->receipt);
+      const auto proof = std::dynamic_pointer_cast<ccf::ProofReceipt>(receipt);
+      return proof != nullptr &&
+        !proof->leaf_components.claims_digest.empty() &&
+        proof->leaf_components.claims_digest.value() ==
+        ccf::ClaimsDigest::Digest(token);
+    }
+
+    // The highest seqno at which `index` recorded a write, or nullopt if none.
+    // Walks the indexed range backward in windows no larger than the index's
+    // max_requestable_range, because querying an unbounded range throws once
+    // the ledger grows past that bound.
+    template <typename Index>
+    static std::optional<ccf::SeqNo> latest_indexed_write(Index& index)
+    {
+      const ccf::SeqNo head = index.get_indexed_watermark().seqno;
+      if (head == 0)
+      {
+        return std::nullopt;
+      }
+      const auto span = std::max<ccf::SeqNo>(index.max_requestable_range(), 1);
+      ccf::SeqNo hi = head;
+      while (true)
+      {
+        const ccf::SeqNo lo = (hi > span) ? (hi - span) : 1;
+        const auto seqnos = index.get_write_txs_in_range(lo, hi);
+        if (seqnos.has_value() && !seqnos->empty())
+        {
+          ccf::SeqNo latest = 0; // the set is ascending
+          for (const auto s : *seqnos)
+          {
+            latest = s;
+          }
+          return latest;
+        }
+        if (lo == 1)
+        {
+          return std::nullopt;
+        }
+        hi = lo - 1;
+      }
+    }
 
     // Operator-stream pagination bounds.
     static constexpr size_t kDefaultPageLimit = 100;

@@ -672,3 +672,27 @@ def test_operator_stream_requires_operator(network):
     """The Operator stream is Operator-gated."""
     anon = network.client().get("/operator/statements?since=0")
     assert anon.status in (401, 403), anon.body
+
+
+def test_read_endpoints_reject_non_statement_txid(network):
+    """A committed-but-non-statement txid (genesis) is rejected with 404 by the
+    read endpoints — they verify the tx's claims digest equals hash(the token
+    read), so a stale per-tx Value read can't masquerade as a statement."""
+    client = network.client()
+    op = network.client(user="user0")
+    parent_txid = client.post(
+        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
+    ).tx_id
+    view = parent_txid.split(".")[0]
+    genesis = f"{view}.1"  # committed, but not a statement
+
+    assert client.get_historical(f"/statements/{genesis}").status == 404
+    assert op.get_historical(f"/operator/statements/{genesis}").status == 404
+    assert (
+        op.post_historical(
+            f"/operator/statements/{genesis}/disclosure",
+            cbor2.dumps({"fields": ["title"]}),
+            "application/cbor",
+        ).status
+        == 404
+    )
