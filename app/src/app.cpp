@@ -13,11 +13,13 @@
 #include "ccf/receipt.h"
 #include "ccf/tx_status.h"
 #include "disclosure_store.h"
+#include "paging.h"
 #include "report_parse.h"
 #include "reports.h"
 #include "token/cbor.h"
 
 #include <ctime>
+#include <fmt/format.h>
 
 namespace selectivedisclosure
 {
@@ -154,12 +156,7 @@ namespace selectivedisclosure
         // its receipt is a service-identity endorsement of the key.
         ctx.rpc_ctx->set_claims_digest(ccf::ClaimsDigest::Digest(pub));
 
-        ctx.rpc_ctx->set_consensus_committed_function(
-          [](ccf::endpoints::CommittedTxInfo& info) {
-            info.rpc_ctx->set_response_header(
-              ccf::http::headers::CCF_TX_ID, info.tx_id.to_str());
-            info.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
-          });
+        ctx.rpc_ctx->set_consensus_committed_function(respond_committed_204);
       };
       make_endpoint(
         "/signing-key",
@@ -219,7 +216,7 @@ namespace selectivedisclosure
         std::string err;
         const ccf::SeqNo at =
           ccf::http::get_query_value_opt<uint64_t>(pq, "at", err).value_or(0);
-        const auto reg = latest_indexed_write(*signing_key_index, at);
+        const auto reg = paging::latest_write(*signing_key_index, at);
         if (!reg.has_value())
         {
           return std::nullopt; // not indexed yet / no registration
@@ -594,40 +591,27 @@ namespace selectivedisclosure
           std::vector<std::string> txids;
           ccf::SeqNo next = since;
           const auto watermark = statement_index->get_indexed_watermark();
-          const auto span =
-            std::max<ccf::SeqNo>(statement_index->max_requestable_range(), 1);
-          // Walk the seqno range in windows no larger than the index's
-          // max_requestable_range (querying an unbounded range throws), until
-          // we fill the page or reach the watermark.
-          ccf::SeqNo from = since + 1;
-          bool stop = false;
-          while (!stop && from <= watermark.seqno && txids.size() < limit)
+          if (watermark.seqno > since)
           {
-            const ccf::SeqNo to = std::min(watermark.seqno, from + span);
-            const auto seqnos =
-              statement_index->get_write_txs_in_range(from, to);
-            if (!seqnos.has_value())
+            // Collect (windowed) up to `limit` statement seqnos after `since`,
+            // then resolve each to a txid. On a seqno->view lookup failure,
+            // stop without advancing `next` past it, so it is retried next poll
+            // rather than permanently skipped.
+            const auto seqnos = paging::write_txs_in_windows(
+              *statement_index, since + 1, watermark.seqno, limit);
+            if (seqnos.has_value())
             {
-              break; // window not populated yet
-            }
-            for (const auto s : *seqnos)
-            {
-              if (txids.size() >= limit)
+              for (const auto s : *seqnos)
               {
-                break;
+                ccf::View view = 0;
+                if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
+                {
+                  break;
+                }
+                txids.push_back(ccf::TxID{view, s}.to_str());
+                next = s;
               }
-              ccf::View view = 0;
-              if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
-              {
-                // Don't advance past an unresolved seqno, or it would be
-                // permanently skipped; the Operator retries it next poll.
-                stop = true;
-                break;
-              }
-              txids.push_back(ccf::TxID{view, s}.to_str());
-              next = s;
             }
-            from = to + 1;
           }
 
           const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
@@ -731,19 +715,7 @@ namespace selectivedisclosure
       // globally committed, then return 204 + the txid header (and surface a
       // rollback as 503). The txid is in the standard `x-ms-ccf-transaction-id`
       // header (no JSON body), matching CCF/SCITT convention.
-      ctx.rpc_ctx->set_consensus_committed_function(
-        [](ccf::endpoints::CommittedTxInfo& info) {
-          if (info.status == ccf::FinalTxStatus::Invalid)
-          {
-            info.rpc_ctx->set_response_status(HTTP_STATUS_SERVICE_UNAVAILABLE);
-            info.rpc_ctx->set_response_body(
-              std::string("Submission was rolled back; please retry."));
-            return;
-          }
-          info.rpc_ctx->set_response_header(
-            ccf::http::headers::CCF_TX_ID, info.tx_id.to_str());
-          info.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
-        });
+      ctx.rpc_ctx->set_consensus_committed_function(respond_committed_204);
     }
 
     using SigningKeyIndex =
@@ -753,6 +725,23 @@ namespace selectivedisclosure
     using StatementIndex =
       ccf::indexing::strategies::SeqnosForValue_Bucketed<StatementTable>;
     std::shared_ptr<StatementIndex> statement_index;
+
+    // Consensus-committed callback: on global commit, 204 + the txid header; on
+    // a rollback (Invalid), 503 so callers don't mistake a rolled-back
+    // submission/registration for success.
+    static void respond_committed_204(ccf::endpoints::CommittedTxInfo& info)
+    {
+      if (info.status == ccf::FinalTxStatus::Invalid)
+      {
+        info.rpc_ctx->set_response_status(HTTP_STATUS_SERVICE_UNAVAILABLE);
+        info.rpc_ctx->set_response_body(
+          std::string("Submission was rolled back; please retry."));
+        return;
+      }
+      info.rpc_ctx->set_response_header(
+        ccf::http::headers::CCF_TX_ID, info.tx_id.to_str());
+      info.rpc_ctx->set_response_status(HTTP_STATUS_NO_CONTENT);
+    }
 
     // Whether the submitter wants to block until global commit (default) or get
     // an immediate 202 + txid to poll — `?wait=false` for the async path.
@@ -777,46 +766,6 @@ namespace selectivedisclosure
         !proof->leaf_components.claims_digest.empty() &&
         proof->leaf_components.claims_digest.value() ==
         ccf::ClaimsDigest::Digest(token);
-    }
-
-    // The highest seqno at most `upper` (or unbounded if `upper == 0`) at which
-    // `index` recorded a write, or nullopt if none. Walks the indexed range
-    // backward in windows no larger than the index's max_requestable_range,
-    // because querying an unbounded range throws once the ledger grows past it.
-    template <typename Index>
-    static std::optional<ccf::SeqNo> latest_indexed_write(
-      Index& index, ccf::SeqNo upper = 0)
-    {
-      const ccf::SeqNo head = index.get_indexed_watermark().seqno;
-      if (head == 0)
-      {
-        return std::nullopt;
-      }
-      ccf::SeqNo hi = (upper == 0) ? head : std::min<ccf::SeqNo>(upper, head);
-      if (hi == 0)
-      {
-        return std::nullopt;
-      }
-      const auto span = std::max<ccf::SeqNo>(index.max_requestable_range(), 1);
-      while (true)
-      {
-        const ccf::SeqNo lo = (hi > span) ? (hi - span) : 1;
-        const auto seqnos = index.get_write_txs_in_range(lo, hi);
-        if (seqnos.has_value() && !seqnos->empty())
-        {
-          ccf::SeqNo latest = 0; // the set is ascending
-          for (const auto s : *seqnos)
-          {
-            latest = s;
-          }
-          return latest;
-        }
-        if (lo == 1)
-        {
-          return std::nullopt;
-        }
-        hi = lo - 1;
-      }
     }
 
     // Operator-stream pagination bounds.

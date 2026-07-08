@@ -154,10 +154,11 @@ def test_receipt_rejects_wrong_digest(network):
 
     receipts = _uhdr(token)[RECEIPTS_LABEL]
     with open(network.service_cert, "rb") as f:
-        key = load_pem_x509_certificate(f.read()).public_key()
+        service_cert = f.read()
+    key = load_pem_x509_certificate(service_cert).public_key()
 
     # The real digest verifies; a corrupted one must be rejected.
-    _verify_receipt(token, open(network.service_cert, "rb").read())
+    _verify_receipt(token, service_cert)
     with pytest.raises(Exception):
         ccf.cose.verify_receipt(receipts[0], key, b"\x00" * 32)
 
