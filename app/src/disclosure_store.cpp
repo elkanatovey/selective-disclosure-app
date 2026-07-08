@@ -162,14 +162,32 @@ namespace selectivedisclosure
     const std::vector<StoredDisclosure>& stored,
     const std::vector<sdcwt::Path>& targets)
   {
+    // A target only "resolves" if some stored disclosure is the target itself
+    // or a descendant of it. A target that matches nothing (e.g. an
+    // out-of-range array index, or a path deeper than anything stored) selects
+    // nothing — we must NOT pull an ancestor container for a leaf that does not
+    // exist.
+    std::vector<const sdcwt::Path*> live;
+    for (const auto& t : targets)
+    {
+      const bool resolves = std::any_of(
+        stored.begin(), stored.end(), [&](const StoredDisclosure& d) {
+          return is_prefix(t, d.path);
+        });
+      if (resolves)
+      {
+        live.push_back(&t);
+      }
+    }
+
     // Keep stored order but partition by depth so ancestors precede descendants
     // (resolution is order-independent, but this is deterministic and clear).
     std::vector<const StoredDisclosure*> picked;
     for (const auto& d : stored)
     {
       const bool comparable =
-        std::any_of(targets.begin(), targets.end(), [&](const sdcwt::Path& t) {
-          return is_prefix(d.path, t) || is_prefix(t, d.path);
+        std::any_of(live.begin(), live.end(), [&](const sdcwt::Path* t) {
+          return is_prefix(d.path, *t) || is_prefix(*t, d.path);
         });
       if (comparable)
       {

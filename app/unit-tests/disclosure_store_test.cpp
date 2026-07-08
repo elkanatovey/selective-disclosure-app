@@ -156,6 +156,31 @@ TEST(DisclosureStore, SelectsNothingForUnrelatedOrEmpty)
   EXPECT_TRUE(select_disclosures(stored, {}).empty());
 }
 
+// An out-of-range element index resolves to nothing and must NOT pull the array
+// container (revealing a leaf that does not exist).
+TEST(DisclosureStore, OutOfRangeElementSelectsNothing)
+{
+  const std::vector<StoredDisclosure> stored =
+    decode_disclosure_store(encode_disclosure_store({
+      disc({1006}, blob(0x06)),
+      disc({1006, 0}, blob(0x60)),
+      disc({1006, 1}, blob(0x61)),
+    }));
+
+  // Element 5 does not exist: no ancestor container, nothing selected.
+  EXPECT_TRUE(select_disclosures(stored, {path({1006, 5})}).empty());
+}
+
+// A target deeper than anything stored resolves to nothing.
+TEST(DisclosureStore, TargetDeeperThanStoredSelectsNothing)
+{
+  const std::vector<StoredDisclosure> stored = decode_disclosure_store(
+    encode_disclosure_store({disc({1001}, blob(0x01))}));
+
+  // {1001} is a scalar with no children; {1001,0} matches nothing.
+  EXPECT_TRUE(select_disclosures(stored, {path({1001, 0})}).empty());
+}
+
 // Multiple targets select the union.
 TEST(DisclosureStore, MultipleTargetsSelectUnion)
 {

@@ -114,25 +114,24 @@ TEST(Statement, ReferencesElementsAreIndividuallyRedactable)
   EXPECT_EQ(
     top_level_disclosure_count(issued), sdcwt::statement::CONTENT_FIELD_COUNT);
 
-  // One nested disclosure per reference element, each at path {1006, i}.
-  std::vector<sdcwt::Path> element_paths;
+  // One nested disclosure per reference element, at paths {1006,0}, {1006,1},
+  // {1006,2} exactly (the indices, not just the count, must be right).
+  std::vector<int64_t> element_indices;
   for (const auto& d : issued.disclosures)
   {
     if (d.path.size() == 2)
     {
-      element_paths.push_back(d.path);
+      ASSERT_EQ(std::get<int64_t>(d.path[0]), sdcwt::statement::REFERENCES);
+      element_indices.push_back(std::get<int64_t>(d.path[1]));
     }
   }
-  ASSERT_EQ(element_paths.size(), 3u);
-  for (const auto& p : element_paths)
-  {
-    ASSERT_EQ(p.size(), 2u);
-    EXPECT_EQ(std::get<int64_t>(p[0]), sdcwt::statement::REFERENCES);
-  }
+  std::sort(element_indices.begin(), element_indices.end());
+  EXPECT_EQ(element_indices, (std::vector<int64_t>{0, 1, 2}));
 
-  // The reference values are hidden in the signed token.
+  // Every reference value is hidden in the signed token.
   EXPECT_FALSE(token_contains(issued, "CVE-1"));
   EXPECT_FALSE(token_contains(issued, "CVE-2"));
+  EXPECT_FALSE(token_contains(issued, "CVE-3"));
 }
 
 // An absent `references` field (garbage sentinel) yields no nested disclosures.

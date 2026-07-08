@@ -226,6 +226,12 @@ def test_operator_discloses_subset(network):
     assert st.BODY not in out.disclosed
     assert st.SEVERITY not in out.disclosed
 
+    # Privacy at the WIRE level: undisclosed field values are cryptographically
+    # absent from the artifact, not merely dropped by the resolver.
+    assert b"heap overflow in parser" in presented  # disclosed
+    assert b"secret exploit details" not in presented  # body, undisclosed
+    assert b"high" not in presented  # severity, undisclosed
+
     # Still transparent: the embedded receipt verifies against the service.
     assert RECEIPTS_LABEL in _uhdr(presented)
     _verify_receipt(presented, service_cert)
@@ -246,11 +252,38 @@ def test_disclosure_requires_operator(network):
     assert anon.status in (401, 403), anon.body
 
 
+def _sd_claims(token: bytes) -> list:
+    """The presented disclosures (sd_claims, unprotected header label 17)."""
+    return _uhdr(token).get(17, [])
+
+
+def _references_container_on_wire(token: bytes):
+    """The on-wire value of the disclosed `references` array (a list still
+    containing tag(60) placeholders for undisclosed elements), or None."""
+    for enc in _sd_claims(token):
+        d = cbor2.loads(enc)
+        if len(d) == 3 and d[2] == st.REFERENCES:  # [salt, value, key]
+            return d[1]
+    return None
+
+
+def _drop_sd_claim(token: bytes, predicate) -> bytes:
+    """Return the token with every sd_claim matching `predicate(decoded)` removed
+    from the unprotected header — for building malformed presentations."""
+    obj = cbor2.loads(token)
+    arr = list(obj.value)
+    uhdr = dict(arr[1])
+    uhdr[17] = [e for e in uhdr[17] if not predicate(cbor2.loads(e))]
+    arr[1] = uhdr
+    return cbor2.dumps(cbor2.CBORTag(obj.tag, arr))
+
+
 def test_operator_discloses_array_element(network):
     """Recursive/subfield disclosure: the Operator reveals a single `references`
-    element without exposing its siblings. Proves the ancestor rule end-to-end —
-    the array container is disclosed so the element is resolvable, but the other
-    elements stay hidden (omitted, not just blanked)."""
+    element. The sibling *values* are cryptographically absent from the artifact
+    (only element 1's opening is attached); the array length/positions ARE
+    visible once the container is disclosed (inherent to array disclosure —
+    hiding those would need length padding, which we do not do)."""
     client = network.client()
     report = {
         "title": "heap overflow",
@@ -277,14 +310,69 @@ def test_operator_discloses_array_element(network):
     key = _ec2_key_from_pem(key_pem)
 
     out = st.validate_statement(presented, key)
-    # references is disclosed as a top-level field; only element 1 is revealed,
-    # its siblings are omitted entirely (no count/position leak).
+    # Only element 1 resolves; siblings are dropped from the resolved value.
     assert out.disclosed[st.REFERENCES] == ["CVE-2025-0002"]
     assert st.TITLE not in out.disclosed  # unrelated field stays redacted
 
-    # Still transparent: the embedded receipt verifies.
+    # Privacy at the WIRE level: the disclosed value is present, the sibling
+    # values are cryptographically absent (their openings were never attached).
+    assert b"CVE-2025-0002" in presented
+    assert b"CVE-2025-0001" not in presented
+    assert b"CVE-2025-0003" not in presented
+
+    # Honest about what IS revealed. The container disclosure keeps ALL elements
+    # as tag(60) placeholders; the disclosed value rides in a SEPARATE opening
+    # blob that matches one placeholder by digest. So an observer of the artifact
+    # learns the array length (3) and can match the opening to its position —
+    # only the sibling *values* are hidden.
+    container = _references_container_on_wire(presented)
+    assert container is not None and len(container) == 3
+    placeholders = [
+        e for e in container if isinstance(e, cbor2.CBORTag) and e.tag == 60
+    ]
+    assert len(placeholders) == 3  # count leaks; every slot is a placeholder
+    # Exactly one array-element opening ([salt, value]) is attached: element 1.
+    openings = [
+        cbor2.loads(e)[1] for e in _sd_claims(presented) if len(cbor2.loads(e)) == 2
+    ]
+    assert openings == ["CVE-2025-0002"]
+
     assert RECEIPTS_LABEL in _uhdr(presented)
     _verify_receipt(presented, service_cert)
+
+
+def test_nested_disclosure_without_ancestor_is_rejected(network):
+    """The ancestor rule is load-bearing: strip the array-container disclosure
+    from a valid element presentation and the verifier MUST reject it (the
+    element's hash is no longer reachable). Proves `select_disclosures` pulling
+    the ancestor is necessary, not decorative."""
+    client = network.client()
+    report = {"references": ["CVE-A", "CVE-B", "CVE-C"]}
+    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
+    txid = resp.tx_id
+
+    op = network.client(user="user0")
+    presented = op.post_historical(
+        f"/operator/statements/{txid}/disclosure",
+        cbor2.dumps({"fields": [["references", 1]]}),
+        "application/cbor",
+    ).body
+
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+
+    # Sanity: as issued (with ancestor) it verifies.
+    assert st.validate_statement(presented, key).disclosed[st.REFERENCES] == ["CVE-B"]
+
+    # Remove the whole-array {1006} disclosure, keeping the element {1006,1}.
+    orphaned = _drop_sd_claim(
+        presented, lambda d: len(d) == 3 and d[2] == st.REFERENCES
+    )
+    with pytest.raises(Exception):
+        st.validate_statement(orphaned, key)
 
 
 def test_operator_discloses_whole_array(network):
@@ -310,3 +398,29 @@ def test_operator_discloses_whole_array(network):
     )
     out = st.validate_statement(disc.body, key)
     assert out.disclosed[st.REFERENCES] == ["CVE-A", "CVE-B"]
+
+
+def test_at_rest_shape_is_uniform_regardless_of_references(network):
+    """At-rest privacy: two reports with wildly different `references` (none vs
+    many) must yield an identical redacted shape in the signed token — the whole
+    array is a single top-level Redacted Claim Hash, so element-level redaction
+    leaks nothing about the reference count until the array is disclosed."""
+    client = network.client()
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+
+    def shape(report):
+        txid = client.post("/reports", cbor2.dumps(report), "application/cbor").tx_id
+        token = client.get_historical(f"/statements/{txid}").body
+        st.validate_statement(token, key)  # well-formed under the key
+        return st.redacted_shape(token)
+
+    none_refs = shape({"title": "a"})
+    many_refs = shape({"title": "a", "references": ["x", "y", "z", "w", "v"]})
+    assert none_refs == many_refs
+    # And it is the strict-uniformity shape: all content fields redacted.
+    _, n_redacted = none_refs
+    assert n_redacted == len(st.CONTENT_FIELDS)
