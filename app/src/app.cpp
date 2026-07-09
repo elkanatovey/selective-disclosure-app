@@ -644,10 +644,10 @@ namespace selectivedisclosure
             statement_index->get_write_txs_in_range(from, page_end);
           if (!seqnos.has_value())
           {
-            ctx.rpc_ctx->set_response_status(HTTP_STATUS_SERVICE_UNAVAILABLE);
-            ctx.rpc_ctx->set_response_body(
-              "Statement index is not ready for the requested range; "
-              "retry.");
+            ctx.rpc_ctx->set_error(
+              HTTP_STATUS_SERVICE_UNAVAILABLE,
+              ccf::errors::InternalError,
+              "Statement index is not ready for the requested range; retry.");
             return;
           }
           for (const auto s : *seqnos)
@@ -655,9 +655,9 @@ namespace selectivedisclosure
             ccf::View view = 0;
             if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
             {
-              ctx.rpc_ctx->set_response_status(
-                HTTP_STATUS_INTERNAL_SERVER_ERROR);
-              ctx.rpc_ctx->set_response_body(
+              ctx.rpc_ctx->set_error(
+                HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                ccf::errors::InternalError,
                 "Failed to resolve a committed seqno to a transaction id.");
               return;
             }

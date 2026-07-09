@@ -63,13 +63,15 @@ Submit a report. No auth (open submission — the service is the sole signer).
 - **Query:** `wait` (bool, default `true`). `wait=false` returns as soon as the
   transaction commits locally (does not block on global commit).
 - **Request body** (`application/cbor`): a **content-fields map** with named
-  keys and native CBOR types — see [Report fields](#report-fields). `parent` is
-  **not** accepted here (it is server-derived for follow-ups).
+  keys and native CBOR types — see [Report fields](#report-fields). A `parent`
+  key is **ignored** here (it is not a submit field; it is server-derived for
+  follow-ups).
 - **204 No Content** (sync, default) — the statement was built, signed, stored,
   and **globally committed**; the id is in `x-ms-ccf-transaction-id`.
 - **202 Accepted** (`wait=false`) — committed locally; the id is in
   `x-ms-ccf-transaction-id`. Poll `GET /statements/{txid}/receipt` for the proof.
 - **400** `InvalidInput` — body is not a valid CBOR content map / wrong field type.
+- **500** `InternalError` — statement construction/signing failed.
 - **503** — issuer key not initialised (`POST /signing-key` first), or the
   transaction was rolled back before global commit.
 
@@ -123,6 +125,7 @@ Initialise or rotate the issuer signing key. **Member auth** (governance).
   `x-ms-ccf-transaction-id`.
 - **200 OK** — idempotent no-op: a key already exists and `rotate` was not set.
 - **401 / 403** — caller is not a member.
+- **503** — the registration transaction was rolled back before global commit.
 
 ---
 
@@ -136,9 +139,10 @@ The **fully unredacted** transparent statement — the redacted token with **all
 retained disclosures presented + the receipt embedded. (Historical read — see
 retry note.)
 
-- **200** — `application/cose` (unredacted transparent statement).
-- **404** `ResourceNotFound` — `{txid}` is not a statement, or no confidential
-  disclosures were retained for it.
+- **200** — `application/cose` (unredacted transparent statement). If no
+  disclosures were retained, all fields simply stay redacted (still `200`).
+- **404** `ResourceNotFound` — `{txid}` is not a statement submission.
+- **500** `InternalError` — failed to build the unredacted statement.
 
 ### `GET /operator/statements`
 Stream the txids of committed statements (reports **and** follow-ups) over a
@@ -155,6 +159,7 @@ seqno range, in seqno order.
   - `next` (int, **optional**) — present only when the requested range spans more
     than one page; the `from` to use for the next page.
 - **503** — the statement index is not ready for the requested range; retry.
+- **500** `InternalError` — failed to resolve a committed seqno to a txid.
 
 The Operator drains the stream by polling `from = to + 1` until `to == watermark`,
 then fetches each unredacted statement via `GET /operator/statements/{txid}`.
@@ -176,7 +181,8 @@ presented **transparent statement** the Operator can hand to a researcher.
   hidden, including on the wire.
 - **400** `InvalidInput` — unknown field name or malformed selection.
 - **404** `ResourceNotFound` — `{txid}` is not a statement, or no disclosures
-  were retained.
+  were retained for it.
+- **500** `InternalError` — failed to build the disclosure.
 
 ### `POST /reports/{parent_txid}/follow-ups`
 Append a follow-up statement cryptographically bound to an existing statement.
@@ -190,6 +196,9 @@ Append a follow-up statement cryptographically bound to an existing statement.
   `x-ms-ccf-transaction-id`.
 - **400** `InvalidInput` — malformed content body.
 - **404** `ResourceNotFound` — `{parent_txid}` did not commit a statement.
+- **500** `InternalError` — statement construction/signing failed.
+- **503** — issuer key not initialised, or the transaction was rolled back
+  before global commit.
 
 ---
 
@@ -209,8 +218,9 @@ native CBOR types):
 | `references` | array of tstr | individually disclosable by index |
 | `patch_date` | int | |
 
-`parent` is reserved (server-derived for follow-ups) and rejected on submit.
-Absent fields are decoy-padded so every stored statement has an identical
+`parent` is not a submit field — it is server-derived for follow-ups, so a
+`parent` key sent to `POST /reports` is ignored. Absent fields are decoy-padded
+so every stored statement has an identical
 redacted shape (reports and follow-ups are indistinguishable at rest).
 
 ## Verifying a statement offline

@@ -7,13 +7,15 @@ Reports are registered as **redacted, service-signed
 [SD-CWT](https://datatracker.ietf.org/doc/draft-ietf-spice-sd-cwt/) tokens**
 (Selective Disclosure CBOR Web Tokens): the ledger proves a report's
 **existence, ordering, and integrity** to anyone, while its **contents stay
-hidden**. The service (the "Operator" — e.g. a vendor triaging reports) can then
-**selectively disclose** individual fields of a stored report — for example to
-prove a new submission is a duplicate — without revealing the rest.
+hidden**. A vendor triaging reports acts as the **Operator** (a CCF user
+authorised by governance) and can then **selectively disclose** individual fields
+of a stored report — for example to prove a new submission is a duplicate —
+without revealing the rest.
 
-Every statement has an **identical redacted shape** (uniform field count, decoy
-padding), so reports and follow-ups are indistinguishable at rest, and the
-service is the **sole signer** (submitters send raw content, never signatures).
+The service itself is the **sole signer**: it constructs and signs every
+statement (submitters send raw content, never signatures), and every statement
+has an **identical redacted shape** (uniform field count, decoy padding), so
+reports and follow-ups are indistinguishable at rest.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design, threat model, and
 API contract.

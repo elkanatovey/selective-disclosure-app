@@ -297,8 +297,10 @@ lives in the child's redacted, salted `parent` field, and follow-ups surface via
   precedence **by seqno**.
 
 ## 9. Endpoints & off-chain tooling
-Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
-**pending** = format/endpoint changes agreed but not yet coded.
+Locked API contract (full reference: [`API.md`](API.md)). Formats: **CBOR in**;
+responses are **COSE** (statements/receipts) or **CBOR** (`/version`,
+`/signing-key`, the Operator stream), with `204`/`202` carrying no body. **Live**
+= built (PR #4); **pending** = format/endpoint changes agreed but not yet coded.
 
 **Public (no auth):**
 - `GET /version` — service-discovery metadata (CBOR `{app_version, schema_version,
@@ -343,7 +345,8 @@ Operator user is added by governance — §12.2):
   `{parent_txid}` and write the child in one tx; rejects (404) unless
   `{parent_txid}` genuinely committed a statement (the parent tx's claims digest
   must equal `hash(token read)`, guarding against a stale per-tx `Value` read).
-  Returns **204 + txid header**. *(Live.)* *(No parent→children index — see §8;
+  Returns **204 + txid header** (or **202** with `?wait=false`); see
+  [`API.md`](API.md) for the full status set. *(Live.)* *(No parent→children index — see §8;
   the link lives in the child's redacted, salted `parent` field and follow-ups
   surface via `get_statements`.)*
 - `GET /operator/statements/{txid}` — a single **unredacted** transparent
@@ -386,8 +389,10 @@ and `make_disclosure` return confidential plaintext and MUST be gated to the
 notary/no-enrollment stance for submission (§4).
 
 **Off-chain (NOT a service endpoint):**
-- `verify` — **researcher-side.** Checks the service signature + receipt and
-  hash-matches disclosures (`validate` / `validate_trusted`).
+- `verify` — **researcher-side.** `validate` checks the **issuer signature**;
+  `validate_trusted` instead assumes trust from an external CCF **receipt** (it
+  does not re-check the signature). Both then hash-match the presented
+  disclosures.
 
 **Duplicate proof:** The Operator runs `make_disclosure` on the **earlier** matching
 statement; verifier checks **seqno M < their seqno N** and that the disclosed
