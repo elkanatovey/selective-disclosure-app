@@ -70,12 +70,23 @@ def _wait_for_node_url(log_path: Path) -> str:
     )
 
 
+def _require(present: bool, msg: str) -> None:
+    """Skip the e2e suite when a prerequisite is missing locally, but FAIL in CI:
+    a green CI run must mean the tests actually ran, never that they were
+    silently skipped because the app/sandbox wasn't found."""
+    if present:
+        return
+    if os.environ.get("CI"):
+        raise RuntimeError(f"{msg} — refusing to skip the e2e suite in CI")
+    pytest.skip(msg)
+
+
 @pytest.fixture(scope="session")
 def network(tmp_path_factory):
-    if not APP_BINARY.exists():
-        pytest.skip(f"app not built: {APP_BINARY} (run docker/build-app.sh)")
-    if not SANDBOX.exists():
-        pytest.skip(f"CCF sandbox not found: {SANDBOX}")
+    _require(
+        APP_BINARY.exists(), f"app not built: {APP_BINARY} (run docker/build-app.sh)"
+    )
+    _require(SANDBOX.exists(), f"CCF sandbox not found: {SANDBOX}")
 
     log_path = tmp_path_factory.mktemp("sandbox") / "sandbox.log"
     env = {**os.environ, "VENV_DIR": ".venv_ccf_sandbox"}

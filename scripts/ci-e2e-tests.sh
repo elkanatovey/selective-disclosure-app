@@ -27,7 +27,10 @@ fi
 
 echo "== Building the app =="
 INSTALL_DIR="$INSTALL_DIR" ./docker/build-app.sh
+# The e2e conftest skips if these are missing; assert them here so a mislocated
+# app/sandbox fails the CI job loudly instead of a silent all-skipped pass.
 test -x "$APP"
+test -f .ccf-install/bin/sandbox.sh
 
 echo "== Creating the sandbox + e2e venv ($VENV_DIR) =="
 if [ ! -f "$VENV_DIR/bin/activate" ]; then

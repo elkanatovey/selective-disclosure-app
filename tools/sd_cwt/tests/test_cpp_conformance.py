@@ -28,17 +28,47 @@ _ARTIFACT_DIR = os.environ.get("SDCWT_ARTIFACT_DIR")
 _SUITES = ["es256", "es384"]
 
 
-def _load(suite: str):
+def _artifact_dir(suite: str) -> Path:
+    """Resolve a suite's artifact dir. If SDCWT_ARTIFACT_DIR is unset (local dev
+    without the C++ emitter), skip. If it IS set but the artifacts are missing,
+    FAIL — that means the C++ emitter did not run, and silently skipping would
+    turn a broken cross-language check into a green CI job."""
     if not _ARTIFACT_DIR:
         pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
     d = Path(_ARTIFACT_DIR) / suite
-    needed = ["statement.cbor", "disclosures.cbor", "signer.pem"]
-    if not all((d / n).exists() for n in needed):
-        pytest.skip(f"C++ conformance artifacts missing in {d}")
+    missing = [
+        n
+        for n in ("statement.cbor", "disclosures.cbor", "signer.pem")
+        if not (d / n).exists()
+    ]
+    if missing:
+        pytest.fail(
+            f"C++ conformance artifacts missing in {d}: {missing} — the C++ "
+            "emitter did not produce them (do not silently skip)"
+        )
+    return d
+
+
+def _load(suite: str):
+    d = _artifact_dir(suite)
     token = (d / "statement.cbor").read_bytes()
     disclosures = cbor2.loads((d / "disclosures.cbor").read_bytes())
     pem = (d / "signer.pem").read_bytes()
     return token, disclosures, pem
+
+
+def _suite_dir(suite: str, marker: str = "statement.cbor") -> Path:
+    """Like _artifact_dir but for single-file suites: skip iff the artifact dir
+    is unset (local dev); FAIL if it is set but the artifact is absent."""
+    if not _ARTIFACT_DIR:
+        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
+    d = Path(_ARTIFACT_DIR) / suite
+    if not (d / marker).exists():
+        pytest.fail(
+            f"C++ {suite} artifact missing in {d} — the C++ emitter did not "
+            "produce it (do not silently skip)"
+        )
+    return d
 
 
 def _present(token: bytes, disclosures: list) -> bytes:
@@ -132,11 +162,7 @@ def test_payload_byte_identical_to_python(monkeypatch):
     are byte-for-byte identical. Signatures are randomised ECDSA and are NOT
     compared (covered by test_python_verifies_cpp_signature).
     """
-    if not _ARTIFACT_DIR:
-        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
-    d = Path(_ARTIFACT_DIR) / "det"
-    if not (d / "statement.cbor").exists():
-        pytest.skip(f"C++ deterministic artifact missing in {d}")
+    d = _suite_dir("det")
     cpp_token = (d / "statement.cbor").read_bytes()
 
     from pycose.keys import EC2Key
@@ -169,11 +195,7 @@ def test_python_validates_cpp_array_redaction():
     Uses the core verifier (not the statement schema) since this is a generic
     claims set; disclosing the element restores the full array.
     """
-    if not _ARTIFACT_DIR:
-        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
-    d = Path(_ARTIFACT_DIR) / "array"
-    if not (d / "statement.cbor").exists():
-        pytest.skip(f"C++ array-redaction artifact missing in {d}")
+    d = _suite_dir("array")
 
     token = (d / "statement.cbor").read_bytes()
     disclosures = cbor2.loads((d / "disclosures.cbor").read_bytes())
@@ -192,11 +214,7 @@ def test_python_validates_cpp_nested_redaction():
     structure (proving the C++ ancestor-disclosure encoding matches the
     reference).
     """
-    if not _ARTIFACT_DIR:
-        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
-    d = Path(_ARTIFACT_DIR) / "nested"
-    if not (d / "statement.cbor").exists():
-        pytest.skip(f"C++ nested-redaction artifact missing in {d}")
+    d = _suite_dir("nested")
 
     token = (d / "statement.cbor").read_bytes()
     disclosures = cbor2.loads((d / "disclosures.cbor").read_bytes())
@@ -217,11 +235,7 @@ def test_decoy_padding_byte_identical_to_python(monkeypatch):
     reference. Values MUST stay in sync with
     app/unit-tests/conformance_test.cpp::emit_decoy.
     """
-    if not _ARTIFACT_DIR:
-        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
-    d = Path(_ARTIFACT_DIR) / "decoy"
-    if not (d / "statement.cbor").exists():
-        pytest.skip(f"C++ decoy-padding artifact missing in {d}")
+    d = _suite_dir("decoy")
     cpp_token = (d / "statement.cbor").read_bytes()
 
     from pycose.keys import EC2Key
@@ -248,11 +262,7 @@ def test_python_reads_cpp_cnf():
     C++-issued token is key-binding capable / interoperable. The holder-side
     KBT sign+verify round-trip itself is covered by tests/test_conformance.py.
     """
-    if not _ARTIFACT_DIR:
-        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
-    d = Path(_ARTIFACT_DIR) / "cnf"
-    if not (d / "statement.cbor").exists():
-        pytest.skip(f"C++ cnf artifact missing in {d}")
+    d = _suite_dir("cnf")
 
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
@@ -296,11 +306,7 @@ def test_python_verifies_cpp_kbt():
     the presented disclosure (1003 stays hidden). Values MUST stay in sync with
     app/unit-tests/conformance_test.cpp::emit_kbt.
     """
-    if not _ARTIFACT_DIR:
-        pytest.skip("SDCWT_ARTIFACT_DIR not set (C++ artifacts unavailable)")
-    d = Path(_ARTIFACT_DIR) / "kbt"
-    if not (d / "kbt.cbor").exists():
-        pytest.skip(f"C++ kbt artifact missing in {d}")
+    d = _suite_dir("kbt", "kbt.cbor")
 
     kbt = (d / "kbt.cbor").read_bytes()
     issuer = _ec2_key_from_pem((d / "signer.pem").read_bytes())
