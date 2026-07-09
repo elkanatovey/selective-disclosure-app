@@ -185,6 +185,16 @@ namespace selectivedisclosure
     std::vector<const StoredDisclosure*> picked;
     for (const auto& d : stored)
     {
+      // Decoy (salt-only padding) disclosures have an empty path. An empty path
+      // is a prefix of every target, so without this guard a decoy would be
+      // pulled in by ANY resolving target — presenting it to a researcher and
+      // revealing which top-level hashes are decoys, defeating decoy padding's
+      // purpose. Decoys are never selected by a field/element target; they are
+      // only ever presented wholesale in the Operator's own unredacted view.
+      if (d.path.empty())
+      {
+        continue;
+      }
       const bool comparable =
         std::any_of(live.begin(), live.end(), [&](const sdcwt::Path* t) {
           return is_prefix(d.path, *t) || is_prefix(*t, d.path);

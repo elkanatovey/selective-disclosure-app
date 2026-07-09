@@ -111,6 +111,21 @@ TEST(DisclosureStore, SelectsWholeTopLevelField)
   EXPECT_EQ(picked[0], blob(0x01));
 }
 
+// A decoy (salt-only padding) disclosure has an empty path. It must NOT be
+// pulled in by a field target — otherwise disclosing one field would leak which
+// top-level hashes are decoys, defeating decoy padding. Decoys are only ever
+// presented in the Operator's own full unredacted view.
+TEST(DisclosureStore, DecoyNotSelectedByFieldTarget)
+{
+  std::vector<StoredDisclosure> stored;
+  stored.push_back({path({1001}), blob(0x01)}); // a real field
+  stored.push_back({Path{}, blob(0xDD)}); // a decoy (empty path)
+
+  const auto picked = select_disclosures(stored, {path({1001})});
+  ASSERT_EQ(picked.size(), 1u);
+  EXPECT_EQ(picked[0], blob(0x01)); // only the real field, never the decoy
+}
+
 // Disclosing a nested element pulls in its ancestor (the ancestor rule) but not
 // its siblings.
 TEST(DisclosureStore, NestedElementPullsAncestorNotSiblings)
