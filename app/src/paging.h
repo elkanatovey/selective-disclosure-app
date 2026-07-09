@@ -12,8 +12,13 @@ namespace selectivedisclosure::paging
 {
   // CCF's seqno index (SeqnosForValue_Bucketed) throws if a single
   // get_write_txs_in_range(from, to) query spans more than its
-  // max_requestable_range(). These helpers query it in bounded windows so the
-  // range stays within that limit no matter how large the ledger grows.
+  // max_requestable_range(). `latest_write` queries it in bounded windows so
+  // the range stays within that limit no matter how large the ledger grows.
+  //
+  // (The Operator statement stream avoids windowing entirely by capping each
+  // page's seqno range below the bound -- see kMaxSeqnoPerPage in app.cpp.
+  // `latest_write` still needs it because it must walk back an unbounded,
+  // sparsely-populated index to find the greatest registration <= a seqno.)
   //
   // `Index` is any type exposing (matching CCF's index):
   //   size_t     max_requestable_range() const
@@ -27,43 +32,6 @@ namespace selectivedisclosure::paging
   ccf::SeqNo window_span(Index& index)
   {
     return std::max<ccf::SeqNo>(index.max_requestable_range(), 1);
-  }
-
-  // Collect (ascending) the write seqnos in [from, to], querying `index` in
-  // windows of at most `window_span` seqnos. Stops once `limit` seqnos are
-  // collected (`limit == 0` = no cap). Returns nullopt if a required window is
-  // not yet populated (the index returned nullopt).
-  template <typename Index>
-  std::optional<std::vector<ccf::SeqNo>> write_txs_in_windows(
-    Index& index, ccf::SeqNo from, ccf::SeqNo to, size_t limit)
-  {
-    std::vector<ccf::SeqNo> out;
-    if (to < from)
-    {
-      return out;
-    }
-    const ccf::SeqNo span = window_span(index);
-    for (ccf::SeqNo lo = from; lo <= to;)
-    {
-      // A window covers at most `span` seqnos, so its range length (hi - lo <=
-      // span - 1) stays within the index's max_requestable_range.
-      const ccf::SeqNo hi = std::min<ccf::SeqNo>(to, lo + span - 1);
-      const auto seqnos = index.get_write_txs_in_range(lo, hi);
-      if (!seqnos.has_value())
-      {
-        return std::nullopt;
-      }
-      for (const auto s : *seqnos)
-      {
-        out.push_back(s);
-        if (limit != 0 && out.size() >= limit)
-        {
-          return out;
-        }
-      }
-      lo = hi + 1;
-    }
-    return out;
   }
 
   // The highest write seqno at most `upper` (`upper == 0` = up to the index

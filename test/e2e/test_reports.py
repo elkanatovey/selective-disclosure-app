@@ -566,19 +566,16 @@ def test_follow_up_parent_link_is_salted(network):
     assert disclosed_parent(fu1) == disclosed_parent(fu2)
 
 
-def _operator_stream_ids(op, since=0, limit=1000):
-    """All statement txids from the Operator stream, following the cursor."""
-    import time
-
+def _operator_stream_ids(op, start=1):
+    """All statement txids from the Operator stream, following the `next` cursor."""
     ids = []
+    frm = start
     while True:
-        page = cbor2.loads(
-            op.get(f"/operator/statements?since={since}&limit={limit}").body
-        )
+        page = cbor2.loads(op.get(f"/operator/statements?from={frm}").body)
         ids.extend(page["statements"])
-        if len(page["statements"]) < limit or page["next"] == since:
+        if "next" not in page:
             break
-        since = page["next"]
+        frm = page["next"]
     return ids
 
 
@@ -665,30 +662,63 @@ def test_operator_stream_lists_in_seqno_order(network):
     assert r.status == 200, r.body
 
 
-def test_operator_stream_paginates_with_cursor(network):
-    """`limit` caps a page; passing the returned `next` as `since` advances
-    without repeats (stateless, replay-idempotent)."""
+def test_operator_stream_advances_by_seqno_range(network):
+    """The stream is a seqno-range window (SCITT /entries/txIds model): each page
+    reports the range it covers (`from`..`to`) and the ledger `watermark`, and
+    the Operator drains it by polling `from = to + 1`. Re-polling is
+    replay-idempotent and never repeats an already-consumed statement."""
     client = network.client()
     op = network.client(user="user0")
-    # Ensure at least two statements exist and are indexed.
-    client.post("/reports", cbor2.dumps({"title": "p1"}), "application/cbor")
-    last = client.post(
-        "/reports", cbor2.dumps({"title": "p2"}), "application/cbor"
-    ).tx_id
-    assert _wait_in_stream(op, last)
+    a = client.post("/reports", cbor2.dumps({"title": "a1"}), "application/cbor").tx_id
+    b = client.post("/reports", cbor2.dumps({"title": "a2"}), "application/cbor").tx_id
+    assert _wait_in_stream(op, b)
 
-    page1 = cbor2.loads(op.get("/operator/statements?since=0&limit=1").body)
-    assert len(page1["statements"]) == 1
-    nxt = page1["next"]
-    page2 = cbor2.loads(op.get(f"/operator/statements?since={nxt}&limit=1").body)
-    assert len(page2["statements"]) == 1
-    assert page2["statements"][0] != page1["statements"][0]
-    assert page2["next"] > nxt
+    # First drain from the start: covers up to the current watermark, and since
+    # the whole ledger fits one page (span >> a sandbox ledger) there is no
+    # `next` cursor and `to == watermark` (the "caught up" signal).
+    page1 = cbor2.loads(op.get("/operator/statements?from=1").body)
+    assert a in page1["statements"] and b in page1["statements"]
+    assert page1["to"] == page1["watermark"]
+    assert "next" not in page1
+    caught_up = page1["to"]
+
+    # Polling again from just past the consumed range yields nothing new until
+    # more is submitted (no repeats).
+    empty = cbor2.loads(op.get(f"/operator/statements?from={caught_up + 1}").body)
+    assert empty["statements"] == []
+    assert empty["watermark"] == caught_up
+
+    # A new submission shows up on the next incremental poll, and only it.
+    c = client.post("/reports", cbor2.dumps({"title": "a3"}), "application/cbor").tx_id
+    assert _wait_in_stream(op, c)
+    page2 = cbor2.loads(op.get(f"/operator/statements?from={caught_up + 1}").body)
+    assert page2["statements"] == [c]
+    assert page2["watermark"] > caught_up
+
+
+def test_operator_stream_reports_watermark_block_count(network):
+    """`watermark` is the ledger tip (the Operator's block count): it is
+    monotonic and advances as statements are committed."""
+    client = network.client()
+    op = network.client(user="user0")
+    first = client.post(
+        "/reports", cbor2.dumps({"title": "w1"}), "application/cbor"
+    ).tx_id
+    assert _wait_in_stream(op, first)
+    wm1 = cbor2.loads(op.get("/operator/statements?from=1").body)["watermark"]
+    assert wm1 > 0
+
+    second = client.post(
+        "/reports", cbor2.dumps({"title": "w2"}), "application/cbor"
+    ).tx_id
+    assert _wait_in_stream(op, second)
+    wm2 = cbor2.loads(op.get("/operator/statements?from=1").body)["watermark"]
+    assert wm2 > wm1
 
 
 def test_operator_stream_requires_operator(network):
     """The Operator stream is Operator-gated."""
-    anon = network.client().get("/operator/statements?since=0")
+    anon = network.client().get("/operator/statements?from=1")
     assert anon.status in (401, 403), anon.body
 
 

@@ -27,6 +27,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: e2e Python format & lint (black / isort / flake8)
+    runs-on: ubuntu-latest
+    steps:
+      # Pure-Python lint of the e2e harness; no CCF/sandbox needed, so it runs
+      # on a plain runner and gives fast feedback independent of the heavy e2e
+      # job below.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install lint deps
+        run: pip install "black>=24" "isort>=5" "flake8>=7"
+      - name: black
+        run: black --check test/e2e
+      - name: isort
+        run: isort --check --profile black test/e2e
+      - name: flake8 (correctness only, black-compatible)
+        # Pyflakes (F) + syntax (E9): unused imports, undefined names, etc.
+        # Style/line-length are owned by black, so they are not re-checked here.
+        run: flake8 --select=F,E9 test/e2e
+
   e2e:
     name: App e2e (sandbox node)
     runs-on: ubuntu-latest

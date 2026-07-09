@@ -569,74 +569,112 @@ namespace selectivedisclosure
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
 
-      // --- get_statements_since: the Operator stream. Returns the txids of the
-      // statements committed after `since` (up to `limit`), in seqno order,
-      // plus a `next` cursor. The Operator holds its own high-water cursor and
-      // pulls each unredacted statement via GET /operator/statements/{txid}.
-      // Uses the statement seqno index (no per-entry historical fetch here).
+      // --- get_statements: the Operator stream over a seqno range. Returns the
+      // txids of the statements committed in the range [`from`, `to`] (a page
+      // at a time), in seqno order, together with the current ledger
+      // `watermark` (so the Operator always knows how far the ledger extends --
+      // its block count -- and when it has drained the stream) and a `next`
+      // cursor when the requested range spans more than one page.
+      //
+      // Following SCITT's /entries/txIds model: a page covers a bounded seqno
+      // *range* (at most `kMaxSeqnoPerPage`), kept strictly below the index's
+      // max_requestable_range, so a single index query can never exceed that
+      // bound no matter how large the ledger grows -- no server-side windowing
+      // is needed. The Operator pulls each unredacted statement via GET
+      // /operator/statements/{txid} and follows `next` (or polls `from =
+      // to + 1`) until it has caught up with `watermark`.
       // ------------
-      auto get_statements_since =
-        [this](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
-          const auto pq =
-            ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
-          std::string err;
-          const ccf::SeqNo since =
-            ccf::http::get_query_value_opt<uint64_t>(pq, "since", err)
-              .value_or(0);
-          size_t limit =
-            ccf::http::get_query_value_opt<uint64_t>(pq, "limit", err)
-              .value_or(kDefaultPageLimit);
-          limit = std::min<size_t>(std::max<size_t>(limit, 1), kMaxPageLimit);
+      auto get_statements = [this](
+                              ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+        const auto pq =
+          ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
+        std::string err;
+        ccf::SeqNo from =
+          ccf::http::get_query_value_opt<uint64_t>(pq, "from", err).value_or(1);
+        from = std::max<ccf::SeqNo>(from, 1);
 
-          std::vector<std::string> txids;
-          ccf::SeqNo next = since;
-          const auto watermark = statement_index->get_indexed_watermark();
-          if (watermark.seqno > since)
+        const ccf::SeqNo watermark =
+          statement_index->get_indexed_watermark().seqno;
+
+        // Clamp the (optional) upper bound to what the index can serve, so a
+        // page never asks for un-indexed seqnos.
+        ccf::SeqNo to = ccf::http::get_query_value_opt<uint64_t>(pq, "to", err)
+                          .value_or(watermark);
+        to = std::min<ccf::SeqNo>(to, watermark);
+
+        // A page covers at most `span` seqnos, kept strictly below the index's
+        // max_requestable_range so the single query below can never throw.
+        const ccf::SeqNo max_span = statement_index->max_requestable_range();
+        const ccf::SeqNo span = std::min<ccf::SeqNo>(
+          kMaxSeqnoPerPage, max_span > 1 ? max_span - 1 : kMaxSeqnoPerPage);
+        const ccf::SeqNo page_end =
+          (to >= from) ? std::min<ccf::SeqNo>(to, from + span) : (from - 1);
+
+        std::vector<std::string> txids;
+        if (to >= from)
+        {
+          const auto seqnos =
+            statement_index->get_write_txs_in_range(from, page_end);
+          if (!seqnos.has_value())
           {
-            // Collect (windowed) up to `limit` statement seqnos after `since`,
-            // then resolve each to a txid. On a seqno->view lookup failure,
-            // stop without advancing `next` past it, so it is retried next poll
-            // rather than permanently skipped.
-            const auto seqnos = paging::write_txs_in_windows(
-              *statement_index, since + 1, watermark.seqno, limit);
-            if (seqnos.has_value())
-            {
-              for (const auto s : *seqnos)
-              {
-                ccf::View view = 0;
-                if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
-                {
-                  break;
-                }
-                txids.push_back(ccf::TxID{view, s}.to_str());
-                next = s;
-              }
-            }
+            ctx.rpc_ctx->set_response_status(HTTP_STATUS_SERVICE_UNAVAILABLE);
+            ctx.rpc_ctx->set_response_body(
+              "Statement index is not ready for the requested range; "
+              "retry.");
+            return;
           }
-
-          const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
-            QCBOREncode_OpenMap(&c);
-            QCBOREncode_OpenArrayInMapSZ(&c, "statements");
-            for (const auto& t : txids)
+          for (const auto s : *seqnos)
+          {
+            ccf::View view = 0;
+            if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
             {
-              QCBOREncode_AddSZString(&c, t.c_str());
+              ctx.rpc_ctx->set_response_status(
+                HTTP_STATUS_INTERNAL_SERVER_ERROR);
+              ctx.rpc_ctx->set_response_body(
+                "Failed to resolve a committed seqno to a transaction id.");
+              return;
             }
-            QCBOREncode_CloseArray(&c);
-            QCBOREncode_AddInt64ToMap(&c, "next", static_cast<int64_t>(next));
-            QCBOREncode_CloseMap(&c);
-          });
+            txids.push_back(ccf::TxID{view, s}.to_str());
+          }
+        }
+        const bool more = page_end < to;
 
-          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-          ctx.rpc_ctx->set_response_header(
-            ccf::http::headers::CONTENT_TYPE,
-            ccf::http::headervalues::contenttype::CBOR);
-          ctx.rpc_ctx->set_response_body(body);
-        };
+        const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
+          QCBOREncode_OpenMap(&c);
+          QCBOREncode_OpenArrayInMapSZ(&c, "statements");
+          for (const auto& t : txids)
+          {
+            QCBOREncode_AddSZString(&c, t.c_str());
+          }
+          QCBOREncode_CloseArray(&c);
+          QCBOREncode_AddInt64ToMap(&c, "from", static_cast<int64_t>(from));
+          // The highest seqno this page covers; the Operator's next poll
+          // starts at `to + 1`.
+          QCBOREncode_AddInt64ToMap(&c, "to", static_cast<int64_t>(page_end));
+          // The current ledger tip: the Operator's block count and its
+          // "caught up" signal (once `to == watermark`, the stream is
+          // drained).
+          QCBOREncode_AddInt64ToMap(
+            &c, "watermark", static_cast<int64_t>(watermark));
+          if (more)
+          {
+            QCBOREncode_AddInt64ToMap(
+              &c, "next", static_cast<int64_t>(page_end + 1));
+          }
+          QCBOREncode_CloseMap(&c);
+        });
+
+        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+        ctx.rpc_ctx->set_response_header(
+          ccf::http::headers::CONTENT_TYPE,
+          ccf::http::headervalues::contenttype::CBOR);
+        ctx.rpc_ctx->set_response_body(body);
+      };
 
       make_read_only_endpoint(
         "/operator/statements",
         HTTP_GET,
-        get_statements_since,
+        get_statements,
         {ccf::user_cert_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Sometimes)
         .install();
@@ -768,9 +806,11 @@ namespace selectivedisclosure
         ccf::ClaimsDigest::Digest(token);
     }
 
-    // Operator-stream pagination bounds.
-    static constexpr size_t kDefaultPageLimit = 100;
-    static constexpr size_t kMaxPageLimit = 1000;
+    // Operator-stream page size: the maximum seqno *range* a single page
+    // covers. Kept well below the statement index's max_requestable_range
+    // (== (max_buckets - 1) * seqnos_per_bucket) so one index query per page
+    // never exceeds that bound, no matter how large the ledger grows.
+    static constexpr ccf::SeqNo kMaxSeqnoPerPage = 10000;
   };
 }
 

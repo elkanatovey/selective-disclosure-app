@@ -8,7 +8,6 @@
 #include <vector>
 
 using selectivedisclosure::paging::latest_write;
-using selectivedisclosure::paging::write_txs_in_windows;
 
 namespace
 {
@@ -71,58 +70,6 @@ namespace
       return true;
     }
   };
-}
-
-// A range larger than one window is collected across multiple bounded queries.
-TEST(Paging, CollectsAcrossMultipleWindows)
-{
-  FakeIndex idx{.span = 8, .watermark = 40, .writes = {3, 11, 19, 25, 33}};
-  const auto out = write_txs_in_windows(idx, 1, 40, 0);
-  ASSERT_TRUE(out.has_value());
-  EXPECT_EQ(*out, (std::vector<ccf::SeqNo>{3, 11, 19, 25, 33}));
-  EXPECT_GT(idx.queries.size(), 1u); // genuinely windowed
-  EXPECT_TRUE(idx.all_queries_within_bound()); // never exceeded the limit
-}
-
-// Windows tile the range contiguously without gaps or overlap.
-TEST(Paging, WindowsTileContiguously)
-{
-  FakeIndex idx{.span = 5, .watermark = 20, .writes = {}};
-  (void)write_txs_in_windows(idx, 1, 20, 0);
-  // [1,5], [6,10], [11,15], [16,20]
-  ASSERT_EQ(idx.queries.size(), 4u);
-  EXPECT_EQ(idx.queries[0], (std::pair<ccf::SeqNo, ccf::SeqNo>{1, 5}));
-  EXPECT_EQ(idx.queries[1], (std::pair<ccf::SeqNo, ccf::SeqNo>{6, 10}));
-  EXPECT_EQ(idx.queries[3], (std::pair<ccf::SeqNo, ccf::SeqNo>{16, 20}));
-  EXPECT_TRUE(idx.all_queries_within_bound());
-}
-
-// `limit` caps the number of collected seqnos (and can stop mid-window).
-TEST(Paging, RespectsLimit)
-{
-  FakeIndex idx{.span = 100, .watermark = 50, .writes = {2, 4, 6, 8, 10}};
-  const auto out = write_txs_in_windows(idx, 1, 50, 2);
-  ASSERT_TRUE(out.has_value());
-  EXPECT_EQ(*out, (std::vector<ccf::SeqNo>{2, 4}));
-}
-
-// An empty range yields an empty result with no queries.
-TEST(Paging, EmptyRange)
-{
-  FakeIndex idx{.span = 8, .watermark = 10, .writes = {1, 2}};
-  const auto out = write_txs_in_windows(idx, 11, 10, 0); // to < from
-  ASSERT_TRUE(out.has_value());
-  EXPECT_TRUE(out->empty());
-  EXPECT_TRUE(idx.queries.empty());
-}
-
-// A not-yet-populated window propagates as nullopt.
-TEST(Paging, PropagatesUnpopulated)
-{
-  FakeIndex idx{
-    .span = 8, .watermark = 40, .writes = {3, 20}, .unpopulated_from = 9};
-  const auto out = write_txs_in_windows(idx, 1, 40, 0);
-  EXPECT_FALSE(out.has_value()); // window [9,16] was not populated
 }
 
 // latest_write finds the greatest write, walking back through empty windows,

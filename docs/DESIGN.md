@@ -142,7 +142,7 @@ The service is a **notary + signer**, not an identity authority.
   orthogonal to the statement signature; optional anti-spam (rate-limit/JWT) sits
   here.
 - **Operator authorization is mandatory for confidential-egress endpoints**
-  (`get_statements_since`, `get_statement`, `make_disclosure` — §9): these return
+  (`get_statements`, `get_statement`, `make_disclosure` — §9): these return
   plaintext, so they are gated to a config-pinned / governance-set Operator
   identity. (This is the one place caller authentication is required; submission
   itself needs none.)
@@ -223,13 +223,13 @@ index** enables the Operator stream. Concrete names in `app/src/reports.h`.
 | `DisclosureTable` | private (encrypted) | the statement's disclosures (`[salt,value,key]` bytes) — the **confidential store**; **write-only** from submit, **read-only** from Operator egress; feature-flagged (`store_unredacted`, default ON) |
 | `SigningKeyTable` (`sd.signing_key`) | private (encrypted) | the issuer **private** key (PEM) |
 | `SigningKeyHistory` | public | issuer **public** key registration(s) — endorsed by their receipts (§4); supports rotation (append new, keep old) |
-| statement **seqno index** | public | for `get_statements_since` (SCITT-style `SeqnosForValue`) |
+| statement **seqno index** | public | for `get_statements` (SCITT-style `SeqnosForValue`) |
 
 *(No parent→children index: we deliberately do **not** maintain a
 parent-to-follow-ups mapping. Such an index would leak thread structure — parent
 hashes are derivable from the public tokens — and it is not needed: the link
 lives in the child's redacted, salted `parent` field, and follow-ups surface via
-`get_statements_since`.)*
+`get_statements`.)*
 
 - **Signing:** the **service (TEE)** constructs and signs the SD-CWT (trust roots
   in attestation); researchers submit raw content over an authenticated channel.
@@ -341,23 +341,28 @@ Operator user is added by governance — §12.2):
   must equal `hash(token read)`, guarding against a stale per-tx `Value` read).
   Returns **204 + txid header**. *(Live.)* *(No parent→children index — see §8;
   the link lives in the child's redacted, salted `parent` field and follow-ups
-  surface via `get_statements_since`.)*
+  surface via `get_statements`.)*
 - `GET /operator/statements/{txid}` — a single **unredacted** transparent
   statement: the redacted token with **all** stored disclosures presented +
   receipt embedded (`present_transparent` with the full disclosure set). *(Live.)*
   *(Caveat: uniform padding means absent content fields present as garbage
   sentinels — string fields are distinguishable by CBOR type, `bstr` fields are
   not; the Operator relies on out-of-band knowledge of which fields are real.)*
-- `GET /operator/statements?since={seqno}&limit={n}` — the stream. Returns the
-  **txids** of statements (reports **and** follow-ups) committed after `since`,
-  in seqno order (up to `limit`, capped), plus a **`next`** cursor (CBOR
-  `{statements:[txid…], next: seqno}`). The Operator holds its own high-water
-  cursor (pass `next` back as `since`); stateless + replay-idempotent. Uses the
-  statement **seqno index** (`SeqnosForValue_Bucketed<StatementTable>`); the
+- `GET /operator/statements?from={seqno}&to={seqno}` — the stream. Returns the
+  **txids** of statements (reports **and** follow-ups) committed in the seqno
+  range `[from, to]` (default `from=1`, `to`=current watermark), in seqno order,
+  plus the ledger **`watermark`** (the Operator's block count / "caught up"
+  signal) and, when the requested range spans more than one page, a **`next`**
+  cursor (CBOR `{statements:[txid…], from, to, watermark, next?}`). A page covers
+  a bounded seqno **range** (`kMaxSeqnoPerPage`, kept below the index's
+  `max_requestable_range`), so a single index query can never exceed that bound —
+  no server-side windowing. The Operator drains the stream by polling
+  `from = to + 1` until `to == watermark`; stateless + replay-idempotent. Uses
+  the statement **seqno index** (`SeqnosForValue_Bucketed<StatementTable>`); the
   Operator then pulls each unredacted statement via `GET /operator/statements/{txid}`.
-  *(Live. Refinement of the original "full statements in one response" sketch:
-  returning txids + cursor avoids range historical fetches and mirrors SCITT's
-  `/entries/txIds`.)*
+  *(Live. Mirrors SCITT's `/entries/txIds` seqno-range pagination: capping each
+  page's range below the bound eliminates the large-ledger windowing path
+  entirely, in exchange for pages that may be empty over sparse ranges.)*
 - `POST /operator/statements/{txid}/disclosure` — body `{fields:[ entry, ... ]}`
   where each entry is a field name (whole field) or a path `[name, idx, ...]`
   (a nested array element, e.g. `["references", 0]`); returns a single
@@ -371,7 +376,7 @@ Operator user is added by governance — §12.2):
 (receipt-anchored, trusted). The `iat` clear claim is untrusted host wall-clock —
 a convenience timestamp only, never a precedence anchor.
 
-**Confidential-egress authorization:** `get_statements_since`, `get_statement`,
+**Confidential-egress authorization:** `get_statements`, `get_statement`,
 and `make_disclosure` return confidential plaintext and MUST be gated to the
 **Operator** (config-pinned / governance-set identity). This is distinct from the
 notary/no-enrollment stance for submission (§4).
