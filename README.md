@@ -55,31 +55,15 @@ under the **`/app`** prefix. The sandbox writes certs and member/user keys to
   confidential-egress endpoints.
 
 ## API
-Formats: **CBOR in, COSE/CBOR out.** All paths are under `/app`.
+Formats: **CBOR in, COSE/CBOR out.** All paths are under `/app`. There are ten
+endpoints — submission, public read/verify, member-gated key registration, and
+Operator-only confidential egress (unredacted reads, selective disclosure,
+follow-ups).
 
-| Method & path | Auth | Purpose |
-|---|---|---|
-| `GET /version` | none | `{app_version, schema_version, ccf_version}` (service discovery) |
-| `POST /reports[?wait=false]` | none | Submit a report (CBOR field map). Returns `204` + `x-ms-ccf-transaction-id` header on commit (`202` if `wait=false`) |
-| `GET /statements/{txid}` | none | The redacted statement with its CCF receipt embedded (a transparent statement, `application/cose`) |
-| `GET /statements/{txid}/receipt` | none | The CCF receipt alone (inclusion/ordering proof) |
-| `GET /signing-key[?at={seqno}]` | none | Issuer public key **+ its on-ledger endorsement**; `?at=` returns the key active at a seqno (survives rotation) |
-| `POST /signing-key[?rotate=true]` | member | Initialise (idempotent) or rotate the issuer key |
-| `GET /operator/statements/{txid}` | Operator | The **fully unredacted** statement |
-| `GET /operator/statements?from={seqno}&to={seqno}` | Operator | Stream of statement txids in a seqno range + `watermark` (block count) + `next` cursor |
-| `POST /operator/statements/{txid}/disclosure` | Operator | Selectively disclose fields/array-elements of a stored report; returns a presented transparent statement |
-| `POST /reports/{parent_txid}/follow-ups[?wait=false]` | Operator | Append a follow-up bound to a parent statement |
-
-Content fields accepted by `POST /reports` (all optional, native CBOR types):
-`title`, `body`, `component`, `severity`, `patch` (text); `fingerprint` (byte
-string); `references` (array of text); `patch_date` (integer). (`parent` is
-server-derived for follow-ups and is not accepted on submit.)
-
-A running node also **self-documents**: `GET /app/api` returns an auto-generated
-**OpenAPI 3.0** document listing every endpoint (paths, methods, parameters). For
-the full human-readable reference — request/response shapes, status codes, and
-auth per endpoint — see [`docs/API.md`](docs/API.md); the design rationale is in
-[`docs/DESIGN.md`](docs/DESIGN.md) §9.
+**The full reference is [`docs/API.md`](docs/API.md)** — every endpoint's query
+params, request/response shapes, status codes, and auth. The design rationale is
+in [`docs/DESIGN.md`](docs/DESIGN.md) §9, and a running node self-documents via an
+auto-generated **OpenAPI 3.0** document at `GET /app/api`.
 
 ### Quick check with `curl`
 The no-auth endpoints are reachable with `curl` using the sandbox's service cert
