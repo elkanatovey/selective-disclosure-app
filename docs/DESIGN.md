@@ -301,6 +301,10 @@ Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
 **pending** = format/endpoint changes agreed but not yet coded.
 
 **Public (no auth):**
+- `GET /version` — service-discovery metadata (CBOR `{app_version, schema_version,
+  ccf_version}`): this app's semantic version, the compile-time statement
+  **schema version** (so a client knows which schema a live service speaks —
+  §12.1), and the underlying CCF platform version. *(Live.)*
 - `POST /reports[?wait=false]` — **CBOR** body: a content-fields map (`title`/`body`/
   `component`/`severity`/`fingerprint`(bstr)/`references`/`patch`/`patch_date`;
   named keys, native types, **no `parent`**). Builds + signs the strict-uniformity
@@ -544,7 +548,9 @@ fields, and that binding must survive receipts and format changes. Approach:
 - **Explicit version claim.** Every statement carries a **clear** schema/profile
   version (a fixed CWT-style claim, present in *all* statements). It is a *clear*
   claim, so it does **not** affect the redacted-uniformity invariant (uniformity
-  is over the redacted content fields, §1). Self-describing and cheap.
+  is over the redacted content fields, §1). Self-describing and cheap. *(The
+  service-level `SCHEMA_VERSION` is Live and surfaced by `GET /version`; embedding
+  it as a per-statement clear claim is the remaining step, deferred.)*
 - **Authoritative binding = code measurement.** The version claim is a
   convenience label; the *authoritative* statement of "what schema/behaviour
   produced this" is the app **code measurement**, which is governance-audited and

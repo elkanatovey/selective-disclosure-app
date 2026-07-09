@@ -1047,3 +1047,18 @@ def test_concurrent_submissions_all_commit_and_verify(network):
     assert (
         want <= seen
     ), f"index missing {len(want - seen)} of {n} concurrent submissions"
+
+
+def test_version_endpoint(network):
+    """GET /version is public service-discovery metadata: this app's semantic
+    version, the compile-time statement SCHEMA version (so a client knows which
+    schema the live service speaks, DESIGN §12.1), and the CCF platform version."""
+    import re
+
+    resp = network.client().get("/version")
+    assert resp.status == 200, resp.body
+    assert "application/cbor" in resp.content_type
+    v = cbor2.loads(resp.body)
+    assert re.match(r"^\d+\.\d+\.\d+", v["app_version"]), v
+    assert isinstance(v["schema_version"], int) and v["schema_version"] >= 1
+    assert v["ccf_version"].startswith("ccf-"), v

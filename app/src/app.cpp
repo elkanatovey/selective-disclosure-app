@@ -12,6 +12,7 @@
 #include "ccf/json_handler.h"
 #include "ccf/receipt.h"
 #include "ccf/tx_status.h"
+#include "ccf/version.h"
 #include "disclosure_store.h"
 #include "paging.h"
 #include "report_parse.h"
@@ -80,7 +81,7 @@ namespace selectivedisclosure
       openapi_info.description =
         "Confidential, append-only bug-report transparency ledger built on "
         "SD-CWT: reports are registered as redacted, service-signed tokens.";
-      openapi_info.document_version = "0.0.1";
+      openapi_info.document_version = kAppVersion;
 
       // Index the seqnos at which the issuer public key was (re)registered, so
       // GET /signing-key can fetch the registration transaction's receipt.
@@ -99,6 +100,32 @@ namespace selectivedisclosure
     void init_handlers() override
     {
       CommonEndpointRegistry::init_handlers();
+
+      // --- get_version: public service-discovery metadata. Reports this app's
+      // semantic version, the compile-time statement **schema version** (so a
+      // client knows which schema a live service speaks, DESIGN §12.1), and the
+      // underlying CCF platform version. Unauthenticated on purpose. ----------
+      auto get_version = [](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+        const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
+          QCBOREncode_OpenMap(&c);
+          QCBOREncode_AddSZStringToMap(&c, "app_version", kAppVersion);
+          QCBOREncode_AddInt64ToMap(
+            &c,
+            "schema_version",
+            static_cast<int64_t>(statement::SCHEMA_VERSION));
+          QCBOREncode_AddSZStringToMap(&c, "ccf_version", ccf::ccf_version);
+          QCBOREncode_CloseMap(&c);
+        });
+        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+        ctx.rpc_ctx->set_response_header(
+          ccf::http::headers::CONTENT_TYPE,
+          ccf::http::headervalues::contenttype::CBOR);
+        ctx.rpc_ctx->set_response_body(body);
+      };
+      make_read_only_endpoint(
+        "/version", HTTP_GET, get_version, {ccf::empty_auth_policy})
+        .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
+        .install();
 
       // --- submit_report: parse the CBOR content body, then build + sign a
       // redacted statement, store it, and return its transaction id on commit.
@@ -805,6 +832,11 @@ namespace selectivedisclosure
         proof->leaf_components.claims_digest.value() ==
         ccf::ClaimsDigest::Digest(token);
     }
+
+    // Semantic version of this ledger application (distinct from the CCF
+    // platform version). Bumped on app releases; also used as the OpenAPI
+    // document version so the two never drift.
+    static constexpr auto kAppVersion = "0.0.1";
 
     // Operator-stream page size: the maximum seqno *range* a single page
     // covers. Kept well below the statement index's max_requestable_range
