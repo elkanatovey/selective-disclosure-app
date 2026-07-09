@@ -596,7 +596,8 @@ def _wait_in_stream(op, txid, timeout_s=10):
 
 def test_operator_gets_unredacted_statement(network):
     """GET /operator/statements/{txid} returns the fully-unredacted statement:
-    every set field is revealed, and the CCF receipt still verifies."""
+    EVERY submitted field type round-trips back in the clear (strings, a byte
+    string, an int, an array), and the CCF receipt still verifies."""
     client = network.client()
     op = network.client(user="user0")
     with open(network.service_cert, "rb") as f:
@@ -605,16 +606,32 @@ def test_operator_gets_unredacted_statement(network):
         _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
     )
 
-    report = {"title": "t", "body": "b", "references": ["r1", "r2"]}
+    report = {
+        "title": "heap overflow",
+        "body": "full body text",
+        "component": "parser",
+        "severity": "high",
+        "fingerprint": b"\xde\xad\xbe\xef",  # bstr
+        "references": ["CVE-2025-1", "CVE-2025-2"],  # array
+        "patch": "fixed in 1.2.3",
+        "patch_date": 1700100000,  # int
+    }
     txid = client.post("/reports", cbor2.dumps(report), "application/cbor").tx_id
 
     resp = op.get_historical(f"/operator/statements/{txid}")
     assert resp.status == 200, resp.body
     assert "application/cose" in resp.content_type
     out = st.validate_statement(resp.body, key)
-    assert out.disclosed[st.TITLE] == "t"
-    assert out.disclosed[st.BODY] == "b"
-    assert out.disclosed[st.REFERENCES] == ["r1", "r2"]
+
+    # Every submitted field comes back in the clear, with its exact value/type.
+    assert out.disclosed[st.TITLE] == "heap overflow"
+    assert out.disclosed[st.BODY] == "full body text"
+    assert out.disclosed[st.COMPONENT] == "parser"
+    assert out.disclosed[st.SEVERITY] == "high"
+    assert out.disclosed[st.FINGERPRINT] == b"\xde\xad\xbe\xef"
+    assert out.disclosed[st.REFERENCES] == ["CVE-2025-1", "CVE-2025-2"]
+    assert out.disclosed[st.PATCH] == "fixed in 1.2.3"
+    assert out.disclosed[st.PATCH_DATE] == 1700100000
 
     assert RECEIPTS_LABEL in _uhdr(resp.body)
     _verify_receipt(resp.body, service_cert)
@@ -836,3 +853,33 @@ def test_async_follow_up(network):
     assert fu.status == 202, fu.body
     assert fu.tx_id
     assert client.get_historical(f"/statements/{fu.tx_id}/receipt").status == 200
+
+
+def test_operator_discloses_fingerprint_only(network):
+    """The canonical duplicate-proof: the Operator discloses ONLY the fingerprint
+    (a byte string) of an earlier report, proving the duplicate, while every
+    other field — including on the wire — stays hidden."""
+    client = network.client()
+    op = network.client(user="user0")
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+
+    fp = b"\x01\x02\x03\x04" * 8  # 32-byte fingerprint
+    report = {"title": "secret bug title", "body": "secret", "fingerprint": fp}
+    txid = client.post("/reports", cbor2.dumps(report), "application/cbor").tx_id
+
+    disc = op.post_historical(
+        f"/operator/statements/{txid}/disclosure",
+        cbor2.dumps({"fields": ["fingerprint"]}),
+        "application/cbor",
+    )
+    assert disc.status == 200, disc.body
+    out = st.validate_statement(disc.body, key)
+    assert out.disclosed[st.FINGERPRINT] == fp  # bstr round-trips
+    assert st.TITLE not in out.disclosed
+    assert st.BODY not in out.disclosed
+    assert b"secret bug title" not in disc.body  # other fields hidden on the wire
+    _verify_receipt(disc.body, service_cert)
