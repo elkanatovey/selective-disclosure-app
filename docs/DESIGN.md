@@ -186,11 +186,11 @@ out-of-band trust anchors; salts high-entropy.
   `build_receipt_for_committed_tx`), SHA-256 (`ccf::crypto::sha256`), EC signing
   (`ccf::crypto::ECKeyPair::sign_hash`), CSPRNG (`ccf::crypto::get_entropy()`).
 - **COSE_Sign1 _creation_ is NOT exposed by CCF** (public `cose.h` only edits
-  headers; SCITT signs client-side in Python). Under Model A we hand-assemble the
+  headers). Under Model A we hand-assemble the
   `COSE_Sign1` with QCBOR and sign the `Sig_structure` via `ccf::crypto` — no
   `t_cose` dependency.
 - **CBOR encode/decode is NOT exposed by CCF** for general use — we vendor
-  **QCBOR** via CMake `FetchContent` (as SCITT does) to build/parse token bytes.
+  **QCBOR** via CMake `FetchContent` to build/parse token bytes.
 - CCF-source modification is **last resort**.
 
 ## 7. The disclosure artifact
@@ -223,7 +223,7 @@ index** enables the Operator stream. Concrete names in `app/src/reports.h`.
 | `DisclosureTable` | private (encrypted) | the statement's disclosures (`[salt,value,key]` bytes) — the **confidential store**; **write-only** from submit, **read-only** from Operator egress; feature-flagged (`store_unredacted`, default ON) |
 | `SigningKeyTable` (`sd.signing_key`) | private (encrypted) | the issuer **private** key (PEM) |
 | `SigningKeyHistory` | public | issuer **public** key registration(s) — endorsed by their receipts (§4); supports rotation (append new, keep old) |
-| statement **seqno index** | public | for `get_statements` (SCITT-style `SeqnosForValue`) |
+| statement **seqno index** | public | for `get_statements` (CCF `SeqnosForValue`) |
 
 *(No parent→children index: we deliberately do **not** maintain a
 parent-to-follow-ups mapping. Such an index would leak thread structure — parent
@@ -313,14 +313,14 @@ Locked API contract. Formats: CBOR in, COSE out. **Live** = built (PR #4);
   global commit, then **204 + the transaction-id header**
   (`x-ms-ccf-transaction-id`). **`?wait=false`** returns **202 + txid header**
   immediately (on local commit) for the caller to poll
-  `GET /statements/{txid}/receipt` — SCITT's operations pattern, but reusing the
+  `GET /statements/{txid}/receipt` — an async submit/poll pattern that reuses the
   historical receipt endpoint as the poll target (no separate operations
   resource). *(Live.)*
 - `GET /statements/{txid}` — the redacted statement with its CCF receipt embedded
   (transparent statement, `application/cose`). *(Live.)*
 - `GET /statements/{txid}/receipt` — the CCF receipt **alone** (`application/cose`),
   for a verifier that only needs the inclusion/ordering proof, not the (redacted)
-  statement bytes. Mirrors SCITT's `GET /entries/{txid}`. *(Live.)*
+  statement bytes. *(Live.)*
 - `GET /signing-key[?at={seqno}]` — the issuer public key **plus its endorsement**
   (the receipt of its on-ledger registration), so verifiers validate it against
   the service identity (§4). Default returns the **latest** registration; `?at=`
@@ -364,9 +364,9 @@ Operator user is added by governance — §12.2):
   `from = to + 1` until `to == watermark`; stateless + replay-idempotent. Uses
   the statement **seqno index** (`SeqnosForValue_Bucketed<StatementTable>`); the
   Operator then pulls each unredacted statement via `GET /operator/statements/{txid}`.
-  *(Live. Mirrors SCITT's `/entries/txIds` seqno-range pagination: capping each
-  page's range below the bound eliminates the large-ledger windowing path
-  entirely, in exchange for pages that may be empty over sparse ranges.)*
+  *(Live. Seqno-range pagination: capping each page's range below the bound
+  eliminates the large-ledger windowing path entirely, in exchange for pages
+  that may be empty over sparse ranges.)*
 - `POST /operator/statements/{txid}/disclosure` — body `{fields:[ entry, ... ]}`
   where each entry is a field name (whole field) or a path `[name, idx, ...]`
   (a nested array element, e.g. `["references", 0]`); returns a single
@@ -462,22 +462,22 @@ transparency service is that *rule changes are themselves recorded on the
 append-only ledger*, so the operator cannot silently change behaviour. We split
 governance into two planes and deliberately keep only one of them:
 
-- **Data-plane governance (NOT used).** SCITT-style *who-may-submit* control —
-  accepted issuers, trust anchors, a registration **policy engine**. Our
+- **Data-plane governance (NOT used).** *Who-may-submit* control — accepted
+  issuers, trust anchors, a registration **policy engine**. Our
   notary / Model-A stance (open submission, **service is the sole signer**, §4)
-  removes the need for this entirely. We do **not** reuse SCITT's registration
-  policy / governance endpoints (§13). See the note below for when it might be
+  removes the need for this entirely: we implement no submission-gating policy
+  or data-plane governance endpoints. See the note below for when it might be
   reconsidered — **out of scope for the current PR**.
 - **Control-plane governance (used).** *Changing the rules*: app/code upgrades,
   schema/format changes, config (incl. the Operator identity), signing-key
   rotation, and service lifecycle / recovery. This is mostly **CCF's built-in
   governance**; we add only a small amount of custom config.
 
-**Note — a programmable submission policy (JS/Rego), deferred.** SCITT embeds a
-policy **engine** (a `ccf::js` JavaScript context, or a Rego/OPA interpreter,
-configured via governance) that runs on every `POST /entries` to decide whether a
-submitted *signed statement* is accepted. It exists because SCITT submitters sign
-their own statements, so the service must police adversarial issuers/claims — a
+**Note — a programmable submission policy (JS/Rego), deferred.** A transparency
+service can embed a policy **engine** (a `ccf::js` JavaScript context, or a
+Rego/OPA interpreter, configured via governance) that runs on every submission to
+decide whether it is accepted. Such engines exist to police adversarial
+issuers/claims in services where **submitters sign their own statements** — a
 driver we structurally **do not have** (the service signs; submitters send raw
 content, so there is no submitted signature/identity to gate). Even the plausible
 uses for us (evolvable field validation, an enrolment allow-list, bug-bounty
@@ -489,8 +489,8 @@ arises only if the ledger becomes **multi-tenant / consortium-operated** or grow
 cost is not CPU (a simple policy is sub-ms, dwarfed by the consensus round a
 submission already pays) but **trust surface and operations**: an interpreter on
 the **untrusted-input path inside the TEE** (attack surface + a larger attested
-code measurement), a **tail-latency/DoS** vector that must be bounded (SCITT caps
-JS at 10 MB heap / 1 s, Rego at 10k statements, plus a max input size), and the
+code measurement), a **tail-latency/DoS** vector that must be bounded (e.g. heap
+and time caps on the interpreter plus a max input size), and the
 overhead of authoring/testing/governing policies. **Recommendation if the need
 lands:** prefer authenticated submission + a **governance-managed allow-list KV
 table validated in C++** over an embedded engine, and only adopt the engine for
@@ -529,14 +529,12 @@ down, recovers it, and asserts: (a) the **pre-recovery** statement is still
 retrievable and its original receipt still verifies (against the predecessor
 identity CCF preserved), and (b) the recovered service keeps operating — a new
 report commits and its receipt verifies against the new identity (the issuer
-signing key, being replayed KV data, survives with no re-init). **This confirms
-SCITT adds no recovery *functionality* here:** the recovery mechanism, the ledger
-persistence, and the preserved identity chain are all CCF's. SCITT's only
-recovery-specific addition is re-exposing CCF's key history via a `/jwks` endpoint
-+ a client `DynamicTrustStore` so a single current trust anchor can verify
-pre-recovery receipts by `kid`. We deliberately don't add that endpoint: our
-verifier uses the predecessor cert (the same old key, which recovery writes to
-disk) directly. *(The one thing neither app implements is embedding CCF's
+signing key, being replayed KV data, survives with no re-init). **Recovery needs
+no app code:** the recovery mechanism, the ledger persistence, and the preserved
+identity chain are all CCF's. A verifier holding a pre-recovery receipt validates
+it against the **predecessor cert** (the same old key, which recovery writes to
+disk); we deliberately expose no historical service-key endpoint. *(The one thing
+we don't implement is embedding CCF's
 `service_endorsements` chain in the receipt so the current identity alone verifies
 old receipts — CCF's `populate_cose_service_endorsements` exists for this, but the
 Python `ccf.cose.verify_receipt` takes a single key with no chain support, so it
@@ -590,17 +588,18 @@ The egress gate (§4/§9) is the one authorization we must pin. Two options:
   `build_receipt_for_committed_tx`
 - COSE verify, SHA-256, KV (`Map`/`Value`/`RawCopySerialisedValue`), seqno indexing.
 
-**Reuse from SCITT (copy & adapt into `app/`, Apache-2.0):**
-- `cbor.h` (QCBOR helpers) — ~as-is
-- `cose.h` (COSE_Sign1 decode, header/COSE_Key parse, hash) — strip TSS/DID bits
-- `get_cose_receipt()` (CCF receipt → COSE receipt) — directly
-- register / local-commit flow → template for `submit_report`
-- `historical_queries_adapter.h` + `SeqnosForValue` indexing → seqno lookup
+**Patterns we reimplemented as original MIT code** (studied for approach, not
+copied — the `app/` sources are our own, MIT):
+- QCBOR helpers (`cbor.h`) and COSE_Sign1 decode / header + COSE_Key parse
+  (`cose.h`), with the TSS/DID bits omitted
+- CCF-receipt → COSE-receipt conversion (`make_cose_receipt`)
+- the register / local-commit flow → template for `submit_report`
+- `historical_queries_adapter.h` + CCF `SeqnosForValue` indexing → seqno lookup
 - the QCBOR `FetchContent` block in `app/CMakeLists.txt`
-- optional: `configurable_auth.h` (empty/JWT) if we add access control
 
-**Not reused:** `verifier.h` (did:x509 / JWKS) → replaced by a ~50-line
-self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
+**Deliberately not adopted:** did:x509 / JWKS verification (replaced by a
+~50-line self-contained verifier); a registration policy engine; data-plane
+governance endpoints.
 
 **New code (the novel parts):**
 - `sd_cwt` **Python** library — redaction core (salts, disclosures, Redacted
@@ -650,8 +649,8 @@ signed by the service (TEE) in C++**, not by the submitter; researchers submit
 **raw content**. The Python token tooling (issue/sign/redact/present/verify/
 validate) is therefore **(a)** the reference oracle mirroring the C++ issuer
 construction and **(b)** the researcher-side **offline verifier** (`validate`, or
-the receipt-anchored `validate_trusted`). This diverges from SCITT's "client
-signs, C++ verifies" split — here the service is the **sole signer**.
+the receipt-anchored `validate_trusted`). Here the service is the **sole signer**
+(submitters never sign).
 
 **`sd_cwt` is our own minimal, domain-agnostic package** (in-repo at `tools/sd_cwt/`,
 src-layout, own `pytest` suite). The core operates on arbitrary CBOR claims; the

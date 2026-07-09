@@ -3,7 +3,7 @@
 
 """Repo-wide check that first-party source files carry the MIT notice header.
 
-Enumerates tracked files with ``git ls-files`` (as CCF/SCITT do). The
+Enumerates tracked files with ``git ls-files``. The
 ``third_party/`` submodule keeps its own license and is skipped.
 """
 

@@ -329,7 +329,7 @@ namespace selectivedisclosure
 
       // --- get_statement_receipt: the CCF receipt alone (COSE), for a verifier
       // that only needs the inclusion/ordering proof without the (redacted)
-      // statement bytes. Mirrors SCITT's GET /entries/{txid}. -----------------
+      // statement bytes. ------------------------------------------------------
       auto get_statement_receipt =
         [](
           ccf::endpoints::ReadOnlyEndpointContext& ctx,
@@ -603,7 +603,7 @@ namespace selectivedisclosure
       // its block count -- and when it has drained the stream) and a `next`
       // cursor when the requested range spans more than one page.
       //
-      // Following SCITT's /entries/txIds model: a page covers a bounded seqno
+      // Seqno-range pagination: a page covers a bounded seqno
       // *range* (at most `kMaxSeqnoPerPage`), kept strictly below the index's
       // max_requestable_range, so a single index query can never exceed that
       // bound no matter how large the ledger grows -- no server-side windowing
@@ -779,7 +779,7 @@ namespace selectivedisclosure
       // Synchronous (default): hold the response until the transaction is
       // globally committed, then return 204 + the txid header (and surface a
       // rollback as 503). The txid is in the standard `x-ms-ccf-transaction-id`
-      // header (no JSON body), matching CCF/SCITT convention.
+      // header (no JSON body), matching CCF convention.
       ctx.rpc_ctx->set_consensus_committed_function(respond_committed_204);
     }
 
