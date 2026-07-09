@@ -1,9 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""End-to-end disaster-recovery test, mirroring SCITT's ``test_ccf.py::test_recovery``
-methodology: submit a report, tear the service down, recover it from the persisted
-ledger onto a *new* service identity, and prove that
+"""End-to-end disaster-recovery test: submit a report, tear the service down,
+recover it from the persisted ledger onto a *new* service identity, and prove that
 
   * the recovery mechanism is entirely CCF's (``--recover`` drives
     ``governance.recover_service`` via the members' recovery shares — no app code),
@@ -12,13 +11,11 @@ ledger onto a *new* service identity, and prove that
   * the recovered service keeps operating: a **new** submission commits and its
     receipt verifies against the **new** service identity.
 
-This is the "does SCITT add functionality here?" question answered as a test: the
-continuity is a property of CCF (persisted ledger + preserved previous service
-identity), so recovery works with no ledger-app changes. The only recovery-specific
-thing SCITT adds is re-exposing CCF's key history via ``/jwks``; here the verifier
-instead uses the predecessor cert that CCF's recovery writes to disk
-(``predecessor_service_cert.pem``) — the same old key, obtained without a bespoke
-endpoint.
+Recovery needs no ledger-app changes: the continuity is a property of CCF
+(persisted ledger + preserved previous service identity). A verifier holding a
+pre-recovery receipt validates it against the predecessor cert that CCF's recovery
+writes to disk (``predecessor_service_cert.pem``) — the same old key, obtained
+without any bespoke historical-key endpoint.
 
 Runs its own sandbox on a dedicated port (8001) so it is independent of the
 session ``network`` fixture (which owns 8000).

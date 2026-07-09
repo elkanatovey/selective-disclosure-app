@@ -663,7 +663,7 @@ def test_operator_stream_lists_in_seqno_order(network):
 
 
 def test_operator_stream_advances_by_seqno_range(network):
-    """The stream is a seqno-range window (SCITT /entries/txIds model): each page
+    """The stream is a seqno-range window: each page
     reports the range it covers (`from`..`to`) and the ledger `watermark`, and
     the Operator drains it by polling `from = to + 1`. Re-polling is
     replay-idempotent and never repeats an already-consumed statement."""
@@ -915,7 +915,7 @@ def test_operator_discloses_fingerprint_only(network):
     _verify_receipt(disc.body, service_cert)
 
 
-# --- Adversarial-input robustness (mirrors SCITT's fuzz_api_submissions.py) ----
+# --- Adversarial-input robustness -------------------------------------------
 # Our submission endpoint decodes attacker-controlled CBOR in C++ *inside the
 # TEE*, so malformed input must always be a clean client error (4xx), never a
 # 5xx (an uncaught server-side error = a bug) and never a node crash (a dropped
@@ -985,8 +985,8 @@ def test_submit_fuzz_random_payloads_never_500(network):
 
 
 def test_concurrent_submissions_all_commit_and_verify(network):
-    """Concurrency-correctness smoke test (shrunk from SCITT's throughput
-    pattern): many submissions in flight at once must each commit, retrieve
+    """Concurrency-correctness smoke test: many submissions in flight at once
+    must each commit, retrieve
     their OWN content, and verify. This exercises races that single-threaded
     tests can't — concurrent writes to the single-Value StatementTable + the
     claims-digest staleness guard, the confidential DisclosureTable, and the

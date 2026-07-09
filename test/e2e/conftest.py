@@ -5,8 +5,8 @@
 
 The ``network`` fixture boots the app as a real CCF node via the installed
 ``sandbox.sh`` (``--package app/build/selective_disclosure``), waits until it is
-open, and yields connection details. It mirrors SCITT's managed-node approach but
-reuses CCF's own sandbox rather than a hand-rolled launcher.
+open, and yields connection details, reusing CCF's own sandbox rather than a
+hand-rolled launcher.
 
 Requires the app to be built (``app/build/selective_disclosure``) and the CCF
 install tree + ``.venv_ccf_sandbox`` present. Skips cleanly if the app is missing.

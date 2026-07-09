@@ -75,9 +75,29 @@ Content fields accepted by `POST /reports` (all optional, native CBOR types):
 string); `references` (array of text); `patch_date` (integer). (`parent` is
 server-derived for follow-ups and is not accepted on submit.)
 
+A running node also **self-documents**: `GET /app/api` returns an auto-generated
+**OpenAPI 3.0** document listing every endpoint (paths, methods, parameters). The
+authoritative semantics live in [`docs/DESIGN.md`](docs/DESIGN.md) §9; this table
+and the OpenAPI doc are the quick references.
+
+### Quick check with `curl`
+The no-auth endpoints are reachable with `curl` using the sandbox's service cert
+as the TLS root. Responses are **CBOR**, so pipe them through a decoder to read
+them:
+```bash
+CA=workspace/sandbox_common/service_cert.pem
+# GET /version (CBOR -> JSON via a one-line decoder):
+curl -s --cacert "$CA" https://127.0.0.1:8000/app/version \
+  | python3 -c 'import sys,cbor2,json; print(json.dumps(cbor2.load(sys.stdin.buffer), default=repr))'
+# -> {"app_version": "0.0.1", "schema_version": 1, "ccf_version": "ccf-7.0.5"}
+```
+`curl` is handy for smoke tests, but because bodies are CBOR (and submissions
+must be CBOR-encoded), the Python example below is the practical way to use the
+API.
+
 ## Example (Python)
-Requires `pip install requests cbor2` and `pip install -e tools/sd_cwt` (for the
-verifier). Point it at a running sandbox.
+Requires `pip install requests` and `pip install -e tools/sd_cwt` (which brings in
+`cbor2`, `pycose`, and `cryptography`). Point it at a running sandbox.
 ```python
 import cbor2, requests
 from pathlib import Path
@@ -107,6 +127,25 @@ disc = requests.post(
     f"{BASE}/operator/statements/{txid}/disclosure",
     data=cbor2.dumps({"fields": ["fingerprint"]}),  # prove the fingerprint only
     headers={"content-type": "application/cbor"}, cert=operator, verify=CA)
+
+# 4) A researcher verifies the disclosed statement OFFLINE against the issuer key.
+#    The issuer key is published and endorsed by the service identity via the
+#    receipt in GET /signing-key (verify that endorsement to trust the key; see
+#    test/e2e/test_reports.py::_verify_endorsed_key).
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from pycose.keys import EC2Key
+from pycose.keys.curves import P256
+from sd_cwt import statement as st
+
+issuer_pem = cbor2.loads(requests.get(f"{BASE}/signing-key", verify=CA).content)["key"]
+nums = load_pem_public_key(issuer_pem).public_numbers()  # default curve P-256
+issuer_key = EC2Key(crv=P256, x=nums.x.to_bytes(32, "big"), y=nums.y.to_bytes(32, "big"))
+
+# validate_statement checks the ISSUER SIGNATURE and resolves the presented
+# disclosures (no key-binding token — the service is the sole signer).
+out = st.validate_statement(disc.content, issuer_key)
+print("disclosed:", out.disclosed)          # {1005: b'\xde\xad\xbe\xef'} (fingerprint)
+assert out.disclosed[st.FINGERPRINT] == b"\xde\xad\xbe\xef"
 ```
 (For end-to-end examples incl. cryptographic verification with the `sd_cwt`
 reference verifier, see `test/e2e/test_reports.py`.)
