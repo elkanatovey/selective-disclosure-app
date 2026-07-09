@@ -76,9 +76,10 @@ string); `references` (array of text); `patch_date` (integer). (`parent` is
 server-derived for follow-ups and is not accepted on submit.)
 
 A running node also **self-documents**: `GET /app/api` returns an auto-generated
-**OpenAPI 3.0** document listing every endpoint (paths, methods, parameters). The
-authoritative semantics live in [`docs/DESIGN.md`](docs/DESIGN.md) §9; this table
-and the OpenAPI doc are the quick references.
+**OpenAPI 3.0** document listing every endpoint (paths, methods, parameters). For
+the full human-readable reference — request/response shapes, status codes, and
+auth per endpoint — see [`docs/API.md`](docs/API.md); the design rationale is in
+[`docs/DESIGN.md`](docs/DESIGN.md) §9.
 
 ### Quick check with `curl`
 The no-auth endpoints are reachable with `curl` using the sandbox's service cert
