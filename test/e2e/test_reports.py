@@ -913,3 +913,72 @@ def test_operator_discloses_fingerprint_only(network):
     assert st.BODY not in out.disclosed
     assert b"secret bug title" not in disc.body  # other fields hidden on the wire
     _verify_receipt(disc.body, service_cert)
+
+
+# --- Adversarial-input robustness (mirrors SCITT's fuzz_api_submissions.py) ----
+# Our submission endpoint decodes attacker-controlled CBOR in C++ *inside the
+# TEE*, so malformed input must always be a clean client error (4xx), never a
+# 5xx (an uncaught server-side error = a bug) and never a node crash (a dropped
+# connection or a subsequently-dead node). These tests assert that contract.
+
+
+def _post_raw(client, body: bytes):
+    """POST bytes to /reports as application/cbor, returning the Response or the
+    exception if the connection was dropped (which would signal a node crash)."""
+    try:
+        return client.post("/reports", body, "application/cbor"), None
+    except Exception as e:  # requests ConnectionError etc. => node went away
+        return None, e
+
+
+# Hand-crafted payloads that can never be a valid content map, so each MUST be a
+# 400 (deterministic, high-signal — a regression here is a real parser bug).
+_MALFORMED = [
+    b"",  # empty body
+    b"not cbor at all",  # not CBOR
+    b"\xff",  # bare CBOR "break" — invalid as a top-level item
+    b"\xa1",  # map header claiming 1 pair, but truncated (no key/value)
+    cbor2.dumps({"title": "x"})[:-1],  # a valid map, truncated by one byte
+    cbor2.dumps([1, 2, 3]),  # valid CBOR, wrong top-level type (array not map)
+    cbor2.dumps(42),  # valid CBOR, wrong top-level type (int)
+    cbor2.dumps("just a string"),  # valid CBOR, wrong top-level type (tstr)
+    cbor2.dumps(b"\x00\x01\x02"),  # valid CBOR, wrong top-level type (bstr)
+    cbor2.dumps({"title": 123}),  # right shape, wrong field type (int for tstr)
+    cbor2.dumps({"references": "not-an-array"}),  # references must be an array
+    cbor2.dumps({"references": [1, 2, 3]}),  # references elements must be tstr
+    # A deeply-nested CBOR value (nesting "bomb"): the decoder must reject it by
+    # depth limit, not overflow the stack.
+    b"\x9f" * 200 + b"\xff" * 200,  # 200 nested indefinite-length arrays
+]
+
+
+def test_submit_rejects_malformed_payloads(network):
+    """Every clearly-invalid payload is a 400 client error — never a 5xx, never a
+    dropped connection. The node stays alive and healthy throughout."""
+    client = network.client()
+    for i, body in enumerate(_MALFORMED):
+        resp, err = _post_raw(client, body)
+        assert err is None, f"payload #{i} dropped the connection: {err!r}"
+        assert resp.status == 400, f"payload #{i} => {resp.status} (want 400): {body!r}"
+    # The node is unharmed: a well-formed submission still commits.
+    ok = client.post("/reports", cbor2.dumps({"title": "alive"}), "application/cbor")
+    assert ok.status == 204, ok.body
+
+
+def test_submit_fuzz_random_payloads_never_500(network):
+    """A seeded battery of random byte blobs never yields a 5xx or a node crash.
+    A blob may occasionally decode to a valid submission (2xx) or be rejected
+    (4xx) — both are fine; the contract is only 'no server error, no crash'."""
+    import random
+
+    client = network.client()
+    rng = random.Random(0x5D_C_7)  # seeded => reproducible
+    for i in range(96):
+        n = rng.randint(0, 256)
+        body = bytes(rng.getrandbits(8) for _ in range(n))
+        resp, err = _post_raw(client, body)
+        assert err is None, f"fuzz #{i} (len {n}) dropped the connection: {err!r}"
+        assert resp.status < 500, f"fuzz #{i} => {resp.status} (5xx): {body!r}"
+    # Still healthy after the whole battery.
+    ok = client.post("/reports", cbor2.dumps({"title": "alive"}), "application/cbor")
+    assert ok.status == 204, ok.body
