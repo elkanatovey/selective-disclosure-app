@@ -982,3 +982,68 @@ def test_submit_fuzz_random_payloads_never_500(network):
     # Still healthy after the whole battery.
     ok = client.post("/reports", cbor2.dumps({"title": "alive"}), "application/cbor")
     assert ok.status == 204, ok.body
+
+
+def test_concurrent_submissions_all_commit_and_verify(network):
+    """Concurrency-correctness smoke test (shrunk from SCITT's throughput
+    pattern): many submissions in flight at once must each commit, retrieve
+    their OWN content, and verify. This exercises races that single-threaded
+    tests can't — concurrent writes to the single-Value StatementTable + the
+    claims-digest staleness guard, the confidential DisclosureTable, and the
+    seqno index. It is NOT a benchmark (no timing asserted); the contract is
+    correctness under concurrency."""
+    import concurrent.futures
+    import time
+
+    client = network.client()
+    op = network.client(user="user0")
+    with open(network.service_cert, "rb") as f:
+        service_cert = f.read()
+    key = _ec2_key_from_pem(
+        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
+    )
+
+    n = 48
+
+    def submit(i: int) -> tuple[int, str]:
+        # A unique int field (patch_date=i) lets us later prove each txid
+        # retrieves ITS OWN statement, not a concurrent neighbour's.
+        r = client.post(
+            "/reports",
+            cbor2.dumps({"title": f"concurrent-{i}", "patch_date": i}),
+            "application/cbor",
+        )
+        assert r.status == 204, (i, r.status, r.body)
+        assert r.tx_id
+        return i, r.tx_id
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=24) as pool:
+        results = list(pool.map(submit, range(n)))
+
+    # Every submission committed to a distinct transaction.
+    txids = {i: txid for i, txid in results}
+    assert len(txids) == n
+    assert len(set(txids.values())) == n, "duplicate txids under concurrency"
+
+    # Each txid resolves to ITS OWN content (the claims-digest guard must not let
+    # a neighbour's token masquerade under load) and its receipt verifies.
+    for i, txid in txids.items():
+        resp = op.get_historical(f"/operator/statements/{txid}")
+        assert resp.status == 200, resp.body
+        out = st.validate_statement(resp.body, key)
+        assert out.disclosed[st.PATCH_DATE] == i, f"{txid} returned the wrong statement"
+        _verify_receipt(resp.body, service_cert)
+
+    # The seqno index stays consistent under concurrent writes: every txid shows
+    # up in the Operator stream (waiting for the async index to catch up).
+    want = set(txids.values())
+    deadline = time.time() + 20
+    seen: set = set()
+    while time.time() < deadline:
+        seen = set(_operator_stream_ids(op))
+        if want <= seen:
+            break
+        time.sleep(0.3)
+    assert (
+        want <= seen
+    ), f"index missing {len(want - seen)} of {n} concurrent submissions"
