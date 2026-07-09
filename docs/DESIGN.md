@@ -515,6 +515,29 @@ Rotation is a governance-audited action that appends a **new** registered key an
 app-key analogue of CCF's service-identity endorsement chain. Recovery is handled
 by CCF for the receipt side; the issuer key is KV data that survives recovery.
 
+**Disaster recovery — CCF-native, tested end-to-end (`test/e2e/test_recovery.py`).**
+Recovery adds **no app code**: `sandbox.sh --recover` drives CCF's
+`governance.recover_service` from the members' recovery shares, replays the
+persisted ledger onto a **new** service identity (`recovery_count` bumps, service
+cert rolls), and preserves the previous identity on disk
+(`predecessor_service_cert.pem`). The e2e test submits a report, tears the service
+down, recovers it, and asserts: (a) the **pre-recovery** statement is still
+retrievable and its original receipt still verifies (against the predecessor
+identity CCF preserved), and (b) the recovered service keeps operating — a new
+report commits and its receipt verifies against the new identity (the issuer
+signing key, being replayed KV data, survives with no re-init). **This confirms
+SCITT adds no recovery *functionality* here:** the recovery mechanism, the ledger
+persistence, and the preserved identity chain are all CCF's. SCITT's only
+recovery-specific addition is re-exposing CCF's key history via a `/jwks` endpoint
++ a client `DynamicTrustStore` so a single current trust anchor can verify
+pre-recovery receipts by `kid`. We deliberately don't add that endpoint: our
+verifier uses the predecessor cert (the same old key, which recovery writes to
+disk) directly. *(The one thing neither app implements is embedding CCF's
+`service_endorsements` chain in the receipt so the current identity alone verifies
+old receipts — CCF's `populate_cose_service_endorsements` exists for this, but the
+Python `ccf.cose.verify_receipt` takes a single key with no chain support, so it
+would need a chain-following verifier too. Deferred; not needed for the model.)*
+
 ### 12.1 Schema / statement versioning
 A verifier must know *which schema* a statement used in order to interpret its
 fields, and that binding must survive receipts and format changes. Approach:
