@@ -28,7 +28,7 @@ statement with fields + the always-full `parent`. They differ only by role:
 - **report** = a *root* statement (original submission, typically by a
   **researcher**; `parent` = none/garbage).
 - **note / follow-up** = a *child* statement; generally a later addition by **the Operator** containing
-  component/severity, patch, detail; `parent`.
+  component/severity, patch, or detail; `parent` = a real report.
 
 
 ### Statement schema (RESOLVED — todo: define-report-fields)
@@ -183,7 +183,7 @@ out-of-band trust anchors; salts high-entropy.
   `build_receipt_for_committed_tx`), SHA-256 (`ccf::crypto::sha256`), EC signing
   (`ccf::crypto::ECKeyPair::sign_hash`), CSPRNG (`ccf::crypto::get_entropy()`).
 - **COSE_Sign1 _creation_ is NOT exposed by CCF** (public `cose.h` only edits
-  headers). Under Model A we hand-assemble the
+  headers). The service being the sole signer, we hand-assemble the
   `COSE_Sign1` with QCBOR and sign the `Sig_structure` via `ccf::crypto` — no
   `t_cose` dependency.
 - **CBOR encode/decode is NOT exposed by CCF** for general use — we vendor
@@ -410,7 +410,8 @@ are chain logic that *consumes* those tokens.
    `parent`, strict uniformity. **Done** (§1; `sd_cwt.statement`).
 1. **Off-chain token layer (Python) ✔ DONE** — `sd_cwt` + `sd_cwt.statement`
    already build / sign / redact / present / verify / validate schema-valid
-   tokens off-chain (73 tests). Under **Model A** this Python layer is the
+   tokens off-chain (73 tests). Since the service is the sole signer, this
+   Python layer is the
    **reference/conformance oracle** and the **researcher-side verifier**, not
    the in-enclave signer.
 2. **C++ token core (port of build+sign+redaction) — host build, no chain.**
@@ -472,7 +473,7 @@ governance into two planes and deliberately keep only one of them:
 
 - **Data-plane governance (NOT used).** *Who-may-submit* control — accepted
   issuers, trust anchors, a registration **policy engine**. Our
-  notary / Model-A stance (open submission, **service is the sole signer**, §4)
+  notary / sole-signer stance (open submission, **service is the sole signer**, §4)
   removes the need for this entirely: we implement no submission-gating policy
   or data-plane governance endpoints. See the note below for when it might be
   reconsidered — **out of scope for the current PR**.
@@ -612,7 +613,7 @@ governance endpoints.
 **New code (the novel parts):**
 - `sd_cwt` **Python** library — redaction core (salts, disclosures, Redacted
   Claim Hashes, `redacted_claim_keys` / tag 60) + a `statement.py` schema layer.
-  Since the **service is the sole signer (Model A)**, authoritative statement
+  Since the **service is the sole signer**, authoritative statement
   construction is (re)implemented **in the C++ enclave**; the Python library is
   the **reference oracle** for that C++ code and the **researcher-side offline
   verifier** (see §14).
@@ -652,8 +653,8 @@ governance endpoints.
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
 
 ## 14. Off-chain token tooling: `sd_cwt` (Python)
-**Decision (Model A — service signs):** every statement is **constructed and
-signed by the service (TEE) in C++**, not by the submitter; researchers submit
+**Decision (service signs):** every statement is **constructed and
+signed by the service in C++**, not by the submitter; researchers submit
 **raw content**. The Python token tooling (issue/sign/redact/present/verify/
 validate) is therefore **(a)** the reference oracle mirroring the C++ issuer
 construction and **(b)** the researcher-side **offline verifier** (`validate`, or
