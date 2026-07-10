@@ -1,7 +1,7 @@
 # Selective Disclosure App — Design & Plan
 
-A confidential, append-only **bug-report ledger** built on CCF (from
-source). Reports are registered in a TEE-backed transparency service so that
+A confidential, append-only **bug-report ledger** built on CCF from
+source. Reports are registered in a TEE-backed transparency service so that
 their existence/ordering is provable, their contents stay hidden by default, and
 The Operator can **selectively reveal** specific fields to prove a new submission is a
 **duplicate** — without exposing the rest.
@@ -22,17 +22,14 @@ A statement is a multi-field object. Content fields (`title`, `body`,
 all **selectively-disclosable**; a **`parent`** reference links follow-ups to a
 report. Follow-up notes are optional and added later.
 
-### Terminology: report vs note (same object, different role)
+### Terminology: report vs note
 A **report** and a **note/follow-up** are the **same kind of object** — an SD-CWT
 statement with fields + the always-full `parent`. They differ only by role:
 - **report** = a *root* statement (original submission, typically by a
   **researcher**; `parent` = none/garbage).
-- **note / follow-up** = a *child* statement (later addition by **the Operator**:
-  component/severity, patch, detail; `parent` = a real report).
+- **note / follow-up** = a *child* statement; generally a later addition by **the Operator** containing
+  component/severity, patch, detail; `parent`.
 
-Recommended: **one unified "statement" schema**, with root-vs-child distinguished
-purely by `parent`. ("Notes" always means the Operator follow-ups, never the
-original report.)
 
 ### Statement schema (RESOLVED — todo: define-report-fields)
 One **unified statement schema**; `report` and `note` share it, with role
@@ -40,7 +37,7 @@ derived **purely from `parent`** — there is deliberately **no `statement_type`
 field**, because a visible type would itself leak *whether* a parent exists and
 so defeat the redacted-`parent` design.
 
-**Signing (Model A):** the **service (TEE) constructs and signs** every
+**Signing:** the **service constructs and signs** every
 statement in-enclave *before* consensus; the committed **seqno** is the
 authoritative order/time. The clear `iss` is therefore the **service**, not the
 submitter.
