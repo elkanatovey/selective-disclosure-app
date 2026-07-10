@@ -269,18 +269,9 @@ namespace selectivedisclosure
       auto get_statement = [](
                              ccf::endpoints::ReadOnlyEndpointContext& ctx,
                              ccf::historical::StatePtr state) {
-        auto historical_tx = state->store->create_read_only_tx();
-        auto* handle =
-          historical_tx.template ro<StatementTable>(STATEMENT_TABLE);
-        const auto entry = handle->get();
-        if (!entry.has_value() || !commits_statement(state, entry.value()))
+        const auto entry = committed_statement_token(state, *ctx.rpc_ctx);
+        if (!entry.has_value())
         {
-          ctx.rpc_ctx->set_error(
-            HTTP_STATUS_NOT_FOUND,
-            ccf::errors::ResourceNotFound,
-            fmt::format(
-              "Transaction {} is not a statement submission.",
-              state->transaction_id.to_str()));
           return;
         }
 
@@ -306,16 +297,8 @@ namespace selectivedisclosure
           return ccf::historical::is_tx_committed_v2(
             consensus, view, seqno, reason);
         };
-      auto txid_from_path = [](ccf::endpoints::ReadOnlyEndpointContext& ctx)
-        -> std::optional<ccf::TxID> {
-        std::string txid_str;
-        std::string error;
-        if (!ccf::endpoints::get_path_param(
-              ctx.rpc_ctx->get_request_path_params(), "txid", txid_str, error))
-        {
-          return std::nullopt;
-        }
-        return ccf::TxID::from_str(txid_str);
+      auto txid_from_path = [](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+        return parse_txid_param(*ctx.rpc_ctx, "txid");
       };
 
       make_read_only_endpoint(
@@ -334,17 +317,9 @@ namespace selectivedisclosure
         [](
           ccf::endpoints::ReadOnlyEndpointContext& ctx,
           ccf::historical::StatePtr state) {
-          auto htx = state->store->create_read_only_tx();
-          const auto entry =
-            htx.template ro<StatementTable>(STATEMENT_TABLE)->get();
-          if (!entry.has_value() || !commits_statement(state, entry.value()))
+          const auto entry = committed_statement_token(state, *ctx.rpc_ctx);
+          if (!entry.has_value())
           {
-            ctx.rpc_ctx->set_error(
-              HTTP_STATUS_NOT_FOUND,
-              ccf::errors::ResourceNotFound,
-              fmt::format(
-                "Transaction {} is not a statement submission.",
-                state->transaction_id.to_str()));
             return;
           }
           const auto receipt = make_cose_receipt(state->receipt);
@@ -404,21 +379,13 @@ namespace selectivedisclosure
           return;
         }
 
-        auto historical_tx = state->store->create_read_only_tx();
-        auto* stmt_handle =
-          historical_tx.template ro<StatementTable>(STATEMENT_TABLE);
-        const auto token = stmt_handle->get();
-        if (!token.has_value() || !commits_statement(state, token.value()))
+        const auto token = committed_statement_token(state, *ctx.rpc_ctx);
+        if (!token.has_value())
         {
-          ctx.rpc_ctx->set_error(
-            HTTP_STATUS_NOT_FOUND,
-            ccf::errors::ResourceNotFound,
-            fmt::format(
-              "Transaction {} is not a statement submission.",
-              state->transaction_id.to_str()));
           return;
         }
 
+        auto historical_tx = state->store->create_read_only_tx();
         auto* disc_handle =
           historical_tx.template ro<DisclosureTable>(DISCLOSURE_TABLE);
         const auto stored = disc_handle->get();
@@ -474,20 +441,11 @@ namespace selectivedisclosure
       auto append_follow_up = [this](
                                 ccf::endpoints::EndpointContext& ctx,
                                 ccf::historical::StatePtr state) {
-        auto ptx = state->store->create_read_only_tx();
-        const auto parent =
-          ptx.template ro<StatementTable>(STATEMENT_TABLE)->get();
-
-        // Confirm {parent_txid} genuinely committed this statement (guards the
-        // per-tx `Value` staleness trap — see commits_statement).
-        if (!parent.has_value() || !commits_statement(state, parent.value()))
+        // Confirm {parent_txid} genuinely committed a statement (guards the
+        // per-tx `Value` staleness trap — see committed_statement_token).
+        const auto parent = committed_statement_token(state, *ctx.rpc_ctx);
+        if (!parent.has_value())
         {
-          ctx.rpc_ctx->set_error(
-            HTTP_STATUS_NOT_FOUND,
-            ccf::errors::ResourceNotFound,
-            fmt::format(
-              "Transaction {} is not a statement submission.",
-              state->transaction_id.to_str()));
           return;
         }
 
@@ -510,19 +468,8 @@ namespace selectivedisclosure
         issue_and_store(ctx, fields, wants_wait(ctx));
       };
 
-      auto parent_txid_from_path =
-        [](ccf::endpoints::EndpointContext& ctx) -> std::optional<ccf::TxID> {
-        std::string txid_str;
-        std::string error;
-        if (!ccf::endpoints::get_path_param(
-              ctx.rpc_ctx->get_request_path_params(),
-              "parent_txid",
-              txid_str,
-              error))
-        {
-          return std::nullopt;
-        }
-        return ccf::TxID::from_str(txid_str);
+      auto parent_txid_from_path = [](ccf::endpoints::EndpointContext& ctx) {
+        return parse_txid_param(*ctx.rpc_ctx, "parent_txid");
       };
 
       make_endpoint(
@@ -543,17 +490,9 @@ namespace selectivedisclosure
           ccf::endpoints::ReadOnlyEndpointContext& ctx,
           ccf::historical::StatePtr state) {
           mark_no_store(*ctx.rpc_ctx);
-          auto htx = state->store->create_read_only_tx();
-          const auto token =
-            htx.template ro<StatementTable>(STATEMENT_TABLE)->get();
-          if (!token.has_value() || !commits_statement(state, token.value()))
+          const auto token = committed_statement_token(state, *ctx.rpc_ctx);
+          if (!token.has_value())
           {
-            ctx.rpc_ctx->set_error(
-              HTTP_STATUS_NOT_FOUND,
-              ccf::errors::ResourceNotFound,
-              fmt::format(
-                "Transaction {} is not a statement submission.",
-                state->transaction_id.to_str()));
             return;
           }
 
@@ -561,6 +500,7 @@ namespace selectivedisclosure
           try
           {
             std::vector<std::vector<uint8_t>> all;
+            auto htx = state->store->create_read_only_tx();
             const auto stored =
               htx.template ro<DisclosureTable>(DISCLOSURE_TABLE)->get();
             if (stored.has_value())
@@ -846,6 +786,50 @@ namespace selectivedisclosure
         !proof->leaf_components.claims_digest.empty() &&
         proof->leaf_components.claims_digest.value() ==
         ccf::ClaimsDigest::Digest(token);
+    }
+
+    // Read the statement token committed at this historical `state`, enforcing
+    // the claims-digest guard. Returns the token bytes on success; on failure
+    // sets a 404 on `rpc` and returns nullopt. EVERY path that serves a
+    // statement by txid MUST obtain the token through this, so the guard (the
+    // defense against the stale per-tx `Value` trap) can never be omitted by a
+    // future endpoint — and so the confidential DisclosureTable is never read
+    // for a txid that did not commit a statement. The returned token is copied
+    // out, so callers may open their own read tx on `state->store` for the
+    // DisclosureTable (same seqno snapshot ⇒ consistent).
+    static std::optional<std::vector<uint8_t>> committed_statement_token(
+      const ccf::historical::StatePtr& state, ccf::RpcContext& rpc)
+    {
+      auto htx = state->store->create_read_only_tx();
+      const auto token =
+        htx.template ro<StatementTable>(STATEMENT_TABLE)->get();
+      if (!token.has_value() || !commits_statement(state, token.value()))
+      {
+        rpc.set_error(
+          HTTP_STATUS_NOT_FOUND,
+          ccf::errors::ResourceNotFound,
+          fmt::format(
+            "Transaction {} is not a statement submission.",
+            state->transaction_id.to_str()));
+        return std::nullopt;
+      }
+      return token;
+    }
+
+    // Extract + parse a transaction-id path parameter (e.g. `txid`,
+    // `parent_txid`) for a historical adapter. Returns nullopt if absent or
+    // unparseable. Shared by the read-only and read-write path extractors.
+    static std::optional<ccf::TxID> parse_txid_param(
+      ccf::RpcContext& rpc, const std::string& name)
+    {
+      std::string txid_str;
+      std::string error;
+      if (!ccf::endpoints::get_path_param(
+            rpc.get_request_path_params(), name, txid_str, error))
+      {
+        return std::nullopt;
+      }
+      return ccf::TxID::from_str(txid_str);
     }
 
     // Semantic version of this ledger application (distinct from the CCF
