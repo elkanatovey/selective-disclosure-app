@@ -42,6 +42,18 @@ git submodule update --init --recursive   # first checkout
 Build outputs land under the mounted repo (`.ccf-install/`, `*/build/`) so they
 persist across container restarts.
 
+## Demo (one command)
+For a narrated end-to-end walkthrough — boot a node, submit a report, retrieve
+the redacted token, then have the Operator pull the full report and release a
+*partial* disclosure — run:
+```bash
+./demo/run_demo.sh          # or: ./demo/run_demo.sh --step  (pause between steps)
+```
+It builds nothing itself; it just needs the app built (`./docker/build-app.sh`)
+and a CCF install at `./.ccf-install`. On first run it creates a Python venv for
+the sandbox + verifier, boots the node, runs [`demo/demo.py`](demo/demo.py), and
+tears the node down on exit. See [`demo/`](demo) for details.
+
 ## Run the node
 The app **is** the node (CCF 7.x standalone binary). Launch a single-node dev
 sandbox with the installed `sandbox.sh`:
