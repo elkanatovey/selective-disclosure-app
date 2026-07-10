@@ -372,6 +372,7 @@ namespace selectivedisclosure
       auto make_disclosure = [](
                                ccf::endpoints::ReadOnlyEndpointContext& ctx,
                                ccf::historical::StatePtr state) {
+        mark_no_store(*ctx.rpc_ctx);
         std::vector<sdcwt::Path> targets;
         try
         {
@@ -541,6 +542,7 @@ namespace selectivedisclosure
         [](
           ccf::endpoints::ReadOnlyEndpointContext& ctx,
           ccf::historical::StatePtr state) {
+          mark_no_store(*ctx.rpc_ctx);
           auto htx = state->store->create_read_only_tx();
           const auto token =
             htx.template ro<StatementTable>(STATEMENT_TABLE)->get();
@@ -613,6 +615,7 @@ namespace selectivedisclosure
       // ------------
       auto get_statements = [this](
                               ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+        mark_no_store(*ctx.rpc_ctx);
         const auto pq =
           ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
         std::string err;
@@ -790,6 +793,17 @@ namespace selectivedisclosure
     using StatementIndex =
       ccf::indexing::strategies::SeqnosForValue_Bucketed<StatementTable>;
     std::shared_ptr<StatementIndex> statement_index;
+
+    // Mark a response as confidential so no cache retains it. `no-store`
+    // forbids any storage by client, proxy, or diagnostic caches (it subsumes
+    // `private` and `no-cache`). Applied to the Operator confidential-egress
+    // responses, which carry unredacted / selectively-disclosed plaintext or
+    // the Operator-only statement enumeration. Set at the TOP of each handler
+    // so it also covers set_error responses (set_error does not clear headers).
+    static void mark_no_store(ccf::RpcContext& rpc)
+    {
+      rpc.set_response_header(ccf::http::headers::CACHE_CONTROL, "no-store");
+    }
 
     // Consensus-committed callback: on global commit, 204 + the txid header; on
     // a rollback (Invalid), 503 so callers don't mistake a rolled-back

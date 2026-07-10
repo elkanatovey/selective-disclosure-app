@@ -45,6 +45,11 @@ The **Operator** is simply a CCF **user** added by governance; this ledger treat
 the confidential-egress endpoints as Operator-only. Present the client
 certificate for member/Operator endpoints (mutual TLS).
 
+**Caching.** Confidential-egress responses (`GET /operator/statements/{txid}`,
+`POST /operator/statements/{txid}/disclosure`, and `GET /operator/statements`)
+set **`Cache-Control: no-store`** on every response (success and error) so no
+cache retains sensitive plaintext. Public transparency responses are cacheable.
+
 ---
 
 ## Public endpoints

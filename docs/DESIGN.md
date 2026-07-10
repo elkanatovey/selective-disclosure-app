@@ -387,7 +387,11 @@ a convenience timestamp only, never a precedence anchor.
 **Confidential-egress authorization:** `get_statements`, `get_statement`,
 and `make_disclosure` return confidential plaintext and MUST be gated to the
 **Operator** (config-pinned / governance-set identity). This is distinct from the
-notary/no-enrollment stance for submission (§4).
+notary/no-enrollment stance for submission (§4). These responses also set
+**`Cache-Control: no-store`** (on both success and error paths) so no client,
+proxy, or diagnostic cache retains the plaintext — defence-in-depth over the
+TLS/mTLS that already protects transit. (Infrastructure must likewise avoid
+logging COSE bodies; the app itself never logs response bodies.)
 
 **Off-chain (NOT a service endpoint):**
 - `verify` — **researcher-side.** `validate` checks the **issuer signature**;

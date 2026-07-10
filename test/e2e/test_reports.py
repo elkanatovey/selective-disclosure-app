@@ -722,6 +722,39 @@ def test_operator_stream_requires_operator(network):
     assert anon.status in (401, 403), anon.body
 
 
+def test_confidential_egress_is_not_cacheable(network):
+    """Confidential-egress responses (unredacted statement, selective disclosure,
+    the Operator-only enumeration) carry `Cache-Control: no-store` so no client,
+    proxy, or diagnostic cache retains sensitive plaintext. Public transparency
+    responses are deliberately NOT forced no-store (caching them is fine)."""
+    client = network.client()
+    op = network.client(user="user0")
+    txid = client.post(
+        "/reports", cbor2.dumps({"title": "cacheable?"}), "application/cbor"
+    ).tx_id
+
+    # Confidential egress: unredacted read, disclosure, and the stream.
+    unred = op.get_historical(f"/operator/statements/{txid}")
+    assert unred.status == 200, unred.body
+    assert "no-store" in unred.headers.get("cache-control", "")
+
+    disc = op.post_historical(
+        f"/operator/statements/{txid}/disclosure",
+        cbor2.dumps({"fields": ["title"]}),
+        "application/cbor",
+    )
+    assert disc.status == 200, disc.body
+    assert "no-store" in disc.headers.get("cache-control", "")
+
+    stream = op.get("/operator/statements?from=1")
+    assert "no-store" in stream.headers.get("cache-control", "")
+
+    # Public (redacted, non-confidential) reads are not forced no-store.
+    pub = client.get_historical(f"/statements/{txid}")
+    assert pub.status == 200
+    assert "no-store" not in pub.headers.get("cache-control", "")
+
+
 def test_read_endpoints_reject_non_statement_txid(network):
     """A committed-but-non-statement txid (genesis) is rejected with 404 by the
     read endpoints — they verify the tx's claims digest equals hash(the token
