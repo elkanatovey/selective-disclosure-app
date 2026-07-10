@@ -798,9 +798,10 @@ namespace selectivedisclosure
     {
       if (info.status == ccf::FinalTxStatus::Invalid)
       {
-        info.rpc_ctx->set_response_status(HTTP_STATUS_SERVICE_UNAVAILABLE);
-        info.rpc_ctx->set_response_body(
-          std::string("Submission was rolled back; please retry."));
+        info.rpc_ctx->set_error(
+          HTTP_STATUS_SERVICE_UNAVAILABLE,
+          ccf::errors::TransactionReplicationFailed,
+          "The transaction was rolled back before commit; please retry.");
         return;
       }
       info.rpc_ctx->set_response_header(

@@ -23,8 +23,9 @@ namespace selectivedisclosure
   // `[salt, value, key]` openings for every redacted field), in a PRIVATE
   // (encrypted) per-transaction table. Written once on submit and never read on
   // the submit path (segregation invariant, DESIGN.md s8) — read only by the
-  // Operator egress path to produce duplicate-proofs. Feature:
-  // `store_unredacted` (default ON).
+  // Operator egress path to produce duplicate-proofs. The service currently
+  // always retains these openings; an Operator-self-custody mode (not storing
+  // them here, a.k.a. `store_unredacted` OFF) is deferred hardening (DESIGN §12).
   using DisclosureTable = ccf::kv::Value<std::vector<uint8_t>>;
   static constexpr auto DISCLOSURE_TABLE = "sd.disclosures";
 

@@ -98,7 +98,7 @@ verification), tested in `tools/sd_cwt/tests/test_statement.py`.
 | Reporter (originals) | **Researchers** | submit **raw report content** directly to the service (authenticated channel) |
 | Follow-ups | **the Operator** | submits follow-up note content referencing a report |
 | Notary / Transparency service | **CCF service in a TEE** | **constructs + signs** the SD-CWT, registers it, assigns **seqno**, issues **signed receipts**, holds the confidential store; trust domain **separate** from the Operator |
-| Holder of disclosures | **the service** (default, `store_unredacted`) or **Operator self-custody** (flag off) | only the holder of salt/value can disclose |
+| Holder of disclosures | **the service** (current behavior) — or **Operator self-custody** (deferred, §12) | only the holder of salt/value can disclose |
 | Verifier | a **researcher** | verifies **offline** via the receipt (`validate_trusted`) |
 
 **Core flow:** reports go **researcher → service → the Operator**, never the Operator → service.
@@ -220,7 +220,7 @@ index** enables the Operator stream. Concrete names in `app/src/reports.h`.
 | Table | Visibility | Contents |
 |---|---|---|
 | `StatementTable` (`public:sd.statement`) | public | the redacted SD-CWT bytes (per-tx `Value`) |
-| `DisclosureTable` | private (encrypted) | the statement's disclosures (`[salt,value,key]` bytes) — the **confidential store**; **write-only** from submit, **read-only** from Operator egress; feature-flagged (`store_unredacted`, default ON) |
+| `DisclosureTable` | private (encrypted) | the statement's disclosures (`[salt,value,key]` bytes) — the **confidential store**; **write-only** from submit, **read-only** from Operator egress. Always retained today; an Operator-self-custody mode (`store_unredacted` OFF) is deferred (§12) |
 | `SigningKeyTable` (`sd.signing_key`) | private (encrypted) | the issuer **private** key (PEM) |
 | `SigningKeyHistory` | public | issuer **public** key registration(s) — endorsed by their receipts (§4); supports rotation (append new, keep old) |
 | statement **seqno index** | public | for `get_statements` (CCF `SeqnosForValue`) |
@@ -234,7 +234,8 @@ lives in the child's redacted, salted `parent` field, and follow-ups surface via
 - **Signing:** the **service (TEE)** constructs and signs the SD-CWT (trust roots
   in attestation); researchers submit raw content over an authenticated channel.
   The receipt-anchored `validate_trusted` is the verification path.
-- **Confidential store (`store_unredacted`, default ON):** the service holds the
+- **Confidential store (retained by default; `store_unredacted` OFF is deferred,
+  §12):** the service holds the
   report's disclosures (= the unredacted values for redacted fields; with the
   public token's clear fields this reconstructs the full report). Chosen for
   implementation ease — it dissolves the separate confidential-delivery channel
@@ -448,9 +449,10 @@ are chain logic that *consumes* those tokens.
 - Disclosure artifact: separate-bundle (preferred) vs embedded profile.
 - RESOLVED: `parent` is redacted by default + always present (no metadata leak).
 - RESOLVED (for now): the **service (TEE) signs** statements; the **service holds
-  the unredacted disclosures** in a private table (`store_unredacted`, default
-  ON), segregated for easy migration. This dissolves the confidential
-  service→Operator delivery channel for the initial implementation.
+  the unredacted disclosures** in a private table (always retained today;
+  `store_unredacted` OFF deferred), segregated for easy migration. This dissolves
+  the confidential service→Operator delivery channel for the initial
+  implementation.
 - Principle: redacted tokens leak no metadata; keep token shape uniform.
 - ACCEPTED limitation: disclosing an **array element** reveals the array's
   length/position to the disclosure recipient (never at rest). Not padded — see
