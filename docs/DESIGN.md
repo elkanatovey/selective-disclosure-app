@@ -105,7 +105,7 @@ to make later duplicate-proofs easier.
 
 ## 4. Authentication / registration model (notary)
 The service is a **notary + signer**, not an identity authority.
-- **The service (TEE) is the sole signer.** Researchers/Operator submit **raw
+- **The service is the sole signer.** Researchers/Operator submit **raw
   content** over an authenticated channel; the service constructs and signs the
   SD-CWT. There is no per-submitter statement signature to check.
 - **Signing key = app-managed (not the CCF service identity).** CCF does not
