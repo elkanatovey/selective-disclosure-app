@@ -10,13 +10,17 @@ on:
     paths:
       - "app/**"
       - "tools/sd_cwt/**"
+      - "spec/**"
       - "scripts/ci-cpp-tests.sh"
+      - "scripts/validate-cddl.sh"
       - ".github/workflows/token_core.yml"
   pull_request:
     paths:
       - "app/**"
       - "tools/sd_cwt/**"
+      - "spec/**"
       - "scripts/ci-cpp-tests.sh"
+      - "scripts/validate-cddl.sh"
       - ".github/workflows/token_core.yml"
   workflow_dispatch:
 
@@ -45,10 +49,12 @@ jobs:
           tdnf -y update
           tdnf -y install \
             git build-essential cmake ninja-build python3-pip ca-certificates \
-            jq which procps tar clang clang-tools-extra-devel
+            jq which procps tar clang clang-tools-extra-devel ruby
           curl -L "https://github.com/microsoft/CCF/releases/download/ccf-${CCF_VERSION}/ccf_devel_${CCF_VERSION//-/_}_x86_64.rpm" -o ccf.rpm
           tdnf -y install ./ccf.rpm
           rm -f ccf.rpm
+          # The reference CDDL (RFC 8610) validator, for spec/ schema checks.
+          gem install --no-document cddl
 
       - uses: actions/checkout@v5
         # The CCF submodule is not needed: we build against the installed CCF

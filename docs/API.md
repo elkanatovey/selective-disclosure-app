@@ -4,7 +4,9 @@ The HTTP API of the Selective Disclosure Report Ledger. This is a **reference**
 (request/response shapes, status codes, auth); for *why* the API is shaped this
 way — the trust model, redaction invariants, and design rationale — see
 [`DESIGN.md`](DESIGN.md) §9. A running node also serves an auto-generated OpenAPI
-3.0 document at `GET /app/api`.
+3.0 document at `GET /app/api`. The exact CBOR request/response shapes are
+specified in CDDL (RFC 8610) at [`spec/api.cddl`](../spec/api.cddl) (and the
+statement/token format at [`spec/statement.cddl`](../spec/statement.cddl)).
 
 ## Conventions
 

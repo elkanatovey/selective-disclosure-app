@@ -25,6 +25,8 @@ API contract.
 - `tools/sd_cwt/` — a Python SD-CWT reference library (issue / redact / present /
   verify) used as the conformance oracle for the C++ core and as the
   researcher-side offline verifier.
+- `spec/` — CDDL (RFC 8610) schemas for the statement + API CBOR formats — the
+  language-neutral contract both implementations conform to.
 - `third_party/CCF` — CCF as a git submodule, pinned to `ccf-7.0.5`.
 - `docker/` — dev image + build helpers.
 - `test/e2e/` — pytest end-to-end suite against a live sandbox node.

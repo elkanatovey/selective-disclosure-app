@@ -202,12 +202,17 @@ single spec names the combo, so no off-the-shelf tool validates it as one unit).
 
 ```
 COSE_Sign1 (service-signed, TEE):
-  protected   : { alg, sd_alg(SHA-256), typ }
+  protected   : { alg, typ, sd_alg(SHA-256) }
   payload     : { clear fields,
                   redacted_claim_keys:[hashes incl. always-present parent] }
   unprotected : { receipt: <service-signed>,        # (a) only
                   sd_claims:[selected disclosures] } # (a) only
 ```
+
+The exact wire format is specified in CDDL (RFC 8610) at
+[`spec/statement.cddl`](../spec/statement.cddl) — the language-neutral contract
+both the C++ token core and the Python `sd_cwt` oracle conform to. (Protected
+header keys are emitted in CDE order: `alg` (1) < `typ` (16) < `sd_alg` (170).)
 
 ## 8. Data model (KV tables)
 Statements/disclosures are written as **per-transaction `Value`s** and read back
