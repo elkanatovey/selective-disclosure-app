@@ -35,7 +35,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent))
 from client import LedgerClient  # noqa: E402
 from conftest import APP_BINARY, REPO_ROOT, SANDBOX, _require  # noqa: E402
-from test_reports import _verify_receipt  # noqa: E402
+from helpers import verify_receipt  # noqa: E402
 
 # Recovery replays the whole ledger before the service re-opens, so allow more
 # time than a cold start.
@@ -183,7 +183,7 @@ def test_recovery_preserves_ledger_and_receipts(tmp_path_factory):
         assert old_net["recovery_count"] == 0
 
     # The pre-recovery receipt verifies against the identity that signed it.
-    _verify_receipt(pre_statement, old_cert)
+    verify_receipt(pre_statement, old_cert)
 
     # --- Phase 2: recover from the persisted ledger onto a NEW service identity. ---
     with _Sandbox(
@@ -211,8 +211,8 @@ def test_recovery_preserves_ledger_and_receipts(tmp_path_factory):
         #     its (original) receipt still verifies against the predecessor identity.
         recovered = user.get_historical(f"/statements/{txid}")
         assert recovered.status == 200, recovered.body
-        _verify_receipt(recovered.body, predecessor_cert)
-        _verify_receipt(pre_statement, predecessor_cert)
+        verify_receipt(recovered.body, predecessor_cert)
+        verify_receipt(pre_statement, predecessor_cert)
 
         # (b) The recovered service keeps working: a new report commits and its
         #     receipt verifies against the NEW service identity. (The issuer signing
@@ -223,4 +223,4 @@ def test_recovery_preserves_ledger_and_receipts(tmp_path_factory):
         assert new_txid and new_txid != txid
         post = user.get_historical(f"/statements/{new_txid}")
         assert post.status == 200, post.body
-        _verify_receipt(post.body, new_cert)
+        verify_receipt(post.body, new_cert)

@@ -140,3 +140,37 @@ def network(tmp_path_factory):
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 except Exception:
                     pass
+
+
+# --- Convenience fixtures (shared trust-bootstrap + role clients) -----------
+import helpers  # noqa: E402
+
+
+@pytest.fixture
+def anon(network):
+    """An anonymous client (no client cert) — the researcher/public role."""
+    return network.client()
+
+
+@pytest.fixture
+def operator(network):
+    """The Operator client (user0) for the confidential-egress endpoints."""
+    return network.client(user="user0")
+
+
+@pytest.fixture(scope="session")
+def service_cert_pem(network) -> bytes:
+    """The service (network) identity certificate bytes — the receipt trust root.
+    Session-scoped: the identity is stable for the life of the node."""
+    return Path(network.service_cert).read_bytes()
+
+
+@pytest.fixture
+def issuer_key(network, service_cert_pem):
+    """The issuer signing key as a verified pycose key: fetched from
+    GET /signing-key and checked against the on-ledger endorsement.
+
+    Function-scoped ON PURPOSE — test_signing_key_rotation rotates the key
+    mid-session, so a cached key would be stale for later tests."""
+    body = network.client().get_historical("/signing-key").body
+    return helpers.ec2_key_from_pem(helpers.verify_endorsed_key(body, service_cert_pem))

@@ -1,100 +1,38 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""End-to-end smoke test: submit a report, retrieve the transparent statement,
-and verify it with the ``sd_cwt`` reference verifier against the published issuer
-key. Proves the full on-chain pipeline (token core + endpoints + receipt) works
-on a live node, and that the harness reports green on known-good behaviour.
+"""End-to-end tests: submit reports, retrieve transparent statements, and verify
+them with the ``sd_cwt`` reference verifier against the published issuer key.
+Proves the full on-chain pipeline (token core + endpoints + receipt) works on a
+live node.
+
+Shared trust-bootstrap (service cert, endorsed issuer key, role clients) comes
+from fixtures in conftest.py (``anon``, ``operator``, ``issuer_key``,
+``service_cert_pem``); reusable request/verify helpers live in helpers.py.
 """
 
 from hashlib import sha256
 
 import cbor2
 import pytest
+from helpers import (
+    RECEIPTS_LABEL,
+    SERVICE_ISS,
+    bare_statement,
+    disclose,
+    ec2_key_from_pem,
+    follow_up,
+    service_key,
+    submit_report,
+    uhdr,
+    verify_endorsed_key,
+    verify_receipt,
+)
 from sd_cwt import statement as st
 
-SERVICE_ISS = "https://selective-disclosure.example/service"
-RECEIPTS_LABEL = 394  # unprotected header: embedded CCF receipt(s)
 
-
-def _ec2_key_from_pem(pem: bytes):
-    """Build a pycose EC2Key from a PEM public key (curve inferred from name)."""
-    from cryptography.hazmat.primitives import serialization
-    from pycose.keys import EC2Key
-    from pycose.keys.curves import P256, P384, P521
-
-    pub = serialization.load_pem_public_key(pem)
-    mapping = {
-        "secp256r1": (P256, 32),
-        "secp384r1": (P384, 48),
-        "secp521r1": (P521, 66),
-    }
-    name = pub.curve.name
-    if name not in mapping:
-        raise ValueError(f"unsupported EC curve: {name}")
-    crv, size = mapping[name]
-    nums = pub.public_numbers()
-    return EC2Key(
-        crv=crv,
-        x=nums.x.to_bytes(size, "big"),
-        y=nums.y.to_bytes(size, "big"),
-    )
-
-
-def _uhdr(token: bytes) -> dict:
-    obj = cbor2.loads(token)
-    arr = obj.value if hasattr(obj, "value") else obj
-    return arr[1] or {}
-
-
-def _bare_statement(transparent: bytes) -> bytes:
-    """Reconstruct the original signed statement (empty unprotected header) from a
-    transparent statement, by dropping the embedded receipt. The CCF claims digest
-    was bound over these bytes, so this is what the receipt attests."""
-    obj = cbor2.loads(transparent)
-    arr = list(obj.value)
-    arr[1] = {}  # issued.token carried an empty unprotected header
-    return cbor2.dumps(cbor2.CBORTag(obj.tag, arr))
-
-
-def _verify_receipt(transparent: bytes, service_cert_pem: bytes) -> None:
-    """Cryptographically verify the embedded CCF receipt: the Merkle inclusion
-    proof ties the statement's claims digest to a tree root the service identity
-    signed. Raises on any failure."""
-    import ccf.cose
-    from cryptography.x509 import load_pem_x509_certificate
-
-    receipts = _uhdr(transparent)[RECEIPTS_LABEL]
-    service_key = load_pem_x509_certificate(service_cert_pem).public_key()
-    claim_digest = sha256(_bare_statement(transparent)).digest()
-    ccf.cose.verify_receipt(receipts[0], service_key, claim_digest)
-
-
-def _service_key(service_cert_pem: bytes):
-    from cryptography.x509 import load_pem_x509_certificate
-
-    return load_pem_x509_certificate(service_cert_pem).public_key()
-
-
-def _verify_endorsed_key(resp_body: bytes, service_cert_pem: bytes) -> bytes:
-    """Parse GET /signing-key ({key, receipt} CBOR); verify the receipt endorses
-    the key (claims digest = hash(pubkey)) against the service identity; return
-    the key PEM. This is what lets a verifier trust the issuer key — and thus a
-    statement's own signature — without the statement's receipt."""
-    import ccf.cose
-
-    obj = cbor2.loads(resp_body)
-    key_pem, receipt = obj["key"], obj["receipt"]
-    ccf.cose.verify_receipt(
-        receipt, _service_key(service_cert_pem), sha256(key_pem).digest()
-    )
-    return key_pem
-
-
-def test_submit_retrieve_verify(network):
-    client = network.client()
-
-    # 1. Submit a report as CBOR (native types; fingerprint is a byte string).
+def test_submit_retrieve_verify(anon, issuer_key, service_cert_pem):
+    # Submit a report as CBOR (native types; fingerprint is a byte string).
     report = {
         "title": "heap overflow in parser",
         "body": "crafted input overflows the token buffer",
@@ -103,125 +41,87 @@ def test_submit_retrieve_verify(network):
         "fingerprint": b"\xde\xad\xbe\xef",
         "references": ["CVE-2025-9999"],
     }
-    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
-    assert resp.status == 204, resp.body
-    txid = resp.tx_id
-    assert txid, "no transaction id header on submit"
+    txid = submit_report(anon, report)
 
-    # 2. Fetch the issuer key AND verify its on-ledger endorsement against the
-    #    service identity, then build a verification key from the endorsed PEM.
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key_resp = client.get_historical("/signing-key")
-    assert key_resp.status == 200, key_resp.body
-    key_pem = _verify_endorsed_key(key_resp.body, service_cert)
-    key = _ec2_key_from_pem(key_pem)
-
-    # 3. Retrieve the transparent statement (historical query; retries on 202).
-    stmt_resp = client.get_historical(f"/statements/{txid}")
+    # Retrieve the transparent statement (historical query; retries on 202).
+    stmt_resp = anon.get_historical(f"/statements/{txid}")
     assert stmt_resp.status == 200, stmt_resp.body
     assert "application/cose" in stmt_resp.content_type
     token = stmt_resp.body
 
-    # 4. Verify: the service signature verifies under the published key, and the
-    #    schema holds (clear iss/iat, all content redacted).
-    out = st.validate_statement(token, key)
+    # The service signature verifies under the published (endorsed) issuer key,
+    # and the schema holds (clear iss/iat, all content redacted).
+    out = st.validate_statement(token, issuer_key)
     assert out.clear[st.ISS] == SERVICE_ISS
     assert st.IAT in out.clear
 
-    # 5. The statement is transparent: the CCF receipt is embedded (uhdr 394)
-    #    AND it cryptographically verifies (Merkle proof + service signature).
-    assert RECEIPTS_LABEL in _uhdr(token)
-    with open(network.service_cert, "rb") as f:
-        _verify_receipt(token, f.read())
+    # The statement is transparent: the CCF receipt is embedded (uhdr 394) AND
+    # it cryptographically verifies (Merkle proof + service signature).
+    assert RECEIPTS_LABEL in uhdr(token)
+    verify_receipt(token, service_cert_pem)
 
-    # 6. Strict uniformity: all content fields are redacted.
+    # Strict uniformity: all content fields are redacted.
     _, n_redacted = st.redacted_shape(token)
     assert n_redacted == len(st.CONTENT_FIELDS)
 
 
-def test_receipt_rejects_wrong_digest(network):
+def test_receipt_rejects_wrong_digest(anon, service_cert_pem):
     """Negative control: the embedded receipt must NOT verify against a wrong
     claims digest — proving the receipt check in the round-trip test is real,
     not a no-op."""
     import ccf.cose
-    from cryptography.x509 import load_pem_x509_certificate
 
-    client = network.client()
-    resp = client.post("/reports", cbor2.dumps({"title": "x"}), "application/cbor")
-    txid = resp.tx_id
-    token = client.get_historical(f"/statements/{txid}").body
+    txid = submit_report(anon, {"title": "x"})
+    token = anon.get_historical(f"/statements/{txid}").body
 
-    receipts = _uhdr(token)[RECEIPTS_LABEL]
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = load_pem_x509_certificate(service_cert).public_key()
+    receipts = uhdr(token)[RECEIPTS_LABEL]
+    key = service_key(service_cert_pem)
 
     # The real digest verifies; a corrupted one must be rejected.
-    _verify_receipt(token, service_cert)
+    verify_receipt(token, service_cert_pem)
     with pytest.raises(Exception):
         ccf.cose.verify_receipt(receipts[0], key, b"\x00" * 32)
 
 
-def test_signing_key_is_endorsed(network):
+def test_signing_key_is_endorsed(anon, service_cert_pem):
     """GET /signing-key returns the issuer key + its on-ledger endorsement; the
     endorsement receipt verifies against the service identity (claims digest =
     hash(pubkey)), and a wrong-key digest is rejected (real, not a no-op)."""
     import ccf.cose
 
-    client = network.client()
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-
-    resp = client.get_historical("/signing-key")
+    resp = anon.get_historical("/signing-key")
     assert resp.status == 200, resp.body
-    key_pem = _verify_endorsed_key(resp.body, service_cert)  # positive
+    key_pem = verify_endorsed_key(resp.body, service_cert_pem)  # positive
     assert b"BEGIN PUBLIC KEY" in key_pem
 
     # Negative: the endorsement must not verify for a different key.
     receipt = cbor2.loads(resp.body)["receipt"]
     with pytest.raises(Exception):
         ccf.cose.verify_receipt(
-            receipt, _service_key(service_cert), sha256(b"not-the-key").digest()
+            receipt, service_key(service_cert_pem), sha256(b"not-the-key").digest()
         )
 
 
-def test_operator_discloses_subset(network):
+def test_operator_discloses_subset(anon, operator, issuer_key, service_cert_pem):
     """The Operator reveals a chosen subset of a statement's fields. The result
     is a presented + transparent statement: it verifies under the endorsed key,
     the CCF receipt still verifies, exactly the requested fields are disclosed,
     and the rest stay redacted (the confidential store never leaks them)."""
-    client = network.client()
     report = {
         "title": "heap overflow in parser",
         "body": "secret exploit details",
         "component": "parser",
         "severity": "high",
     }
-    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
-    assert resp.status == 204, resp.body
-    txid = resp.tx_id
+    txid = submit_report(anon, report)
 
-    # The Operator (a CCF user) selectively discloses two fields.
-    op = network.client(user="user0")
-    disc = op.post_historical(
-        f"/operator/statements/{txid}/disclosure",
-        cbor2.dumps({"fields": ["title", "component"]}),
-        "application/cbor",
-    )
+    disc = disclose(operator, txid, ["title", "component"])
     assert disc.status == 200, disc.body
     assert "application/cose" in disc.content_type
     presented = disc.body
 
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key_pem = _verify_endorsed_key(
-        client.get_historical("/signing-key").body, service_cert
-    )
-    key = _ec2_key_from_pem(key_pem)
-
     # Signature verifies; exactly the requested fields are revealed.
-    out = st.validate_statement(presented, key)
+    out = st.validate_statement(presented, issuer_key)
     assert out.disclosed[st.TITLE] == "heap overflow in parser"
     assert out.disclosed[st.COMPONENT] == "parser"
     assert st.BODY not in out.disclosed
@@ -234,28 +134,25 @@ def test_operator_discloses_subset(network):
     assert b"high" not in presented  # severity, undisclosed
 
     # Still transparent: the embedded receipt verifies against the service.
-    assert RECEIPTS_LABEL in _uhdr(presented)
-    _verify_receipt(presented, service_cert)
+    assert RECEIPTS_LABEL in uhdr(presented)
+    verify_receipt(presented, service_cert_pem)
 
 
-def test_disclosure_requires_operator(network):
+def test_disclosure_requires_operator(anon):
     """The disclosure endpoint is Operator-gated: an anonymous caller (no client
     certificate) is rejected before any confidential state is touched."""
-    client = network.client()
-    resp = client.post("/reports", cbor2.dumps({"title": "x"}), "application/cbor")
-    txid = resp.tx_id
-
-    anon = client.post(
+    txid = submit_report(anon, {"title": "x"})
+    denied = anon.post(
         f"/operator/statements/{txid}/disclosure",
         cbor2.dumps({"fields": ["title"]}),
         "application/cbor",
     )
-    assert anon.status in (401, 403), anon.body
+    assert denied.status in (401, 403), denied.body
 
 
 def _sd_claims(token: bytes) -> list:
     """The presented disclosures (sd_claims, unprotected header label 17)."""
-    return _uhdr(token).get(17, [])
+    return uhdr(token).get(17, [])
 
 
 def _references_container_on_wire(token: bytes):
@@ -273,44 +170,29 @@ def _drop_sd_claim(token: bytes, predicate) -> bytes:
     from the unprotected header — for building malformed presentations."""
     obj = cbor2.loads(token)
     arr = list(obj.value)
-    uhdr = dict(arr[1])
-    uhdr[17] = [e for e in uhdr[17] if not predicate(cbor2.loads(e))]
-    arr[1] = uhdr
+    uhdr_map = dict(arr[1])
+    uhdr_map[17] = [e for e in uhdr_map[17] if not predicate(cbor2.loads(e))]
+    arr[1] = uhdr_map
     return cbor2.dumps(cbor2.CBORTag(obj.tag, arr))
 
 
-def test_operator_discloses_array_element(network):
+def test_operator_discloses_array_element(anon, operator, issuer_key, service_cert_pem):
     """Recursive/subfield disclosure: the Operator reveals a single `references`
     element. The sibling *values* are cryptographically absent from the artifact
     (only element 1's opening is attached); the array length/positions ARE
     visible once the container is disclosed (inherent to array disclosure —
     hiding those would need length padding, which we do not do)."""
-    client = network.client()
     report = {
         "title": "heap overflow",
         "references": ["CVE-2025-0001", "CVE-2025-0002", "CVE-2025-0003"],
     }
-    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
-    assert resp.status == 204, resp.body
-    txid = resp.tx_id
+    txid = submit_report(anon, report)
 
-    op = network.client(user="user0")
-    disc = op.post_historical(
-        f"/operator/statements/{txid}/disclosure",
-        cbor2.dumps({"fields": [["references", 1]]}),  # only element 1
-        "application/cbor",
-    )
+    disc = disclose(operator, txid, [["references", 1]])  # only element 1
     assert disc.status == 200, disc.body
     presented = disc.body
 
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key_pem = _verify_endorsed_key(
-        client.get_historical("/signing-key").body, service_cert
-    )
-    key = _ec2_key_from_pem(key_pem)
-
-    out = st.validate_statement(presented, key)
+    out = st.validate_statement(presented, issuer_key)
     # Only element 1 resolves; siblings are dropped from the resolved value.
     assert out.disclosed[st.REFERENCES] == ["CVE-2025-0002"]
     assert st.TITLE not in out.disclosed  # unrelated field stays redacted
@@ -338,85 +220,54 @@ def test_operator_discloses_array_element(network):
     ]
     assert openings == ["CVE-2025-0002"]
 
-    assert RECEIPTS_LABEL in _uhdr(presented)
-    _verify_receipt(presented, service_cert)
+    assert RECEIPTS_LABEL in uhdr(presented)
+    verify_receipt(presented, service_cert_pem)
 
 
-def test_nested_disclosure_without_ancestor_is_rejected(network):
+def test_nested_disclosure_without_ancestor_is_rejected(anon, operator, issuer_key):
     """The ancestor rule is load-bearing: strip the array-container disclosure
     from a valid element presentation and the verifier MUST reject it (the
     element's hash is no longer reachable). Proves `select_disclosures` pulling
     the ancestor is necessary, not decorative."""
-    client = network.client()
-    report = {"references": ["CVE-A", "CVE-B", "CVE-C"]}
-    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
-    txid = resp.tx_id
+    txid = submit_report(anon, {"references": ["CVE-A", "CVE-B", "CVE-C"]})
 
-    op = network.client(user="user0")
-    presented = op.post_historical(
-        f"/operator/statements/{txid}/disclosure",
-        cbor2.dumps({"fields": [["references", 1]]}),
-        "application/cbor",
-    ).body
-
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
+    presented = disclose(operator, txid, [["references", 1]]).body
 
     # Sanity: as issued (with ancestor) it verifies.
-    assert st.validate_statement(presented, key).disclosed[st.REFERENCES] == ["CVE-B"]
+    assert st.validate_statement(presented, issuer_key).disclosed[st.REFERENCES] == [
+        "CVE-B"
+    ]
 
     # Remove the whole-array {1006} disclosure, keeping the element {1006,1}.
     orphaned = _drop_sd_claim(
         presented, lambda d: len(d) == 3 and d[2] == st.REFERENCES
     )
     with pytest.raises(Exception):
-        st.validate_statement(orphaned, key)
+        st.validate_statement(orphaned, issuer_key)
 
 
-def test_operator_discloses_whole_array(network):
+def test_operator_discloses_whole_array(anon, operator, issuer_key):
     """Disclosing the whole `references` field reveals all its elements (the
     field's descendants are pulled in), in contrast to element-level disclosure."""
-    client = network.client()
-    report = {"references": ["CVE-A", "CVE-B"]}
-    resp = client.post("/reports", cbor2.dumps(report), "application/cbor")
-    txid = resp.tx_id
+    txid = submit_report(anon, {"references": ["CVE-A", "CVE-B"]})
 
-    op = network.client(user="user0")
-    disc = op.post_historical(
-        f"/operator/statements/{txid}/disclosure",
-        cbor2.dumps({"fields": ["references"]}),
-        "application/cbor",
-    )
+    disc = disclose(operator, txid, ["references"])
     assert disc.status == 200, disc.body
 
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
-    out = st.validate_statement(disc.body, key)
+    out = st.validate_statement(disc.body, issuer_key)
     assert out.disclosed[st.REFERENCES] == ["CVE-A", "CVE-B"]
 
 
-def test_at_rest_shape_is_uniform_regardless_of_references(network):
+def test_at_rest_shape_is_uniform_regardless_of_references(anon, issuer_key):
     """At-rest privacy: two reports with wildly different `references` (none vs
     many) must yield an identical redacted shape in the signed token — the whole
     array is a single top-level Redacted Claim Hash, so element-level redaction
     leaks nothing about the reference count until the array is disclosed."""
-    client = network.client()
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
 
     def shape(report):
-        txid = client.post("/reports", cbor2.dumps(report), "application/cbor").tx_id
-        token = client.get_historical(f"/statements/{txid}").body
-        st.validate_statement(token, key)  # well-formed under the key
+        txid = submit_report(anon, report)
+        token = anon.get_historical(f"/statements/{txid}").body
+        st.validate_statement(token, issuer_key)  # well-formed under the key
         return st.redacted_shape(token)
 
     none_refs = shape({"title": "a"})
@@ -427,85 +278,58 @@ def test_at_rest_shape_is_uniform_regardless_of_references(network):
     assert n_redacted == len(st.CONTENT_FIELDS)
 
 
-def test_operator_appends_follow_up(network):
+def test_operator_appends_follow_up(anon, operator, issuer_key):
     """A follow-up is a child statement whose redacted `parent` field is
     SHA-256(parent token) — i.e. the parent's claims digest, so it commits to
     exactly the statement the parent's receipt attests. The link is hidden at
     rest and revealed only when the Operator discloses `parent`."""
-    client = network.client()
-    op = network.client(user="user0")
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
-
-    parent_txid = client.post(
-        "/reports", cbor2.dumps({"title": "root bug"}), "application/cbor"
-    ).tx_id
+    parent_txid = submit_report(anon, {"title": "root bug"})
 
     # Operator-gated; uses a read-write historical adapter (retry on 202/503).
-    fu = op.post_historical(
-        f"/reports/{parent_txid}/follow-ups",
-        cbor2.dumps({"body": "patched in v1.2.3", "patch": "abc123"}),
-        "application/cbor",
+    fu = follow_up(
+        operator, parent_txid, {"body": "patched in v1.2.3", "patch": "abc123"}
     )
     assert fu.status == 204, fu.body
     fu_txid = fu.tx_id
     assert fu_txid
 
     # The follow-up is a normal, uniform statement (all content redacted).
-    fu_token = client.get_historical(f"/statements/{fu_txid}").body
-    st.validate_statement(fu_token, key)
+    fu_token = anon.get_historical(f"/statements/{fu_txid}").body
+    st.validate_statement(fu_token, issuer_key)
     _, n_redacted = st.redacted_shape(fu_token)
     assert n_redacted == len(st.CONTENT_FIELDS)
 
     # The expected link: SHA-256(parent's bare token) = the parent claims digest.
-    parent_transparent = client.get_historical(f"/statements/{parent_txid}").body
-    parent_link = sha256(_bare_statement(parent_transparent)).digest()
+    parent_transparent = anon.get_historical(f"/statements/{parent_txid}").body
+    parent_link = sha256(bare_statement(parent_transparent)).digest()
     assert parent_link not in fu_token  # hidden at rest
 
     # Operator discloses the follow-up's `parent`; the revealed link matches.
-    disc = op.post_historical(
-        f"/operator/statements/{fu_txid}/disclosure",
-        cbor2.dumps({"fields": ["parent"]}),
-        "application/cbor",
-    )
+    disc = disclose(operator, fu_txid, ["parent"])
     assert disc.status == 200, disc.body
-    out = st.validate_statement(disc.body, key)
+    out = st.validate_statement(disc.body, issuer_key)
     assert out.disclosed[st.PARENT] == parent_link
 
 
-def test_follow_up_requires_operator(network):
+def test_follow_up_requires_operator(anon):
     """The follow-up endpoint is Operator-gated: anonymous callers are rejected."""
-    client = network.client()
-    parent_txid = client.post(
-        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
-    ).tx_id
-    anon = client.post(
+    parent_txid = submit_report(anon, {"title": "x"})
+    denied = anon.post(
         f"/reports/{parent_txid}/follow-ups",
         cbor2.dumps({"body": "y"}),
         "application/cbor",
     )
-    assert anon.status in (401, 403), anon.body
+    assert denied.status in (401, 403), denied.body
 
 
-def test_follow_up_rejects_non_statement_parent(network):
+def test_follow_up_rejects_non_statement_parent(anon, operator):
     """A follow-up whose {parent_txid} is committed but is NOT a statement (here
     genesis) is rejected — the claims-digest check guards against linking to a
     stale per-tx Value read at an unrelated seqno."""
-    client = network.client()
-    op = network.client(user="user0")
-    parent_txid = client.post(
-        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
-    ).tx_id
+    parent_txid = submit_report(anon, {"title": "x"})
     view = parent_txid.split(".")[0]
     non_statement = f"{view}.1"  # genesis tx: committed, not a statement
-    resp = op.post_historical(
-        f"/reports/{non_statement}/follow-ups",
-        cbor2.dumps({"body": "y"}),
-        "application/cbor",
-    )
+    resp = follow_up(operator, non_statement, {"body": "y"})
     assert resp.status in (400, 404), resp.body
 
 
@@ -518,35 +342,21 @@ def _redacted_hashes(token: bytes) -> list:
     return payload.get(cbor2.CBORSimpleValue(59), [])
 
 
-def test_follow_up_parent_link_is_salted(network):
+def test_follow_up_parent_link_is_salted(anon, operator, issuer_key):
     """The child->parent link is salted, and that is load-bearing: the parent
     hash is derived from the PUBLIC parent token, so without a per-field random
     salt an observer could brute-force the link by hashing every public
     statement. Proof: two follow-ups of the SAME parent have DISJOINT redacted
     hashes at rest (uncorrelatable), yet both disclose to the SAME parent link
     (the value is deterministic; only the disclosure wrapper is salted)."""
-    client = network.client()
-    op = network.client(user="user0")
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
+    parent_txid = submit_report(anon, {"title": "root"})
 
-    parent_txid = client.post(
-        "/reports", cbor2.dumps({"title": "root"}), "application/cbor"
-    ).tx_id
+    def do_follow_up(body):
+        return follow_up(operator, parent_txid, {"body": body}).tx_id
 
-    def follow_up(body):
-        return op.post_historical(
-            f"/reports/{parent_txid}/follow-ups",
-            cbor2.dumps({"body": body}),
-            "application/cbor",
-        ).tx_id
-
-    fu1, fu2 = follow_up("a"), follow_up("b")
-    tok1 = client.get_historical(f"/statements/{fu1}").body
-    tok2 = client.get_historical(f"/statements/{fu2}").body
+    fu1, fu2 = do_follow_up("a"), do_follow_up("b")
+    tok1 = anon.get_historical(f"/statements/{fu1}").body
+    tok2 = anon.get_historical(f"/statements/{fu2}").body
 
     # At rest: every redacted claim is independently salted, so the two
     # siblings share no redacted hash — the shared parent is not correlatable.
@@ -556,12 +366,8 @@ def test_follow_up_parent_link_is_salted(network):
 
     # On disclosure: both reveal the SAME parent identity (deterministic value).
     def disclosed_parent(fu_txid):
-        body = op.post_historical(
-            f"/operator/statements/{fu_txid}/disclosure",
-            cbor2.dumps({"fields": ["parent"]}),
-            "application/cbor",
-        ).body
-        return st.validate_statement(body, key).disclosed[st.PARENT]
+        body = disclose(operator, fu_txid, ["parent"]).body
+        return st.validate_statement(body, issuer_key).disclosed[st.PARENT]
 
     assert disclosed_parent(fu1) == disclosed_parent(fu2)
 
@@ -591,18 +397,12 @@ def _wait_in_stream(op, txid, timeout_s=10):
     return False
 
 
-def test_operator_gets_unredacted_statement(network):
+def test_operator_gets_unredacted_statement(
+    anon, operator, issuer_key, service_cert_pem
+):
     """GET /operator/statements/{txid} returns the fully-unredacted statement:
     EVERY submitted field type round-trips back in the clear (strings, a byte
     string, an int, an array), and the CCF receipt still verifies."""
-    client = network.client()
-    op = network.client(user="user0")
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
-
     report = {
         "title": "heap overflow",
         "body": "full body text",
@@ -613,12 +413,12 @@ def test_operator_gets_unredacted_statement(network):
         "patch": "fixed in 1.2.3",
         "patch_date": 1700100000,  # int
     }
-    txid = client.post("/reports", cbor2.dumps(report), "application/cbor").tx_id
+    txid = submit_report(anon, report)
 
-    resp = op.get_historical(f"/operator/statements/{txid}")
+    resp = operator.get_historical(f"/operator/statements/{txid}")
     assert resp.status == 200, resp.body
     assert "application/cose" in resp.content_type
-    out = st.validate_statement(resp.body, key)
+    out = st.validate_statement(resp.body, issuer_key)
 
     # Every submitted field comes back in the clear, with its exact value/type.
     assert out.disclosed[st.TITLE] == "heap overflow"
@@ -630,53 +430,46 @@ def test_operator_gets_unredacted_statement(network):
     assert out.disclosed[st.PATCH] == "fixed in 1.2.3"
     assert out.disclosed[st.PATCH_DATE] == 1700100000
 
-    assert RECEIPTS_LABEL in _uhdr(resp.body)
-    _verify_receipt(resp.body, service_cert)
+    assert RECEIPTS_LABEL in uhdr(resp.body)
+    verify_receipt(resp.body, service_cert_pem)
 
 
-def test_operator_statement_requires_operator(network):
+def test_operator_statement_requires_operator(anon):
     """The unredacted single-statement endpoint is Operator-gated."""
-    client = network.client()
-    txid = client.post(
-        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
-    ).tx_id
-    anon = client.get_historical(f"/operator/statements/{txid}")
-    assert anon.status in (401, 403), anon.body
+    txid = submit_report(anon, {"title": "x"})
+    denied = anon.get_historical(f"/operator/statements/{txid}")
+    assert denied.status in (401, 403), denied.body
 
 
-def test_operator_stream_lists_in_seqno_order(network):
+def test_operator_stream_lists_in_seqno_order(anon, operator):
     """The Operator stream lists statement txids in seqno order; each txid
     resolves via the single-statement endpoint."""
-    client = network.client()
-    op = network.client(user="user0")
-    a = client.post("/reports", cbor2.dumps({"title": "A"}), "application/cbor").tx_id
-    b = client.post("/reports", cbor2.dumps({"title": "B"}), "application/cbor").tx_id
-    c = client.post("/reports", cbor2.dumps({"title": "C"}), "application/cbor").tx_id
+    a = submit_report(anon, {"title": "A"})
+    b = submit_report(anon, {"title": "B"})
+    c = submit_report(anon, {"title": "C"})
 
-    assert _wait_in_stream(op, c)  # wait for the async index to catch up
-    ids = _operator_stream_ids(op)
+    assert _wait_in_stream(operator, c)  # wait for the async index to catch up
+    ids = _operator_stream_ids(operator)
     assert ids.index(a) < ids.index(b) < ids.index(c)
 
     # A listed txid resolves to a real unredacted statement.
-    r = op.get_historical(f"/operator/statements/{a}")
+    r = operator.get_historical(f"/operator/statements/{a}")
     assert r.status == 200, r.body
 
 
-def test_operator_stream_advances_by_seqno_range(network):
-    """The stream is a seqno-range window: each page
-    reports the range it covers (`from`..`to`) and the ledger `watermark`, and
-    the Operator drains it by polling `from = to + 1`. Re-polling is
-    replay-idempotent and never repeats an already-consumed statement."""
-    client = network.client()
-    op = network.client(user="user0")
-    a = client.post("/reports", cbor2.dumps({"title": "a1"}), "application/cbor").tx_id
-    b = client.post("/reports", cbor2.dumps({"title": "a2"}), "application/cbor").tx_id
-    assert _wait_in_stream(op, b)
+def test_operator_stream_advances_by_seqno_range(anon, operator):
+    """The stream is a seqno-range window: each page reports the range it covers
+    (`from`..`to`) and the ledger `watermark`, and the Operator drains it by
+    polling `from = to + 1`. Re-polling is replay-idempotent and never repeats an
+    already-consumed statement."""
+    a = submit_report(anon, {"title": "a1"})
+    b = submit_report(anon, {"title": "a2"})
+    assert _wait_in_stream(operator, b)
 
     # First drain from the start: covers up to the current watermark, and since
     # the whole ledger fits one page (span >> a sandbox ledger) there is no
     # `next` cursor and `to == watermark` (the "caught up" signal).
-    page1 = cbor2.loads(op.get("/operator/statements?from=1").body)
+    page1 = cbor2.loads(operator.get("/operator/statements?from=1").body)
     assert a in page1["statements"] and b in page1["statements"]
     assert page1["to"] == page1["watermark"]
     assert "next" not in page1
@@ -684,112 +477,87 @@ def test_operator_stream_advances_by_seqno_range(network):
 
     # Polling again from just past the consumed range yields nothing new until
     # more is submitted (no repeats).
-    empty = cbor2.loads(op.get(f"/operator/statements?from={caught_up + 1}").body)
+    empty = cbor2.loads(operator.get(f"/operator/statements?from={caught_up + 1}").body)
     assert empty["statements"] == []
     assert empty["watermark"] == caught_up
 
     # A new submission shows up on the next incremental poll, and only it.
-    c = client.post("/reports", cbor2.dumps({"title": "a3"}), "application/cbor").tx_id
-    assert _wait_in_stream(op, c)
-    page2 = cbor2.loads(op.get(f"/operator/statements?from={caught_up + 1}").body)
+    c = submit_report(anon, {"title": "a3"})
+    assert _wait_in_stream(operator, c)
+    page2 = cbor2.loads(operator.get(f"/operator/statements?from={caught_up + 1}").body)
     assert page2["statements"] == [c]
     assert page2["watermark"] > caught_up
 
 
-def test_operator_stream_reports_watermark_block_count(network):
+def test_operator_stream_reports_watermark_block_count(anon, operator):
     """`watermark` is the ledger tip (the Operator's block count): it is
     monotonic and advances as statements are committed."""
-    client = network.client()
-    op = network.client(user="user0")
-    first = client.post(
-        "/reports", cbor2.dumps({"title": "w1"}), "application/cbor"
-    ).tx_id
-    assert _wait_in_stream(op, first)
-    wm1 = cbor2.loads(op.get("/operator/statements?from=1").body)["watermark"]
+    first = submit_report(anon, {"title": "w1"})
+    assert _wait_in_stream(operator, first)
+    wm1 = cbor2.loads(operator.get("/operator/statements?from=1").body)["watermark"]
     assert wm1 > 0
 
-    second = client.post(
-        "/reports", cbor2.dumps({"title": "w2"}), "application/cbor"
-    ).tx_id
-    assert _wait_in_stream(op, second)
-    wm2 = cbor2.loads(op.get("/operator/statements?from=1").body)["watermark"]
+    second = submit_report(anon, {"title": "w2"})
+    assert _wait_in_stream(operator, second)
+    wm2 = cbor2.loads(operator.get("/operator/statements?from=1").body)["watermark"]
     assert wm2 > wm1
 
 
-def test_operator_stream_requires_operator(network):
+def test_operator_stream_requires_operator(anon):
     """The Operator stream is Operator-gated."""
-    anon = network.client().get("/operator/statements?from=1")
-    assert anon.status in (401, 403), anon.body
+    denied = anon.get("/operator/statements?from=1")
+    assert denied.status in (401, 403), denied.body
 
 
-def test_confidential_egress_is_not_cacheable(network):
+def test_confidential_egress_is_not_cacheable(anon, operator):
     """Confidential-egress responses (unredacted statement, selective disclosure,
     the Operator-only enumeration) carry `Cache-Control: no-store` so no client,
     proxy, or diagnostic cache retains sensitive plaintext. Public transparency
     responses are deliberately NOT forced no-store (caching them is fine)."""
-    client = network.client()
-    op = network.client(user="user0")
-    txid = client.post(
-        "/reports", cbor2.dumps({"title": "cacheable?"}), "application/cbor"
-    ).tx_id
+    txid = submit_report(anon, {"title": "cacheable?"})
 
     # Confidential egress: unredacted read, disclosure, and the stream.
-    unred = op.get_historical(f"/operator/statements/{txid}")
+    unred = operator.get_historical(f"/operator/statements/{txid}")
     assert unred.status == 200, unred.body
     assert "no-store" in unred.headers.get("cache-control", "")
 
-    disc = op.post_historical(
-        f"/operator/statements/{txid}/disclosure",
-        cbor2.dumps({"fields": ["title"]}),
-        "application/cbor",
-    )
+    disc = disclose(operator, txid, ["title"])
     assert disc.status == 200, disc.body
     assert "no-store" in disc.headers.get("cache-control", "")
 
-    stream = op.get("/operator/statements?from=1")
+    stream = operator.get("/operator/statements?from=1")
     assert "no-store" in stream.headers.get("cache-control", "")
 
     # Public (redacted, non-confidential) reads are not forced no-store.
-    pub = client.get_historical(f"/statements/{txid}")
+    pub = anon.get_historical(f"/statements/{txid}")
     assert pub.status == 200
     assert "no-store" not in pub.headers.get("cache-control", "")
 
 
-def test_read_endpoints_reject_non_statement_txid(network):
+def test_read_endpoints_reject_non_statement_txid(anon, operator):
     """A committed-but-non-statement txid (genesis) is rejected with 404 by the
     read endpoints — they verify the tx's claims digest equals hash(the token
     read), so a stale per-tx Value read can't masquerade as a statement."""
-    client = network.client()
-    op = network.client(user="user0")
-    parent_txid = client.post(
-        "/reports", cbor2.dumps({"title": "x"}), "application/cbor"
-    ).tx_id
+    parent_txid = submit_report(anon, {"title": "x"})
     view = parent_txid.split(".")[0]
     genesis = f"{view}.1"  # committed, but not a statement
 
-    assert client.get_historical(f"/statements/{genesis}").status == 404
-    assert op.get_historical(f"/operator/statements/{genesis}").status == 404
-    assert (
-        op.post_historical(
-            f"/operator/statements/{genesis}/disclosure",
-            cbor2.dumps({"fields": ["title"]}),
-            "application/cbor",
-        ).status
-        == 404
-    )
+    assert anon.get_historical(f"/statements/{genesis}").status == 404
+    assert operator.get_historical(f"/operator/statements/{genesis}").status == 404
+    assert disclose(operator, genesis, ["title"]).status == 404
 
 
-def test_signing_key_registration_is_member_gated(network):
+def test_signing_key_registration_is_member_gated(anon, operator):
     """Key registration is control-plane: an anonymous caller and a plain user
     (non-member) are both rejected. (The key is already initialised by the
     member fixture, so this only checks the auth gate, not a re-init.)"""
-    anon = network.client().post("/signing-key", b"", "application/cbor")
-    assert anon.status in (401, 403), anon.body
-    user = network.client(user="user0").post("/signing-key", b"", "application/cbor")
-    assert user.status in (401, 403), user.body
+    denied_anon = anon.post("/signing-key", b"", "application/cbor")
+    assert denied_anon.status in (401, 403), denied_anon.body
+    denied_user = operator.post("/signing-key", b"", "application/cbor")
+    assert denied_user.status in (401, 403), denied_user.body
 
 
-def test_signing_key_rotation(network):
+def test_signing_key_rotation(network, anon, service_cert_pem):
     """Rotate the issuer key and prove the endorsement chain holds across it:
     - GET /signing-key returns the NEW key after ?rotate=true (endorsed).
     - a statement signed BEFORE the rotation still verifies, under the key
@@ -797,19 +565,14 @@ def test_signing_key_rotation(network):
     - a statement signed AFTER verifies under the new key.
     """
     member = network.client(user="member0")
-    client = network.client()
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
 
     # key1 is already initialised by the fixture.
-    key1_pem = _verify_endorsed_key(
-        client.get_historical("/signing-key").body, service_cert
+    key1_pem = verify_endorsed_key(
+        anon.get_historical("/signing-key").body, service_cert_pem
     )
 
     # A statement signed under key1.
-    a_txid = client.post(
-        "/reports", cbor2.dumps({"title": "A"}), "application/cbor"
-    ).tx_id
+    a_txid = submit_report(anon, {"title": "A"})
     a_seqno = int(a_txid.split(".")[1])
 
     # Rotate -> key2 (member-gated, explicit).
@@ -817,62 +580,54 @@ def test_signing_key_rotation(network):
     assert rot.status == 204, rot.body
 
     # GET /signing-key now returns the new, endorsed key.
-    key2_pem = _verify_endorsed_key(
-        client.get_historical("/signing-key").body, service_cert
+    key2_pem = verify_endorsed_key(
+        anon.get_historical("/signing-key").body, service_cert_pem
     )
     assert key2_pem != key1_pem
 
     # A statement signed under key2.
-    b_txid = client.post(
-        "/reports", cbor2.dumps({"title": "B"}), "application/cbor"
-    ).tx_id
-    b_tok = client.get_historical(f"/statements/{b_txid}").body
-    st.validate_statement(b_tok, _ec2_key_from_pem(key2_pem))  # verifies under key2
+    b_txid = submit_report(anon, {"title": "B"})
+    b_tok = anon.get_historical(f"/statements/{b_txid}").body
+    st.validate_statement(b_tok, ec2_key_from_pem(key2_pem))  # verifies under key2
 
     # The pre-rotation statement resolves the key active at its seqno = key1,
     # and still verifies under it — but NOT under the new key.
-    key_at_a = _verify_endorsed_key(
-        client.get_historical(f"/signing-key?at={a_seqno}").body, service_cert
+    key_at_a = verify_endorsed_key(
+        anon.get_historical(f"/signing-key?at={a_seqno}").body, service_cert_pem
     )
     assert key_at_a == key1_pem
-    a_tok = client.get_historical(f"/statements/{a_txid}").body
-    st.validate_statement(a_tok, _ec2_key_from_pem(key1_pem))
+    a_tok = anon.get_historical(f"/statements/{a_txid}").body
+    st.validate_statement(a_tok, ec2_key_from_pem(key1_pem))
     with pytest.raises(Exception):
-        st.validate_statement(a_tok, _ec2_key_from_pem(key2_pem))
+        st.validate_statement(a_tok, ec2_key_from_pem(key2_pem))
 
 
-def test_receipt_only_endpoint(network):
+def test_receipt_only_endpoint(anon, service_cert_pem):
     """GET /statements/{txid}/receipt returns just the COSE receipt (no token),
     and it cryptographically verifies against the service identity for the
     statement's claim digest. A wrong digest is rejected; a non-statement txid
     is 404."""
     import ccf.cose
-    from cryptography.x509 import load_pem_x509_certificate
 
-    client = network.client()
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    service_key = load_pem_x509_certificate(service_cert).public_key()
+    svc_key = service_key(service_cert_pem)
 
-    txid = client.post(
-        "/reports", cbor2.dumps({"title": "r"}), "application/cbor"
-    ).tx_id
+    txid = submit_report(anon, {"title": "r"})
 
-    resp = client.get_historical(f"/statements/{txid}/receipt")
+    resp = anon.get_historical(f"/statements/{txid}/receipt")
     assert resp.status == 200, resp.body
     assert "application/cose" in resp.content_type
     receipt = resp.body
 
     # The receipt attests the statement's claim digest = SHA-256(bare token).
-    transparent = client.get_historical(f"/statements/{txid}").body
-    claim_digest = sha256(_bare_statement(transparent)).digest()
-    ccf.cose.verify_receipt(receipt, service_key, claim_digest)  # raises on fail
+    transparent = anon.get_historical(f"/statements/{txid}").body
+    claim_digest = sha256(bare_statement(transparent)).digest()
+    ccf.cose.verify_receipt(receipt, svc_key, claim_digest)  # raises on fail
 
     with pytest.raises(Exception):
-        ccf.cose.verify_receipt(receipt, service_key, b"\x00" * 32)
+        ccf.cose.verify_receipt(receipt, svc_key, b"\x00" * 32)
 
     view = txid.split(".")[0]
-    assert client.get_historical(f"/statements/{view}.1/receipt").status == 404
+    assert anon.get_historical(f"/statements/{view}.1/receipt").status == 404
 
 
 def test_async_submission(network):
@@ -901,51 +656,33 @@ def test_async_submission(network):
     assert d.tx_id
 
 
-def test_async_follow_up(network):
+def test_async_follow_up(anon, operator):
     """Follow-ups honour ?wait=false too."""
-    client = network.client()
-    op = network.client(user="user0")
-    parent = client.post(
-        "/reports", cbor2.dumps({"title": "p"}), "application/cbor"
-    ).tx_id
-    fu = op.post_historical(
-        f"/reports/{parent}/follow-ups?wait=false",
-        cbor2.dumps({"body": "note"}),
-        "application/cbor",
-    )
+    parent = submit_report(anon, {"title": "p"})
+    fu = follow_up(operator, parent, {"body": "note"}, wait=False)
     assert fu.status == 202, fu.body
     assert fu.tx_id
-    assert client.get_historical(f"/statements/{fu.tx_id}/receipt").status == 200
+    assert anon.get_historical(f"/statements/{fu.tx_id}/receipt").status == 200
 
 
-def test_operator_discloses_fingerprint_only(network):
+def test_operator_discloses_fingerprint_only(
+    anon, operator, issuer_key, service_cert_pem
+):
     """The canonical duplicate-proof: the Operator discloses ONLY the fingerprint
     (a byte string) of an earlier report, proving the duplicate, while every
     other field — including on the wire — stays hidden."""
-    client = network.client()
-    op = network.client(user="user0")
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
-
     fp = b"\x01\x02\x03\x04" * 8  # 32-byte fingerprint
     report = {"title": "secret bug title", "body": "secret", "fingerprint": fp}
-    txid = client.post("/reports", cbor2.dumps(report), "application/cbor").tx_id
+    txid = submit_report(anon, report)
 
-    disc = op.post_historical(
-        f"/operator/statements/{txid}/disclosure",
-        cbor2.dumps({"fields": ["fingerprint"]}),
-        "application/cbor",
-    )
+    disc = disclose(operator, txid, ["fingerprint"])
     assert disc.status == 200, disc.body
-    out = st.validate_statement(disc.body, key)
+    out = st.validate_statement(disc.body, issuer_key)
     assert out.disclosed[st.FINGERPRINT] == fp  # bstr round-trips
     assert st.TITLE not in out.disclosed
     assert st.BODY not in out.disclosed
     assert b"secret bug title" not in disc.body  # other fields hidden on the wire
-    _verify_receipt(disc.body, service_cert)
+    verify_receipt(disc.body, service_cert_pem)
 
 
 # --- Adversarial-input robustness -------------------------------------------
@@ -985,63 +722,52 @@ _MALFORMED = [
 ]
 
 
-def test_submit_rejects_malformed_payloads(network):
+def test_submit_rejects_malformed_payloads(anon):
     """Every clearly-invalid payload is a 400 client error — never a 5xx, never a
     dropped connection. The node stays alive and healthy throughout."""
-    client = network.client()
     for i, body in enumerate(_MALFORMED):
-        resp, err = _post_raw(client, body)
+        resp, err = _post_raw(anon, body)
         assert err is None, f"payload #{i} dropped the connection: {err!r}"
         assert resp.status == 400, f"payload #{i} => {resp.status} (want 400): {body!r}"
     # The node is unharmed: a well-formed submission still commits.
-    ok = client.post("/reports", cbor2.dumps({"title": "alive"}), "application/cbor")
-    assert ok.status == 204, ok.body
+    submit_report(anon, {"title": "alive"})
 
 
-def test_submit_fuzz_random_payloads_never_500(network):
+def test_submit_fuzz_random_payloads_never_500(anon):
     """A seeded battery of random byte blobs never yields a 5xx or a node crash.
     A blob may occasionally decode to a valid submission (2xx) or be rejected
     (4xx) — both are fine; the contract is only 'no server error, no crash'."""
     import random
 
-    client = network.client()
     rng = random.Random(0x5D_C_7)  # seeded => reproducible
     for i in range(96):
         n = rng.randint(0, 256)
         body = bytes(rng.getrandbits(8) for _ in range(n))
-        resp, err = _post_raw(client, body)
+        resp, err = _post_raw(anon, body)
         assert err is None, f"fuzz #{i} (len {n}) dropped the connection: {err!r}"
         assert resp.status < 500, f"fuzz #{i} => {resp.status} (5xx): {body!r}"
     # Still healthy after the whole battery.
-    ok = client.post("/reports", cbor2.dumps({"title": "alive"}), "application/cbor")
-    assert ok.status == 204, ok.body
+    submit_report(anon, {"title": "alive"})
 
 
-def test_concurrent_submissions_all_commit_and_verify(network):
+def test_concurrent_submissions_all_commit_and_verify(
+    anon, operator, issuer_key, service_cert_pem
+):
     """Concurrency-correctness smoke test: many submissions in flight at once
-    must each commit, retrieve
-    their OWN content, and verify. This exercises races that single-threaded
-    tests can't — concurrent writes to the single-Value StatementTable + the
-    claims-digest staleness guard, the confidential DisclosureTable, and the
-    seqno index. It is NOT a benchmark (no timing asserted); the contract is
-    correctness under concurrency."""
+    must each commit, retrieve their OWN content, and verify. This exercises
+    races that single-threaded tests can't — concurrent writes to the
+    single-Value StatementTable + the claims-digest staleness guard, the
+    confidential DisclosureTable, and the seqno index. It is NOT a benchmark (no
+    timing asserted); the contract is correctness under concurrency."""
     import concurrent.futures
     import time
-
-    client = network.client()
-    op = network.client(user="user0")
-    with open(network.service_cert, "rb") as f:
-        service_cert = f.read()
-    key = _ec2_key_from_pem(
-        _verify_endorsed_key(client.get_historical("/signing-key").body, service_cert)
-    )
 
     n = 48
 
     def submit(i: int) -> tuple[int, str]:
         # A unique int field (patch_date=i) lets us later prove each txid
         # retrieves ITS OWN statement, not a concurrent neighbour's.
-        r = client.post(
+        r = anon.post(
             "/reports",
             cbor2.dumps({"title": f"concurrent-{i}", "patch_date": i}),
             "application/cbor",
@@ -1061,11 +787,11 @@ def test_concurrent_submissions_all_commit_and_verify(network):
     # Each txid resolves to ITS OWN content (the claims-digest guard must not let
     # a neighbour's token masquerade under load) and its receipt verifies.
     for i, txid in txids.items():
-        resp = op.get_historical(f"/operator/statements/{txid}")
+        resp = operator.get_historical(f"/operator/statements/{txid}")
         assert resp.status == 200, resp.body
-        out = st.validate_statement(resp.body, key)
+        out = st.validate_statement(resp.body, issuer_key)
         assert out.disclosed[st.PATCH_DATE] == i, f"{txid} returned the wrong statement"
-        _verify_receipt(resp.body, service_cert)
+        verify_receipt(resp.body, service_cert_pem)
 
     # The seqno index stays consistent under concurrent writes: every txid shows
     # up in the Operator stream (waiting for the async index to catch up).
@@ -1073,7 +799,7 @@ def test_concurrent_submissions_all_commit_and_verify(network):
     deadline = time.time() + 20
     seen: set = set()
     while time.time() < deadline:
-        seen = set(_operator_stream_ids(op))
+        seen = set(_operator_stream_ids(operator))
         if want <= seen:
             break
         time.sleep(0.3)
@@ -1082,13 +808,13 @@ def test_concurrent_submissions_all_commit_and_verify(network):
     ), f"index missing {len(want - seen)} of {n} concurrent submissions"
 
 
-def test_version_endpoint(network):
+def test_version_endpoint(anon):
     """GET /version is public service-discovery metadata: this app's semantic
     version, the compile-time statement SCHEMA version (so a client knows which
     schema the live service speaks, DESIGN §12.1), and the CCF platform version."""
     import re
 
-    resp = network.client().get("/version")
+    resp = anon.get("/version")
     assert resp.status == 200, resp.body
     assert "application/cbor" in resp.content_type
     v = cbor2.loads(resp.body)
