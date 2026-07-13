@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #include "disclosure_store.h"
 
-#include "token/cbor.h"
+#include "cbor.h"
 
 #include <algorithm>
 #include <qcbor/qcbor_decode.h>

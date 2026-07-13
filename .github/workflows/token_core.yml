@@ -1,7 +1,7 @@
 name: token-core
 
 # CI for the C++ token core (app/src/token) and its cross-language conformance
-# tests. Mirrors the SCITT CCF-app CI: the build runs inside CCF's Azure Linux
+# tests. The build runs inside CCF's Azure Linux
 # base image and installs the official CCF development RPM (no CCF source build).
 # The GitHub-hosted runner is only the host that launches the container; the
 # build/test steps all execute inside mcr.microsoft.com/azurelinux/base/core:3.0.
@@ -37,7 +37,7 @@ jobs:
     steps:
       # The base image ships Microsoft's RPM signing key but does not import it
       # into the gpg keyring, so tdnf's repo metadata check fails with
-      # "No public key". Import it first (as CCF and SCITT CI do).
+      # "No public key". Import it first.
       - name: Set up environment (GPG key, base tools, CCF RPM)
         run: |
           set -ex

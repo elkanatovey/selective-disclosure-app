@@ -2,6 +2,11 @@
 // Licensed under the MIT License.
 #pragma once
 
+// Small convenience wrappers over the QCBOR library used app-wide to encode
+// CBOR (the token core, the confidential store, and the endpoint responses).
+// These do not implement CBOR — they just remove QCBOR boilerplate: a two-pass
+// encode that sizes its own buffer, and a span → UsefulBufC adapter.
+
 #include <cstdint>
 #include <functional>
 #include <qcbor/qcbor_encode.h>

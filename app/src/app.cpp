@@ -17,7 +17,7 @@
 #include "paging.h"
 #include "report_parse.h"
 #include "reports.h"
-#include "token/cbor.h"
+#include "cbor.h"
 
 #include <ctime>
 #include <fmt/format.h>

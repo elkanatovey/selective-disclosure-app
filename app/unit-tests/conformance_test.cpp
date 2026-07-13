@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#include "token/cbor.h"
+#include "cbor.h"
 #include "token/statement.h"
 #include "token/statement_internal.h"
 

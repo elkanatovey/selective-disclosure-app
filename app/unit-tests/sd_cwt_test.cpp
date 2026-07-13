@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #include "token/sd_cwt.h"
 
-#include "token/cbor.h"
+#include "cbor.h"
 #include "token/cose.h"
 
 #include <algorithm>

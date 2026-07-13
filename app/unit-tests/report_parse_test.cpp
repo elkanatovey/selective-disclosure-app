@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #include "report_parse.h"
 
-#include "token/cbor.h"
+#include "cbor.h"
 
 #include <functional>
 #include <gtest/gtest.h>

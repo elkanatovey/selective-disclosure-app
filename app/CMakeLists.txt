@@ -12,7 +12,9 @@ if(NOT TARGET "ccf")
 endif()
 
 # --- Vendored dependencies -------------------------------------------------
-# QCBOR is vendored (as SCITT does) for CBOR encode/decode in the token core.
+# QCBOR is vendored for CBOR encode/decode in the token core: CCF's own
+# CBOR/COSE is internal (Rust) and exposes no general-purpose CBOR encoder to
+# app code, so we bring our own to construct the SD-CWT/COSE token bytes.
 # Declared before add_ccf_app so the app can link + include it.
 include(FetchContent)
 
