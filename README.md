@@ -132,7 +132,8 @@ disc = requests.post(
 # 4) A researcher verifies the disclosed statement OFFLINE against the issuer key.
 #    The issuer key is published and endorsed by the service identity via the
 #    receipt in GET /signing-key (verify that endorsement to trust the key; see
-#    test/e2e/test_reports.py::_verify_endorsed_key).
+#    test/e2e/helpers.py::verify_endorsed_key, exercised by
+#    test_signing_key_is_endorsed in test/e2e/test_reports.py).
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from pycose.keys import EC2Key
 from pycose.keys.curves import P256
@@ -149,7 +150,8 @@ print("disclosed:", out.disclosed)          # {1005: b'\xde\xad\xbe\xef'} (finge
 assert out.disclosed[st.FINGERPRINT] == b"\xde\xad\xbe\xef"
 ```
 (For end-to-end examples incl. cryptographic verification with the `sd_cwt`
-reference verifier, see `test/e2e/test_reports.py`.)
+reference verifier, see `test/e2e/test_reports.py` — the reusable verify/submit
+helpers it builds on live in `test/e2e/helpers.py`.)
 
 ## Testing
 ```bash
