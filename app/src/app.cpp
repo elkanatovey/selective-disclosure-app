@@ -267,10 +267,15 @@ namespace selectivedisclosure
         -> std::optional<ccf::TxID> {
         const auto pq =
           ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
-        std::string err;
-        const ccf::SeqNo at =
-          ccf::http::get_query_value_opt<uint64_t>(pq, "at", err).value_or(0);
-        const auto reg = paging::latest_write(*signing_key_index, at);
+        // A malformed ?at= must be a 400, not silently treated as 0 (=latest):
+        // returning the current key for a historical query would defeat
+        // rotation-safety. Absent ?at= still defaults to 0 (=latest).
+        const auto at = parse_uint_query_param(pq, *ctx.rpc_ctx, "at", 0);
+        if (!at.has_value())
+        {
+          return std::nullopt; // malformed ?at= -- 400 already set
+        }
+        const auto reg = paging::latest_write(*signing_key_index, at.value());
         if (!reg.has_value())
         {
           return std::nullopt; // not indexed yet / no registration
@@ -283,12 +288,25 @@ namespace selectivedisclosure
         return ccf::TxID{view, *reg};
       };
 
+      // Reject a present-but-malformed ?at= with a 400 *before* the historical
+      // adapter runs: the adapter's txid extractor can only signal failure by
+      // returning nullopt, which it renders as a generic 404 -- so pre-validate
+      // here to give the same 400 the Operator-stream cursors do.
+      auto signing_key_handler = ccf::historical::read_only_adapter_v4(
+        get_signing_key, context, key_is_committed, key_txid);
+      auto signing_key_guarded =
+        [signing_key_handler](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+          const auto pq =
+            ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
+          if (!parse_uint_query_param(pq, *ctx.rpc_ctx, "at", 0).has_value())
+          {
+            return; // malformed ?at= -- 400 already set
+          }
+          signing_key_handler(ctx);
+        };
+
       make_read_only_endpoint(
-        "/signing-key",
-        HTTP_GET,
-        ccf::historical::read_only_adapter_v4(
-          get_signing_key, context, key_is_committed, key_txid),
-        {ccf::empty_auth_policy})
+        "/signing-key", HTTP_GET, signing_key_guarded, {ccf::empty_auth_policy})
         .install();
 
       // --- get_statement: retrieve a registered statement + its receipt by
@@ -620,8 +638,12 @@ namespace selectivedisclosure
           const ccf::SeqNo max_span = statement_index->max_requestable_range();
           const ccf::SeqNo span = std::min<ccf::SeqNo>(
             kMaxSeqnoPerPage, max_span > 1 ? max_span - 1 : kMaxSeqnoPerPage);
-          const ccf::SeqNo page_end =
-            (to >= from) ? std::min<ccf::SeqNo>(to, from + span) : (from - 1);
+          // An empty range (from > to) reports `to = to` (the clamped
+          // watermark), never `from - 1`, so a client that polled past the tip
+          // still sees `to <= watermark` (and `to == watermark` once drained).
+          const ccf::SeqNo page_end = (to >= from) ?
+            std::min<ccf::SeqNo>(to, from + span) :
+            std::min<ccf::SeqNo>(from - 1, to);
 
           std::vector<std::string> txids;
           if (to >= from)

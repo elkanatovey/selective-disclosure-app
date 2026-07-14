@@ -102,6 +102,14 @@ def test_signing_key_is_endorsed(anon, service_cert_pem):
         )
 
 
+def test_signing_key_rejects_malformed_at(anon):
+    """A present-but-malformed ?at= is a 400, not silently treated as 0 (=latest):
+    returning the current key for a historical query would defeat rotation-safety.
+    An absent ?at= still defaults to the latest key."""
+    assert anon.get("/signing-key?at=notanumber").status == 400
+    assert anon.get("/signing-key").status == 200  # absent => latest, still valid
+
+
 def test_operator_discloses_subset(anon, operator, issuer_key, service_cert_pem):
     """The Operator reveals a chosen subset of a statement's fields. The result
     is a presented + transparent statement: it verifies under the endorsed key,
@@ -519,6 +527,23 @@ def test_operator_stream_rejects_malformed_cursor(operator):
     assert operator.get("/operator/statements?to=xyz").status == 400
     # Absent params remain valid (defaulted), so the baseline call still works.
     assert operator.get("/operator/statements?from=1").status == 200
+
+
+def test_operator_stream_past_tip_reports_watermark(anon, operator):
+    """Polling past the ledger tip yields an empty page whose `to` never exceeds
+    `watermark` (the drained invariant): a client that jumped ahead of the tip
+    must not see `to > watermark`."""
+    first = submit_report(anon, {"title": "tip"})
+    assert _wait_in_stream(operator, first)
+    watermark = cbor2.loads(operator.get("/operator/statements?from=1").body)[
+        "watermark"
+    ]
+
+    page = cbor2.loads(operator.get(f"/operator/statements?from={watermark + 5}").body)
+    assert page["statements"] == []
+    assert page["watermark"] == watermark
+    assert page["to"] <= watermark
+    assert "next" not in page  # an empty range has nothing more to page
 
 
 def test_confidential_egress_is_not_cacheable(anon, operator):
