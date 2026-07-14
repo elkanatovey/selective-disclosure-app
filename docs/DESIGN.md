@@ -604,8 +604,9 @@ The egress gate (§4/§9) is the one authorization we must pin. Two options:
 
 **Patterns we reimplemented as original MIT code** (studied for approach, not
 copied — the `app/` sources are our own, MIT):
-- QCBOR helpers (`cbor.h`) and COSE_Sign1 decode / header + COSE_Key parse
-  (`cose.h`), with the TSS/DID bits omitted
+- QCBOR helpers (`app/src/cbor.h`, an app-wide shared util) and COSE_Sign1
+  decode / header + COSE_Key parse (`app/src/token/cose.h`), with the TSS/DID
+  bits omitted
 - CCF-receipt → COSE-receipt conversion (`make_cose_receipt`)
 - the register / local-commit flow → template for `submit_report`
 - `historical_queries_adapter.h` + CCF `SeqnosForValue` indexing → seqno lookup

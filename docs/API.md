@@ -112,7 +112,10 @@ statements signed by this key without each statement's own receipt. No auth.
   - `receipt` (bstr) — the COSE receipt of the key's registration transaction,
     whose claims digest is `SHA-256(key)`; verify it against the service identity
     to trust the key.
-- **404** `ResourceNotFound` — no issuer key registered at//before the seqno.
+- **400** `InvalidQueryParameterValue` — `at` was present but not a valid
+  unsigned integer (a malformed `at` is rejected rather than silently treated as
+  "latest", which would defeat rotation-safety).
+- **404** `ResourceNotFound` — no issuer key registered at/before the seqno.
 
 ---
 
@@ -146,9 +149,10 @@ The **fully unredacted** transparent statement — the redacted token with **all
 retained disclosures presented + the receipt embedded. (Historical read — see
 retry note.)
 
-- **200** — `application/cose` (unredacted transparent statement). If no
-  disclosures were retained, all fields simply stay redacted (still `200`).
-- **404** `ResourceNotFound` — `{txid}` is not a statement submission.
+- **200** — `application/cose` (unredacted transparent statement).
+- **404** `ResourceNotFound` — `{txid}` is not a statement submission, or no
+  confidential disclosures were retained for it (consistent with
+  `POST …/disclosure`).
 - **500** `InternalError` — failed to build the unredacted statement.
 
 ### `GET /operator/statements`
@@ -165,6 +169,9 @@ seqno range, in seqno order.
     signal: once `to == watermark`, the stream is drained).
   - `next` (int, **optional**) — present only when the requested range spans more
     than one page; the `from` to use for the next page.
+- **400** `InvalidQueryParameterValue` — `from` or `to` was present but not a
+  valid unsigned integer (a malformed cursor is rejected rather than silently
+  defaulted, which could make an Operator believe the stream was drained).
 - **503** — the statement index is not ready for the requested range; retry.
 - **500** `InternalError` — failed to resolve a committed seqno to a txid.
 
