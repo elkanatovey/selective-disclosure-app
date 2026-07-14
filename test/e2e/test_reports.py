@@ -138,15 +138,41 @@ def test_operator_discloses_subset(anon, operator, issuer_key, service_cert_pem)
     verify_receipt(presented, service_cert_pem)
 
 
-def test_disclosure_requires_operator(anon):
-    """The disclosure endpoint is Operator-gated: an anonymous caller (no client
-    certificate) is rejected before any confidential state is touched."""
-    txid = submit_report(anon, {"title": "x"})
-    denied = anon.post(
+def _req_disclosure(client, txid):
+    return client.post(
         f"/operator/statements/{txid}/disclosure",
         cbor2.dumps({"fields": ["title"]}),
         "application/cbor",
     )
+
+
+def _req_follow_up(client, txid):
+    return client.post(
+        f"/reports/{txid}/follow-ups", cbor2.dumps({"body": "y"}), "application/cbor"
+    )
+
+
+def _req_operator_statement(client, txid):
+    return client.get_historical(f"/operator/statements/{txid}")
+
+
+def _req_operator_stream(client, txid):
+    return client.get("/operator/statements?from=1")
+
+
+@pytest.mark.parametrize(
+    "make_request",
+    [_req_disclosure, _req_follow_up, _req_operator_statement, _req_operator_stream],
+    ids=["disclosure", "follow_up", "operator_statement", "operator_stream"],
+)
+def test_operator_endpoints_require_operator(anon, make_request):
+    """Every Operator-gated endpoint (disclosure, follow-up, unredacted statement,
+    stream) rejects an anonymous caller (no client certificate) before any
+    confidential state is touched. The authenticated-non-Operator case is
+    deferred until a config-pinned Operator identity exists — today the app
+    accepts any CCF user via user_cert_auth."""
+    txid = submit_report(anon, {"title": "x"})
+    denied = make_request(anon, txid)
     assert denied.status in (401, 403), denied.body
 
 
@@ -311,17 +337,6 @@ def test_operator_appends_follow_up(anon, operator, issuer_key):
     assert out.disclosed[st.PARENT] == parent_link
 
 
-def test_follow_up_requires_operator(anon):
-    """The follow-up endpoint is Operator-gated: anonymous callers are rejected."""
-    parent_txid = submit_report(anon, {"title": "x"})
-    denied = anon.post(
-        f"/reports/{parent_txid}/follow-ups",
-        cbor2.dumps({"body": "y"}),
-        "application/cbor",
-    )
-    assert denied.status in (401, 403), denied.body
-
-
 def test_follow_up_rejects_non_statement_parent(anon, operator):
     """A follow-up whose {parent_txid} is committed but is NOT a statement (here
     genesis) is rejected — the claims-digest check guards against linking to a
@@ -434,13 +449,6 @@ def test_operator_gets_unredacted_statement(
     verify_receipt(resp.body, service_cert_pem)
 
 
-def test_operator_statement_requires_operator(anon):
-    """The unredacted single-statement endpoint is Operator-gated."""
-    txid = submit_report(anon, {"title": "x"})
-    denied = anon.get_historical(f"/operator/statements/{txid}")
-    assert denied.status in (401, 403), denied.body
-
-
 def test_operator_stream_lists_in_seqno_order(anon, operator):
     """The Operator stream lists statement txids in seqno order; each txid
     resolves via the single-statement endpoint."""
@@ -503,10 +511,14 @@ def test_operator_stream_reports_watermark_block_count(anon, operator):
     assert wm2 > wm1
 
 
-def test_operator_stream_requires_operator(anon):
-    """The Operator stream is Operator-gated."""
-    denied = anon.get("/operator/statements?from=1")
-    assert denied.status in (401, 403), denied.body
+def test_operator_stream_rejects_malformed_cursor(operator):
+    """A present-but-unparseable `from`/`to` cursor is a client error (400), not
+    silently defaulted — a bad cursor must never masquerade as 'caught up'. An
+    absent cursor still defaults (from=1 / to=watermark)."""
+    assert operator.get("/operator/statements?from=abc").status == 400
+    assert operator.get("/operator/statements?to=xyz").status == 400
+    # Absent params remain valid (defaulted), so the baseline call still works.
+    assert operator.get("/operator/statements?from=1").status == 200
 
 
 def test_confidential_egress_is_not_cacheable(anon, operator):

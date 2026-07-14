@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include "cbor.h"
 #include "ccf/app_interface.h"
 #include "ccf/claims_digest.h"
 #include "ccf/common_auth_policies.h"
@@ -17,7 +18,6 @@
 #include "paging.h"
 #include "report_parse.h"
 #include "reports.h"
-#include "cbor.h"
 
 #include <ctime>
 #include <fmt/format.h>
@@ -69,6 +69,33 @@ namespace selectivedisclosure
     const auto transparent =
       ccf::cose::edit::set_unprotected_header(token, receipts_desc);
     return sdcwt::present(transparent, selected);
+  }
+
+  // Parse an optional unsigned-integer query parameter. Absent => `dflt`.
+  // Present but malformed => sets a 400 on `rpc_ctx` and returns nullopt (the
+  // caller must then return). This distinguishes "absent" (use the default)
+  // from "present but unparseable" (a client error worth surfacing) --
+  // get_query_value_opt alone cannot, as it reports both as nullopt.
+  inline std::optional<uint64_t> parse_uint_query_param(
+    const ccf::http::ParsedQuery& pq,
+    ccf::RpcContext& rpc_ctx,
+    const std::string_view& key,
+    uint64_t dflt)
+  {
+    if (pq.find(key) == pq.end())
+    {
+      return dflt;
+    }
+    std::string err;
+    const auto value = ccf::http::get_query_value_opt<uint64_t>(pq, key, err);
+    if (!value.has_value())
+    {
+      rpc_ctx.set_error(
+        HTTP_STATUS_BAD_REQUEST,
+        ccf::errors::InvalidQueryParameterValue,
+        fmt::format("Invalid '{}' query parameter: {}", key, err));
+    }
+    return value;
   }
 
   class ReportLedgerHandlers : public ccf::UserEndpointRegistry
@@ -275,15 +302,11 @@ namespace selectivedisclosure
           return;
         }
 
-        const auto cose_receipt = make_cose_receipt(state->receipt);
-
-        // Embed the receipt into the statement's unprotected header (label
-        // 394 = array of receipts) to form a transparent statement.
-        const int64_t receipts_label = 394;
-        const ccf::cose::edit::desc::Value receipts_desc{
-          ccf::cose::edit::pos::InArray{}, receipts_label, cose_receipt};
+        // The bare redacted statement, made transparent: embed the receipt with
+        // no disclosures. present_transparent({}) yields exactly the redacted
+        // token + embedded receipt (an empty selection adds no sd_claims).
         const auto transparent =
-          ccf::cose::edit::set_unprotected_header(*entry, receipts_desc);
+          present_transparent(entry.value(), state->receipt, {});
 
         ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
         ctx.rpc_ctx->set_response_header(
@@ -497,18 +520,26 @@ namespace selectivedisclosure
           }
 
           std::vector<uint8_t> presented;
+          auto htx = state->store->create_read_only_tx();
+          const auto stored =
+            htx.template ro<DisclosureTable>(DISCLOSURE_TABLE)->get();
+          if (!stored.has_value())
+          {
+            // No retained confidential store => nothing to unredact. Match
+            // make_disclosure's 404 rather than returning an all-redacted 200,
+            // so both Operator endpoints report a missing store consistently.
+            ctx.rpc_ctx->set_error(
+              HTTP_STATUS_NOT_FOUND,
+              ccf::errors::ResourceNotFound,
+              "No confidential disclosures were retained for this statement.");
+            return;
+          }
           try
           {
             std::vector<std::vector<uint8_t>> all;
-            auto htx = state->store->create_read_only_tx();
-            const auto stored =
-              htx.template ro<DisclosureTable>(DISCLOSURE_TABLE)->get();
-            if (stored.has_value())
+            for (auto& d : decode_disclosure_store(stored.value()))
             {
-              for (auto& d : decode_disclosure_store(stored.value()))
-              {
-                all.push_back(std::move(d.encoded));
-              }
+              all.push_back(std::move(d.encoded));
             }
             presented = present_transparent(token.value(), state->receipt, all);
           }
@@ -553,93 +584,105 @@ namespace selectivedisclosure
       // /operator/statements/{txid} and follows `next` (or polls `from =
       // to + 1`) until it has caught up with `watermark`.
       // ------------
-      auto get_statements = [this](
-                              ccf::endpoints::ReadOnlyEndpointContext& ctx) {
-        mark_no_store(*ctx.rpc_ctx);
-        const auto pq =
-          ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
-        std::string err;
-        ccf::SeqNo from =
-          ccf::http::get_query_value_opt<uint64_t>(pq, "from", err).value_or(1);
-        from = std::max<ccf::SeqNo>(from, 1);
+      auto get_statements =
+        [this](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+          mark_no_store(*ctx.rpc_ctx);
+          const auto pq =
+            ccf::http::parse_query(ctx.rpc_ctx->get_request_query());
 
-        const ccf::SeqNo watermark =
-          statement_index->get_indexed_watermark().seqno;
-
-        // Clamp the (optional) upper bound to what the index can serve, so a
-        // page never asks for un-indexed seqnos.
-        ccf::SeqNo to = ccf::http::get_query_value_opt<uint64_t>(pq, "to", err)
-                          .value_or(watermark);
-        to = std::min<ccf::SeqNo>(to, watermark);
-
-        // A page covers at most `span` seqnos, kept strictly below the index's
-        // max_requestable_range so the single query below can never throw.
-        const ccf::SeqNo max_span = statement_index->max_requestable_range();
-        const ccf::SeqNo span = std::min<ccf::SeqNo>(
-          kMaxSeqnoPerPage, max_span > 1 ? max_span - 1 : kMaxSeqnoPerPage);
-        const ccf::SeqNo page_end =
-          (to >= from) ? std::min<ccf::SeqNo>(to, from + span) : (from - 1);
-
-        std::vector<std::string> txids;
-        if (to >= from)
-        {
-          const auto seqnos =
-            statement_index->get_write_txs_in_range(from, page_end);
-          if (!seqnos.has_value())
+          // A malformed cursor must fail loudly (400): silently defaulting a
+          // bad `from`/`to` to 1/watermark would mislead an Operator draining
+          // the stream into thinking it had caught up.
+          const auto from_opt =
+            parse_uint_query_param(pq, *ctx.rpc_ctx, "from", 1);
+          if (!from_opt.has_value())
           {
-            ctx.rpc_ctx->set_error(
-              HTTP_STATUS_SERVICE_UNAVAILABLE,
-              ccf::errors::InternalError,
-              "Statement index is not ready for the requested range; retry.");
             return;
           }
-          for (const auto s : *seqnos)
+          ccf::SeqNo from = std::max<ccf::SeqNo>(from_opt.value(), 1);
+
+          const ccf::SeqNo watermark =
+            statement_index->get_indexed_watermark().seqno;
+
+          // Clamp the (optional) upper bound to what the index can serve, so a
+          // page never asks for un-indexed seqnos.
+          const auto to_opt =
+            parse_uint_query_param(pq, *ctx.rpc_ctx, "to", watermark);
+          if (!to_opt.has_value())
           {
-            ccf::View view = 0;
-            if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
+            return;
+          }
+          ccf::SeqNo to = std::min<ccf::SeqNo>(to_opt.value(), watermark);
+
+          // A page covers at most `span` seqnos, kept strictly below the
+          // index's max_requestable_range so the single query below can never
+          // throw.
+          const ccf::SeqNo max_span = statement_index->max_requestable_range();
+          const ccf::SeqNo span = std::min<ccf::SeqNo>(
+            kMaxSeqnoPerPage, max_span > 1 ? max_span - 1 : kMaxSeqnoPerPage);
+          const ccf::SeqNo page_end =
+            (to >= from) ? std::min<ccf::SeqNo>(to, from + span) : (from - 1);
+
+          std::vector<std::string> txids;
+          if (to >= from)
+          {
+            const auto seqnos =
+              statement_index->get_write_txs_in_range(from, page_end);
+            if (!seqnos.has_value())
             {
               ctx.rpc_ctx->set_error(
-                HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                HTTP_STATUS_SERVICE_UNAVAILABLE,
                 ccf::errors::InternalError,
-                "Failed to resolve a committed seqno to a transaction id.");
+                "Statement index is not ready for the requested range; retry.");
               return;
             }
-            txids.push_back(ccf::TxID{view, s}.to_str());
+            for (const auto s : *seqnos)
+            {
+              ccf::View view = 0;
+              if (get_view_for_seqno_v1(s, view) != ccf::ApiResult::OK)
+              {
+                ctx.rpc_ctx->set_error(
+                  HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                  ccf::errors::InternalError,
+                  "Failed to resolve a committed seqno to a transaction id.");
+                return;
+              }
+              txids.push_back(ccf::TxID{view, s}.to_str());
+            }
           }
-        }
-        const bool more = page_end < to;
+          const bool more = page_end < to;
 
-        const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
-          QCBOREncode_OpenMap(&c);
-          QCBOREncode_OpenArrayInMapSZ(&c, "statements");
-          for (const auto& t : txids)
-          {
-            QCBOREncode_AddSZString(&c, t.c_str());
-          }
-          QCBOREncode_CloseArray(&c);
-          QCBOREncode_AddInt64ToMap(&c, "from", static_cast<int64_t>(from));
-          // The highest seqno this page covers; the Operator's next poll
-          // starts at `to + 1`.
-          QCBOREncode_AddInt64ToMap(&c, "to", static_cast<int64_t>(page_end));
-          // The current ledger tip: the Operator's block count and its
-          // "caught up" signal (once `to == watermark`, the stream is
-          // drained).
-          QCBOREncode_AddInt64ToMap(
-            &c, "watermark", static_cast<int64_t>(watermark));
-          if (more)
-          {
+          const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
+            QCBOREncode_OpenMap(&c);
+            QCBOREncode_OpenArrayInMapSZ(&c, "statements");
+            for (const auto& t : txids)
+            {
+              QCBOREncode_AddSZString(&c, t.c_str());
+            }
+            QCBOREncode_CloseArray(&c);
+            QCBOREncode_AddInt64ToMap(&c, "from", static_cast<int64_t>(from));
+            // The highest seqno this page covers; the Operator's next poll
+            // starts at `to + 1`.
+            QCBOREncode_AddInt64ToMap(&c, "to", static_cast<int64_t>(page_end));
+            // The current ledger tip: the Operator's block count and its
+            // "caught up" signal (once `to == watermark`, the stream is
+            // drained).
             QCBOREncode_AddInt64ToMap(
-              &c, "next", static_cast<int64_t>(page_end + 1));
-          }
-          QCBOREncode_CloseMap(&c);
-        });
+              &c, "watermark", static_cast<int64_t>(watermark));
+            if (more)
+            {
+              QCBOREncode_AddInt64ToMap(
+                &c, "next", static_cast<int64_t>(page_end + 1));
+            }
+            QCBOREncode_CloseMap(&c);
+          });
 
-        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-        ctx.rpc_ctx->set_response_header(
-          ccf::http::headers::CONTENT_TYPE,
-          ccf::http::headervalues::contenttype::CBOR);
-        ctx.rpc_ctx->set_response_body(body);
-      };
+          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
+          ctx.rpc_ctx->set_response_header(
+            ccf::http::headers::CONTENT_TYPE,
+            ccf::http::headervalues::contenttype::CBOR);
+          ctx.rpc_ctx->set_response_body(body);
+        };
 
       make_read_only_endpoint(
         "/operator/statements",
