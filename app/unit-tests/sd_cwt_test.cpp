@@ -434,3 +434,135 @@ TEST(SdCwt, NestedAncestorDisclosure)
   EXPECT_NE(a_enc.find("KEEP_SIBLING"), std::string::npos);
   EXPECT_EQ(a_enc.find("SECRET_CHILD"), std::string::npos);
 }
+
+// present() must handle an indefinite-length unprotected-header map: the
+// original code iterated by uCount which equals UINT16_MAX for indefinite
+// maps, causing a spurious throw after the first real entry. The fixed code
+// loops until QCBOR_ERR_NO_MORE_ITEMS regardless of map encoding style.
+// Also verifies the output map preserves the indefinite-length encoding.
+TEST(SdCwt, PresentHandlesIndefiniteLengthUnprotectedHeader)
+{
+  const std::vector<uint8_t> kid = {0xDE, 0xAD};
+  const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
+
+  // Build a COSE_Sign1 whose unprotected header is an INDEFINITE-length map
+  // containing kid (4). Signature/payload are placeholders.
+  const auto token = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddTag(&ctx, 18);
+    QCBOREncode_OpenArray(&ctx);
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // phdr
+    QCBOREncode_OpenMapIndefiniteLength(&ctx);
+    QCBOREncode_AddBytesToMapN(&ctx, 4, sdcwt::to_ubc(kid));
+    QCBOREncode_CloseMapIndefiniteLength(&ctx);
+    QCBOREncode_AddBytes(
+      &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // payload
+    QCBOREncode_AddBytes(
+      &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // sig
+    QCBOREncode_CloseArray(&ctx);
+  });
+
+  // Must not throw even though the source map is indefinite-length.
+  std::vector<uint8_t> presented;
+  ASSERT_NO_THROW(presented = sdcwt::present(token, {disclosure}));
+
+  // The rebuilt unprotected header must still contain kid(4) and sd_claims(17),
+  // and the output map itself must be indefinite-length (uCount == UINT16_MAX).
+  QCBORDecodeContext dc;
+  QCBORDecode_Init(
+    &dc,
+    UsefulBufC{presented.data(), presented.size()},
+    QCBOR_DECODE_MODE_NORMAL);
+  QCBORDecode_EnterArray(&dc, nullptr);
+  UsefulBufC phdr = NULLUsefulBufC;
+  QCBORDecode_GetByteString(&dc, &phdr);
+  QCBORItem uhdr_item;
+  QCBORDecode_EnterMap(&dc, &uhdr_item);
+  UsefulBufC got_kid = NULLUsefulBufC;
+  QCBORDecode_GetByteStringInMapN(&dc, 4, &got_kid);
+  QCBORDecode_EnterArrayFromMapN(&dc, 17); // sd_claims must be present
+  QCBORDecode_ExitArray(&dc);
+  QCBORDecode_ExitMap(&dc);
+  QCBORDecode_ExitArray(&dc);
+  ASSERT_EQ(QCBORDecode_Finish(&dc), QCBOR_SUCCESS);
+
+  // Output map must preserve indefinite-length encoding.
+  EXPECT_EQ(uhdr_item.val.uCount, QCBOR_COUNT_INDICATES_INDEFINITE_LENGTH);
+
+  ASSERT_EQ(got_kid.len, kid.size());
+  EXPECT_EQ(0, std::memcmp(got_kid.ptr, kid.data(), kid.size()));
+}
+
+// present() must preserve an unprotected-header entry whose label is a uint64
+// value larger than INT64_MAX. The original code cast peek.label.uint64 to
+// int64_t (silent UB for values > INT64_MAX). The fixed code tracks the label
+// type and emits large labels via a split QCBOREncode_AddUInt64 key + value.
+TEST(SdCwt, PresentPreservesLargeUint64Label)
+{
+  // 2^63 = 9223372036854775808 — the smallest uint64 > INT64_MAX.
+  constexpr uint64_t large_label = static_cast<uint64_t>(INT64_MAX) + 1;
+  const std::vector<uint8_t> payload_bytes = {0x42};
+  const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
+
+  // Build a token whose unprotected header has {large_label: h'\x42'}.
+  const auto token = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
+    QCBOREncode_AddTag(&ctx, 18);
+    QCBOREncode_OpenArray(&ctx);
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{}));
+    QCBOREncode_OpenMap(&ctx);
+    // Emit uint64 key > INT64_MAX via split add (no *ToMapN variant exists).
+    QCBOREncode_AddUInt64(&ctx, large_label);
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(payload_bytes));
+    QCBOREncode_CloseMap(&ctx);
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{}));
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{}));
+    QCBOREncode_CloseArray(&ctx);
+  });
+
+  // present() must not throw.
+  std::vector<uint8_t> presented;
+  ASSERT_NO_THROW(presented = sdcwt::present(token, {disclosure}));
+
+  // Parse the rebuilt unprotected header and verify the large label survived.
+  QCBORDecodeContext dc;
+  QCBORDecode_Init(
+    &dc,
+    UsefulBufC{presented.data(), presented.size()},
+    QCBOR_DECODE_MODE_NORMAL);
+  QCBORDecode_EnterArray(&dc, nullptr);
+  UsefulBufC phdr_out = NULLUsefulBufC;
+  QCBORDecode_GetByteString(&dc, &phdr_out);
+  QCBORItem uhdr_map_item;
+  QCBORDecode_EnterMap(&dc, &uhdr_map_item);
+  // Iterate items to find the large_label entry.
+  bool found_large = false;
+  bool found_sdclaims = false;
+  for (;;)
+  {
+    QCBORItem item;
+    if (QCBORDecode_GetNext(&dc, &item) != QCBOR_SUCCESS)
+      break;
+    if (
+      item.uLabelType == QCBOR_TYPE_UINT64 &&
+      item.label.uint64 == large_label &&
+      item.uDataType == QCBOR_TYPE_BYTE_STRING)
+    {
+      found_large =
+        item.val.string.len == payload_bytes.size() &&
+        std::memcmp(
+          item.val.string.ptr, payload_bytes.data(), payload_bytes.size()) == 0;
+    }
+    if (
+      item.uLabelType == QCBOR_TYPE_INT64 &&
+      item.label.int64 == 17 && // SD_CLAIMS_LABEL
+      item.uDataType == QCBOR_TYPE_ARRAY)
+    {
+      found_sdclaims = true;
+    }
+  }
+  QCBORDecode_ExitMap(&dc);
+  QCBORDecode_ExitArray(&dc);
+  ASSERT_EQ(QCBORDecode_Finish(&dc), QCBOR_SUCCESS);
+
+  EXPECT_TRUE(found_large) << "large uint64 label not found in rebuilt uhdr";
+  EXPECT_TRUE(found_sdclaims) << "sd_claims(17) not found in rebuilt uhdr";
+}

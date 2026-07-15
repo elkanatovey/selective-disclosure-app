@@ -342,11 +342,17 @@ namespace selectivedisclosure
         return parse_txid_param(*ctx.rpc_ctx, "txid");
       };
 
+      auto get_statement_adapter = ccf::historical::read_only_adapter_v4(
+        get_statement, context, is_tx_committed, txid_from_path);
       make_read_only_endpoint(
         "/statements/{txid}",
         HTTP_GET,
-        ccf::historical::read_only_adapter_v4(
-          get_statement, context, is_tx_committed, txid_from_path),
+        [get_statement_adapter](
+          ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+          if (!validate_txid_format(*ctx.rpc_ctx, "txid"))
+            return;
+          get_statement_adapter(ctx);
+        },
         {ccf::empty_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
@@ -371,11 +377,17 @@ namespace selectivedisclosure
           ctx.rpc_ctx->set_response_body(receipt);
         };
 
+      auto get_statement_receipt_adapter = ccf::historical::read_only_adapter_v4(
+        get_statement_receipt, context, is_tx_committed, txid_from_path);
       make_read_only_endpoint(
         "/statements/{txid}/receipt",
         HTTP_GET,
-        ccf::historical::read_only_adapter_v4(
-          get_statement_receipt, context, is_tx_committed, txid_from_path),
+        [get_statement_receipt_adapter](
+          ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+          if (!validate_txid_format(*ctx.rpc_ctx, "txid"))
+            return;
+          get_statement_receipt_adapter(ctx);
+        },
         {ccf::empty_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
@@ -463,11 +475,17 @@ namespace selectivedisclosure
         ctx.rpc_ctx->set_response_body(presented);
       };
 
+      auto make_disclosure_adapter = ccf::historical::read_only_adapter_v4(
+        make_disclosure, context, is_tx_committed, txid_from_path);
       make_read_only_endpoint(
         "/operator/statements/{txid}/disclosure",
         HTTP_POST,
-        ccf::historical::read_only_adapter_v4(
-          make_disclosure, context, is_tx_committed, txid_from_path),
+        [make_disclosure_adapter](
+          ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+          if (!validate_txid_format(*ctx.rpc_ctx, "txid"))
+            return;
+          make_disclosure_adapter(ctx);
+        },
         {ccf::user_cert_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
@@ -513,11 +531,16 @@ namespace selectivedisclosure
         return parse_txid_param(*ctx.rpc_ctx, "parent_txid");
       };
 
+      auto append_follow_up_adapter = ccf::historical::read_write_adapter_v4(
+        append_follow_up, context, is_tx_committed, parent_txid_from_path);
       make_endpoint(
         "/reports/{parent_txid}/follow-ups",
         HTTP_POST,
-        ccf::historical::read_write_adapter_v4(
-          append_follow_up, context, is_tx_committed, parent_txid_from_path),
+        [append_follow_up_adapter](ccf::endpoints::EndpointContext& ctx) {
+          if (!validate_txid_format(*ctx.rpc_ctx, "parent_txid"))
+            return;
+          append_follow_up_adapter(ctx);
+        },
         {ccf::user_cert_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Always)
         .install();
@@ -578,11 +601,18 @@ namespace selectivedisclosure
           ctx.rpc_ctx->set_response_body(presented);
         };
 
+      auto get_operator_statement_adapter =
+        ccf::historical::read_only_adapter_v4(
+          get_operator_statement, context, is_tx_committed, txid_from_path);
       make_read_only_endpoint(
         "/operator/statements/{txid}",
         HTTP_GET,
-        ccf::historical::read_only_adapter_v4(
-          get_operator_statement, context, is_tx_committed, txid_from_path),
+        [get_operator_statement_adapter](
+          ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+          if (!validate_txid_format(*ctx.rpc_ctx, "txid"))
+            return;
+          get_operator_statement_adapter(ctx);
+        },
         {ccf::user_cert_auth_policy})
         .set_forwarding_required(ccf::endpoints::ForwardingRequired::Never)
         .install();
@@ -895,6 +925,34 @@ namespace selectivedisclosure
         return std::nullopt;
       }
       return ccf::TxID::from_str(txid_str);
+    }
+
+    // Pre-validate a transaction-id path parameter format before the historical
+    // adapter runs. Returns true (caller should continue) when the parameter is
+    // absent (shouldn't happen for a path param) or parses as a valid TxID.
+    // Returns false and sets HTTP 400 when the parameter is present but cannot
+    // be parsed, matching the scitt-ccf-ledger custom adapter behaviour.
+    // A valid-format but unknown TxID passes through so the adapter can return
+    // its own 404/503.
+    static bool validate_txid_format(
+      ccf::RpcContext& rpc, const std::string& name)
+    {
+      std::string txid_str;
+      std::string error;
+      if (!ccf::endpoints::get_path_param(
+            rpc.get_request_path_params(), name, txid_str, error))
+      {
+        return true; // absent path param: let the adapter handle
+      }
+      if (!ccf::TxID::from_str(txid_str).has_value())
+      {
+        rpc.set_error(
+          HTTP_STATUS_BAD_REQUEST,
+          ccf::errors::InvalidInput,
+          fmt::format("Invalid transaction ID: {}", txid_str));
+        return false;
+      }
+      return true;
     }
 
     // Semantic version of this ledger application (distinct from the CCF

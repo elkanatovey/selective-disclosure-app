@@ -667,6 +667,26 @@ def test_receipt_only_endpoint(anon, service_cert_pem):
     assert anon.get_historical(f"/statements/{view}.1/receipt").status == 404
 
 
+def test_historical_routes_reject_malformed_transaction_ids(anon, operator):
+    """Malformed path IDs are client errors; well-formed unavailable IDs stay
+    under the historical adapter's 404/503 handling."""
+    assert anon.get_historical("/statements/not-a-txid").status == 400
+    assert anon.get_historical("/statements/not-a-txid/receipt").status == 400
+    assert anon.post_historical(
+        "/operator/statements/not-a-txid/disclosure",
+        cbor2.dumps({"fields": ["title"]}),
+        "application/cbor",
+    ).status == 400
+    assert operator.get_historical(
+        "/operator/statements/not-a-txid"
+    ).status == 400
+    assert operator.post_historical(
+        "/reports/not-a-txid/follow-ups",
+        cbor2.dumps({"body": "x"}),
+        "application/cbor",
+    ).status == 400
+
+
 def test_async_submission(network):
     """`?wait=false` returns 202 immediately with the txid header (no blocking on
     global commit); the receipt becomes available by polling. The default
