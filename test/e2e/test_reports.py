@@ -672,19 +672,23 @@ def test_historical_routes_reject_malformed_transaction_ids(anon, operator):
     under the historical adapter's 404/503 handling."""
     assert anon.get_historical("/statements/not-a-txid").status == 400
     assert anon.get_historical("/statements/not-a-txid/receipt").status == 400
-    assert anon.post_historical(
-        "/operator/statements/not-a-txid/disclosure",
-        cbor2.dumps({"fields": ["title"]}),
-        "application/cbor",
-    ).status == 400
-    assert operator.get_historical(
-        "/operator/statements/not-a-txid"
-    ).status == 400
-    assert operator.post_historical(
-        "/reports/not-a-txid/follow-ups",
-        cbor2.dumps({"body": "x"}),
-        "application/cbor",
-    ).status == 400
+    assert (
+        operator.post_historical(
+            "/operator/statements/not-a-txid/disclosure",
+            cbor2.dumps({"fields": ["title"]}),
+            "application/cbor",
+        ).status
+        == 400
+    )
+    assert operator.get_historical("/operator/statements/not-a-txid").status == 400
+    assert (
+        operator.post_historical(
+            "/reports/not-a-txid/follow-ups",
+            cbor2.dumps({"body": "x"}),
+            "application/cbor",
+        ).status
+        == 400
+    )
 
 
 def test_async_submission(network):
