@@ -42,5 +42,9 @@ cd tools/sd_cwt
 PYTHON=${PYTHON:-python3}
 "$PYTHON" -m pip install -e ".[test]" >/dev/null
 SDCWT_ARTIFACT_DIR="$ARTIFACT_DIR" "$PYTHON" -m pytest tests/test_cpp_conformance.py -v
+cd "$OLDPWD"
+
+echo "== Validating emitted artifacts + API bodies against the CDDL (spec/) =="
+PYTHON="$PYTHON" ./scripts/validate-cddl.sh "$ARTIFACT_DIR"
 
 echo "== C++ token-core tests + conformance passed =="

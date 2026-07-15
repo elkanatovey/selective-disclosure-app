@@ -11,16 +11,11 @@ if(NOT TARGET "ccf")
   find_package(${CCF_PROJECT} REQUIRED)
 endif()
 
-add_ccf_app(
-  selective_disclosure
-  SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
-       ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
-)
-
-# --- Token core (C++) + host unit tests -----------------------------------
-# The token core (CBOR/COSE/SD-CWT construction) is built as plain sources so
-# it can compile both into the enclave app and into a standalone host test
-# binary. QCBOR is vendored the same way SCITT does.
+# --- Vendored dependencies -------------------------------------------------
+# QCBOR is vendored for CBOR encode/decode in the token core: CCF's own
+# CBOR/COSE is internal (Rust) and exposes no general-purpose CBOR encoder to
+# app code, so we bring our own to construct the SD-CWT/COSE token bytes.
+# Declared before add_ccf_app so the app can link + include it.
 include(FetchContent)
 
 set(BUILD_QCBOR_TEST OFF CACHE STRING "" FORCE)
@@ -32,7 +27,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(qcbor)
 set_property(TARGET qcbor PROPERTY SYSTEM TRUE)
 
-# Sources for the token core, shared by the app and the unit tests.
+# The token core (CBOR/COSE/SD-CWT construction), shared by the enclave app and
+# the host unit tests.
 set(TOKEN_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cbor_value.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cose.cpp
@@ -40,6 +36,25 @@ set(TOKEN_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/statement.cpp
 )
 
+# App-level pure logic (CBOR submission parsing, ...), unit-testable without CCF
+# KV/endpoints; shared by the enclave app and the host unit tests.
+set(APP_LOGIC_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/report_parse.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/disclosure_store.cpp
+)
+
+# --- The CCF application ----------------------------------------------------
+add_ccf_app(
+  selective_disclosure
+  SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+       ${TOKEN_SRCS}
+       ${APP_LOGIC_SRCS}
+  INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src
+  LINK_LIBS qcbor
+)
+
+# --- Host unit tests (no enclave, no chain) --------------------------------
 option(BUILD_TESTS "Build the host-side C++ unit tests (no enclave, no chain)" OFF)
 if(BUILD_TESTS)
   set(INSTALL_GTEST OFF)
@@ -53,7 +68,7 @@ if(BUILD_TESTS)
   enable_testing()
 
   file(GLOB UNIT_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit-tests/*.cpp)
-  add_executable(unit_tests ${UNIT_TEST_SOURCES} ${TOKEN_SRCS})
+  add_executable(unit_tests ${UNIT_TEST_SOURCES} ${TOKEN_SRCS} ${APP_LOGIC_SRCS})
   target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   # The ccfcrypto imported target only exposes its quickjs 3rdparty include; the
   # main CCF headers live under the install prefix, so add them explicitly.

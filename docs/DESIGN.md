@@ -1,7 +1,7 @@
 # Selective Disclosure App — Design & Plan
 
-A confidential, append-only **bug-report ledger** built on CCF (from
-source). Reports are registered in a TEE-backed transparency service so that
+A confidential, append-only **bug-report ledger** built on CCF from
+source. Reports are registered in a TEE-backed transparency service so that
 their existence/ordering is provable, their contents stay hidden by default, and
 The Operator can **selectively reveal** specific fields to prove a new submission is a
 **duplicate** — without exposing the rest.
@@ -22,17 +22,14 @@ A statement is a multi-field object. Content fields (`title`, `body`,
 all **selectively-disclosable**; a **`parent`** reference links follow-ups to a
 report. Follow-up notes are optional and added later.
 
-### Terminology: report vs note (same object, different role)
+### Terminology: report vs note
 A **report** and a **note/follow-up** are the **same kind of object** — an SD-CWT
 statement with fields + the always-full `parent`. They differ only by role:
 - **report** = a *root* statement (original submission, typically by a
   **researcher**; `parent` = none/garbage).
-- **note / follow-up** = a *child* statement (later addition by **the Operator**:
-  component/severity, patch, detail; `parent` = a real report).
+- **note / follow-up** = a *child* statement; generally a later addition by **the Operator** containing
+  component/severity, patch, or detail; `parent` = a real report.
 
-Recommended: **one unified "statement" schema**, with root-vs-child distinguished
-purely by `parent`. ("Notes" always means the Operator follow-ups, never the
-original report.)
 
 ### Statement schema (RESOLVED — todo: define-report-fields)
 One **unified statement schema**; `report` and `note` share it, with role
@@ -40,7 +37,7 @@ derived **purely from `parent`** — there is deliberately **no `statement_type`
 field**, because a visible type would itself leak *whether* a parent exists and
 so defeat the redacted-`parent` design.
 
-**Signing (Model A):** the **service (TEE) constructs and signs** every
+**Signing:** the **service constructs and signs** every
 statement in-enclave *before* consensus; the committed **seqno** is the
 authoritative order/time. The clear `iss` is therefore the **service**, not the
 submitter.
@@ -98,7 +95,7 @@ verification), tested in `tools/sd_cwt/tests/test_statement.py`.
 | Reporter (originals) | **Researchers** | submit **raw report content** directly to the service (authenticated channel) |
 | Follow-ups | **the Operator** | submits follow-up note content referencing a report |
 | Notary / Transparency service | **CCF service in a TEE** | **constructs + signs** the SD-CWT, registers it, assigns **seqno**, issues **signed receipts**, holds the confidential store; trust domain **separate** from the Operator |
-| Holder of disclosures | **the service** (default, `store_unredacted`) or **Operator self-custody** (flag off) | only the holder of salt/value can disclose |
+| Holder of disclosures | **the service** (current behavior) — or **Operator self-custody** (deferred, §12) | only the holder of salt/value can disclose |
 | Verifier | a **researcher** | verifies **offline** via the receipt (`validate_trusted`) |
 
 **Core flow:** reports go **researcher → service → the Operator**, never the Operator → service.
@@ -108,9 +105,30 @@ to make later duplicate-proofs easier.
 
 ## 4. Authentication / registration model (notary)
 The service is a **notary + signer**, not an identity authority.
-- **The service (TEE) is the sole signer.** Researchers/Operator submit **raw
+- **The service is the sole signer.** Researchers/Operator submit **raw
   content** over an authenticated channel; the service constructs and signs the
   SD-CWT. There is no per-submitter statement signature to check.
+- **Signing key = app-managed (not the CCF service identity).** CCF does not
+  expose the service identity private key to app code (it signs receipts
+  internally), so the app holds **its own EC P-256 issuer key** in a private
+  (encrypted, replicated) KV table, lazily generated on first use so any primary
+  can sign. Two independent, service-rooted anchors result: the **statement**
+  signature (app key, binds the Redacted Claim Hashes) and the **receipt** (CCF
+  service identity, proves inclusion + seqno).
+- **The issuer key is service-identity-endorsed via the ledger.** On generation
+  the issuer **public** key is written to a public KV history table; that
+  registration transaction gets a **receipt** signed by the CCF service identity,
+  which *is* the endorsement (same trust root as statement receipts — no bespoke
+  cert-signing needed, which the app couldn't do anyway). `GET /signing-key`
+  returns the public key **plus its endorsement (receipt)**, so a verifier trusts
+  the issuer key by checking it against the **service identity**, not by trusting
+  the endpoint. This makes the app key follow the service-key trust logic.
+- **Key rotation follows the service-key pattern.** Rotating the issuer key is a
+  governance-audited action that **registers a new public key** (new receipt) and
+  **retains the old ones** in the history table, so statements signed under a
+  previous key stay verifiable against their (still-endorsed) key — mirroring
+  CCF's service-identity endorsement chain, and inheriting service-identity
+  rotation across recovery for free (the receipts do). (See §12.)
 - **No key enrollment.** Submitter identity is not a CCF user set; the receipt
   proves "this statement existed at seqno T", signed by the service.
 - **Verification is receipt-anchored** (`validate_trusted`): a verifier trusts
@@ -121,7 +139,7 @@ The service is a **notary + signer**, not an identity authority.
   orthogonal to the statement signature; optional anti-spam (rate-limit/JWT) sits
   here.
 - **Operator authorization is mandatory for confidential-egress endpoints**
-  (`get_statements_since`, `get_statement`, `make_disclosure` — §9): these return
+  (`get_statements`, `get_statement`, `make_disclosure` — §9): these return
   plaintext, so they are gated to a config-pinned / governance-set Operator
   identity. (This is the one place caller authentication is required; submission
   itself needs none.)
@@ -165,11 +183,11 @@ out-of-band trust anchors; salts high-entropy.
   `build_receipt_for_committed_tx`), SHA-256 (`ccf::crypto::sha256`), EC signing
   (`ccf::crypto::ECKeyPair::sign_hash`), CSPRNG (`ccf::crypto::get_entropy()`).
 - **COSE_Sign1 _creation_ is NOT exposed by CCF** (public `cose.h` only edits
-  headers; SCITT signs client-side in Python). Under Model A we hand-assemble the
+  headers). The service being the sole signer, we hand-assemble the
   `COSE_Sign1` with QCBOR and sign the `Sig_structure` via `ccf::crypto` — no
   `t_cose` dependency.
 - **CBOR encode/decode is NOT exposed by CCF** for general use — we vendor
-  **QCBOR** via CMake `FetchContent` (as SCITT does) to build/parse token bytes.
+  **QCBOR** via CMake `FetchContent` to build/parse token bytes.
 - CCF-source modification is **last resort**.
 
 ## 7. The disclosure artifact
@@ -184,35 +202,76 @@ single spec names the combo, so no off-the-shelf tool validates it as one unit).
 
 ```
 COSE_Sign1 (service-signed, TEE):
-  protected   : { alg, sd_alg(SHA-256), typ }
+  protected   : { alg, typ, sd_alg(SHA-256) }
   payload     : { clear fields,
                   redacted_claim_keys:[hashes incl. always-present parent] }
   unprotected : { receipt: <service-signed>,        # (a) only
                   sd_claims:[selected disclosures] } # (a) only
 ```
 
+The exact wire format is specified in CDDL (RFC 8610) at
+[`spec/statement.cddl`](../spec/statement.cddl) — the language-neutral contract
+both the C++ token core and the Python `sd_cwt` oracle conform to. (Protected
+header keys are emitted in CDE order: `alg` (1) < `typ` (16) < `sd_alg` (170).)
+
 ## 8. Data model (KV tables)
-| Table | Visibility | Key → Value |
+Statements/disclosures are written as **per-transaction `Value`s** and read back
+by **historical query** at the txid's seqno (not a map keyed by id); a **seqno
+index** enables the Operator stream. Concrete names in `app/src/reports.h`.
+
+| Table | Visibility | Contents |
 |---|---|---|
-| `ReportsTable` | public | id → **redacted SD-CWT** bytes (blob write, à la SCITT `EntryTable`) |
-| `NotesIndex` | public | report id → [follow-up seqnos] |
-| `ConfidentialTable` | private (encrypted) | id → the report's **full list of per-field/per-element disclosures** (each `[salt,value,key]` or `[salt,value]`, annotated with its **path**) — **feature-flagged, default ON** |
+| `StatementTable` (`public:sd.statement`) | public | the redacted SD-CWT bytes (per-tx `Value`) |
+| `DisclosureTable` | private (encrypted) | the statement's disclosures (`[salt,value,key]` bytes) — the **confidential store**; **write-only** from submit, **read-only** from Operator egress. Always retained today; an Operator-self-custody mode (`store_unredacted` OFF) is deferred (§12) |
+| `SigningKeyTable` (`sd.signing_key`) | private (encrypted) | the issuer **private** key (PEM) |
+| `SigningKeyHistory` | public | issuer **public** key registration(s) — endorsed by their receipts (§4); supports rotation (append new, keep old) |
+| statement **seqno index** | public | for `get_statements` (CCF `SeqnosForValue`) |
+
+*(No parent→children index: we deliberately do **not** maintain a
+parent-to-follow-ups mapping. Such an index would leak thread structure — parent
+hashes are derivable from the public tokens — and it is not needed: the link
+lives in the child's redacted, salted `parent` field, and follow-ups surface via
+`get_statements`.)*
 
 - **Signing:** the **service (TEE)** constructs and signs the SD-CWT (trust roots
   in attestation); researchers submit raw content over an authenticated channel.
   The receipt-anchored `validate_trusted` is the verification path.
-- **Confidential store (`store_unredacted`, default ON):** the service holds the
+- **Confidential store (retained by default; `store_unredacted` OFF is deferred,
+  §12):** the service holds the
   report's disclosures (= the unredacted values for redacted fields; with the
   public token's clear fields this reconstructs the full report). Chosen for
   implementation ease — it dissolves the separate confidential-delivery channel
   and lets the service produce duplicate-proofs directly.
-- **Granular + recursive disclosure:** the store keeps the **individual**
-  disclosures (NOT a monolithic plaintext blob) so `make_disclosure` can reveal
-  an arbitrary subset at any depth. Because nested disclosure follows the
-  ancestor-disclosure rule, each disclosure is annotated with its **full path**,
-  and `make_disclosure(target_paths)` selects the targets **plus their ancestor
-  disclosures**. (Likely a small `sd_cwt` helper: given all disclosures + target
-  paths, return the minimal disclosure set incl. ancestors.)
+- **Granular + recursive disclosure (implemented):** the store keeps the
+  **individual** disclosures (NOT a monolithic plaintext blob) so
+  `make_disclosure` can reveal an arbitrary subset **at any depth**. Because
+  nested disclosure follows the ancestor-disclosure rule, each disclosure is
+  annotated with its **full path** (`sdcwt::Disclosure::path`, recorded at issue
+  time and persisted in the store as `[path, encoded]`), and the disclosure
+  request selects targets **plus their ancestor disclosures** (so a nested reveal
+  is resolvable) **and their descendants** (so disclosing a whole field reveals
+  its contents) — `select_disclosures`. Statements redact each `references`
+  element individually (path `{1006, i}`), so the Operator can disclose a single
+  reference (`["references", i]`) revealing **only its value**, not its siblings'
+  values. The top-level redacted shape is unchanged: the whole array is still one
+  Redacted Claim Hash **at rest**; element hashes live inside it and appear only
+  once the array itself is disclosed.
+- **Known limitation — array disclosure leaks length/position (accepted).**
+  Disclosing an array element necessarily discloses its container (ancestor
+  rule), and the container carries one `tag(60)` placeholder **per element**, so
+  the disclosed artifact reveals the array's **length** and lets the recipient
+  match the opening to its **position**. Only sibling *values* stay hidden. This
+  is a **disclosure-time, recipient-only** leak — **nothing leaks at rest** (the
+  `public:` token still shows just one hash), and the recipient is the party we
+  chose to hand a duplicate-proof. We deliberately do **not** hide it, because
+  the value is asymmetric: top-level field-presence uniformity defends against
+  *every* observer of the world-readable ledger permanently, whereas array count
+  reaches only the disclosure recipient. If a future threat model needs it, the
+  fix is small and local: pad each redactable array to a fixed cap with salt-only
+  **decoy element disclosures** at issue (mirrors the existing top-level
+  `pad_to`), so a disclosed array always shows `MAX_REFS` slots and the real
+  count/position is hidden among decoys — at the cost of an arbitrary cap and
+  larger disclosed artifacts.
 - **Segregation invariant (for easy migration):** the redacted-token build,
   claims-digest binding, receipt issuance and the public store **never read**
   the confidential store. It is *write-only* from the submit path and *read-only*
@@ -241,32 +300,106 @@ COSE_Sign1 (service-signed, TEE):
   precedence **by seqno**.
 
 ## 9. Endpoints & off-chain tooling
-**Service endpoints:**
-- `submit_report` (reporter, direct): store redacted token (public) + the report's
-  disclosures (confidential), set claims digest → **return seqno + receipt to the
-  reporter** (their proof-of-registration and precedence anchor).
-- `append_follow_up` (Operator): store redacted follow-up (`parent` set),
-  set claims digest → return receipt; index under parent.
-- `get_statements_since(cursor_seqno, limit)` (**Operator only**): the unredacted
-  stream — **all** statements (original reports **and** follow-ups) registered
-  after `cursor_seqno`, in seqno order, each with its receipt. The Operator keeps
-  its own cursor (high-water seqno) and advances it; service-side stateless,
-  idempotent to replay. Reuses CCF seqno-indexed historical queries.
-- `get_statement(id)` (**Operator only**): pull a single unredacted statement +
-  receipt by id.
-- `make_disclosure(id, target_paths)` (**Operator only**): assemble
-  `{ redacted token, receipt, disclosures for target_paths + their ancestors }`
-  from the confidential store, for the Operator to hand a researcher. *(Reverts to
-  offline Operator-side tooling when `store_unredacted` is OFF — self-custody.)*
+Locked API contract (full reference: [`API.md`](API.md)). Formats: **CBOR in**;
+responses are **COSE** (statements/receipts) or **CBOR** (`/version`,
+`/signing-key`, the Operator stream), with `204`/`202` carrying no body. **Live**
+= built (PR #4); **pending** = format/endpoint changes agreed but not yet coded.
 
-**Confidential-egress authorization:** `get_statements_since`, `get_statement`,
+**Public (no auth):**
+- `GET /version` — service-discovery metadata (CBOR `{app_version, schema_version,
+  ccf_version}`): this app's semantic version, the compile-time statement
+  **schema version** (so a client knows which schema a live service speaks —
+  §12.1), and the underlying CCF platform version. *(Live.)*
+- `POST /reports[?wait=false]` — **CBOR** body: a content-fields map (`title`/`body`/
+  `component`/`severity`/`fingerprint`(bstr)/`references`/`patch`/`patch_date`;
+  named keys, native types, **no `parent`**). Builds + signs the strict-uniformity
+  SD-CWT, stores the redacted token **and its disclosures** (confidential store),
+  binds the claims digest. **Synchronous by default**: holds the response until
+  global commit, then **204 + the transaction-id header**
+  (`x-ms-ccf-transaction-id`). **`?wait=false`** returns **202 + txid header**
+  immediately (on local commit) for the caller to poll
+  `GET /statements/{txid}/receipt` — an async submit/poll pattern that reuses the
+  historical receipt endpoint as the poll target (no separate operations
+  resource). *(Live.)*
+- `GET /statements/{txid}` — the redacted statement with its CCF receipt embedded
+  (transparent statement, `application/cose`). *(Live.)*
+- `GET /statements/{txid}/receipt` — the CCF receipt **alone** (`application/cose`),
+  for a verifier that only needs the inclusion/ordering proof, not the (redacted)
+  statement bytes. *(Live.)*
+- `GET /signing-key[?at={seqno}]` — the issuer public key **plus its endorsement**
+  (the receipt of its on-ledger registration), so verifiers validate it against
+  the service identity (§4). Default returns the **latest** registration; `?at=`
+  returns the registration active at a given seqno (the greatest registration
+  seqno ≤ `at`), so a statement signed **before** a rotation is verified under the
+  key that signed it. *(Live.)*
+- `POST /signing-key[?rotate=true]` — **member-gated** (control-plane, §12).
+  Idempotent init by default (no-op → 200 if already initialised); `?rotate=true`
+  registers a **new** key (204). Old registrations are kept (each endorsed by its
+  own receipt), so the `?at=` resolution above keeps pre-rotation statements
+  verifiable. *(Live.)*
+
+**Operator-gated** (caller is the Operator **CCF user**, `user_cert_auth`; the
+Operator user is added by governance — §12.2):
+- `POST /reports/{parent_txid}/follow-ups` — CBOR content body (same shape as
+  `/reports`). Child statement; **`parent` = SHA-256 of `{parent_txid}`'s token**
+  = the parent's **claims digest**, so the child commits to exactly the statement
+  the parent's receipt attests; server-derived and salted+redacted like any
+  field. Uses a **read-write historical adapter** to read the parent at
+  `{parent_txid}` and write the child in one tx; rejects (404) unless
+  `{parent_txid}` genuinely committed a statement (the parent tx's claims digest
+  must equal `hash(token read)`, guarding against a stale per-tx `Value` read).
+  Returns **204 + txid header** (or **202** with `?wait=false`); see
+  [`API.md`](API.md) for the full status set. *(Live.)* *(No parent→children index — see §8;
+  the link lives in the child's redacted, salted `parent` field and follow-ups
+  surface via `get_statements`.)*
+- `GET /operator/statements/{txid}` — a single **unredacted** transparent
+  statement: the redacted token with **all** stored disclosures presented +
+  receipt embedded (`present_transparent` with the full disclosure set). *(Live.)*
+  *(Caveat: uniform padding means absent content fields present as garbage
+  sentinels — string fields are distinguishable by CBOR type, `bstr` fields are
+  not; the Operator relies on out-of-band knowledge of which fields are real.)*
+- `GET /operator/statements?from={seqno}&to={seqno}` — the stream. Returns the
+  **txids** of statements (reports **and** follow-ups) committed in the seqno
+  range `[from, to]` (default `from=1`, `to`=current watermark), in seqno order,
+  plus the ledger **`watermark`** (the Operator's block count / "caught up"
+  signal) and, when the requested range spans more than one page, a **`next`**
+  cursor (CBOR `{statements:[txid…], from, to, watermark, next?}`). A page covers
+  a bounded seqno **range** (`kMaxSeqnoPerPage`, kept below the index's
+  `max_requestable_range`), so a single index query can never exceed that bound —
+  no server-side windowing. The Operator drains the stream by polling
+  `from = to + 1` until `to == watermark`; stateless + replay-idempotent. Uses
+  the statement **seqno index** (`SeqnosForValue_Bucketed<StatementTable>`); the
+  Operator then pulls each unredacted statement via `GET /operator/statements/{txid}`.
+  *(Live. Seqno-range pagination: capping each page's range below the bound
+  eliminates the large-ledger windowing path entirely, in exchange for pages
+  that may be empty over sparse ranges.)*
+- `POST /operator/statements/{txid}/disclosure` — body `{fields:[ entry, ... ]}`
+  where each entry is a field name (whole field) or a path `[name, idx, ...]`
+  (a nested array element, e.g. `["references", 0]`); returns a single
+  **presented + transparent** COSE artifact (targeted disclosures + their
+  required ancestors attached, receipt embedded) for the Operator to hand a
+  researcher. `make_disclosure`. *(Live, incl. subfield/recursive disclosure.)*
+  *(Reverts to offline Operator-side tooling if `store_unredacted` is OFF —
+  self-custody.)*
+
+**Trust/ordering note:** precedence and duplicate ordering use the **seqno**
+(receipt-anchored, trusted). The `iat` clear claim is untrusted host wall-clock —
+a convenience timestamp only, never a precedence anchor.
+
+**Confidential-egress authorization:** `get_statements`, `get_statement`,
 and `make_disclosure` return confidential plaintext and MUST be gated to the
 **Operator** (config-pinned / governance-set identity). This is distinct from the
-notary/no-enrollment stance for submission (§4).
+notary/no-enrollment stance for submission (§4). These responses also set
+**`Cache-Control: no-store`** (on both success and error paths) so no client,
+proxy, or diagnostic cache retains the plaintext — defence-in-depth over the
+TLS/mTLS that already protects transit. (Infrastructure must likewise avoid
+logging COSE bodies; the app itself never logs response bodies.)
 
 **Off-chain (NOT a service endpoint):**
-- `verify` — **researcher-side.** Checks the service signature + receipt and
-  hash-matches disclosures (`validate` / `validate_trusted`).
+- `verify` — **researcher-side.** `validate` checks the **issuer signature**;
+  `validate_trusted` instead assumes trust from an external CCF **receipt** (it
+  does not re-check the signature). Both then hash-match the presented
+  disclosures.
 
 **Duplicate proof:** The Operator runs `make_disclosure` on the **earlier** matching
 statement; verifier checks **seqno M < their seqno N** and that the disclosed
@@ -282,7 +415,8 @@ are chain logic that *consumes* those tokens.
    `parent`, strict uniformity. **Done** (§1; `sd_cwt.statement`).
 1. **Off-chain token layer (Python) ✔ DONE** — `sd_cwt` + `sd_cwt.statement`
    already build / sign / redact / present / verify / validate schema-valid
-   tokens off-chain (73 tests). Under **Model A** this Python layer is the
+   tokens off-chain (73 tests). Since the service is the sole signer, this
+   Python layer is the
    **reference/conformance oracle** and the **researcher-side verifier**, not
    the in-enclave signer.
 2. **C++ token core (port of build+sign+redaction) — host build, no chain.**
@@ -296,7 +430,7 @@ are chain logic that *consumes* those tokens.
    (SHA-256/384/512, default SHA-256) is a parameter written to `sd_alg`. Maps
    are emitted in **deterministic (CDE, RFC 8949 §4.2.1 bytewise) key order** on
    **both** sides — the Python reference canonicalises its emitted CBOR to match
-   (see §13). Deterministic encoding is not an SD-CWT wire-format MUST (only
+   (see §14). Deterministic encoding is not an SD-CWT wire-format MUST (only
    definite-length is, draft-08 §5.1); it is the spec's recommended **privacy
    profiling** choice (§15.2/§16.7) that closes the issuer covert channel from
    map-key ordering — relevant here because the TEE is the issuer. Built
@@ -309,8 +443,8 @@ are chain logic that *consumes* those tokens.
 3. **On-chain: submit + receipt** — `submit_report` constructs+signs via the
    C++ token core, stores the redacted blob, binds the **claims digest**, returns
    **seqno + receipt**. (Receipt/seqno are chain logic layered on top of 1–2.)
-4. **Follow-ups & linkage** — `append_follow_up`, redacted `parent`,
-   `NotesIndex`, seqno ordering.
+4. **Follow-ups & linkage** — `append_follow_up`, redacted+salted `parent`
+   (no parent→children index), seqno ordering.
 5. **Disclosure & duplicate proof** — Operator `make_disclosure` + researcher
    `verify`; end-to-end demo.
 6. **(optional) hardening** — `store_unredacted` OFF (Operator self-custody) or
@@ -322,16 +456,138 @@ are chain logic that *consumes* those tokens.
 - Disclosure artifact: separate-bundle (preferred) vs embedded profile.
 - RESOLVED: `parent` is redacted by default + always present (no metadata leak).
 - RESOLVED (for now): the **service (TEE) signs** statements; the **service holds
-  the unredacted disclosures** in a private table (`store_unredacted`, default
-  ON), segregated for easy migration. This dissolves the confidential
-  service→Operator delivery channel for the initial implementation.
+  the unredacted disclosures** in a private table (always retained today;
+  `store_unredacted` OFF deferred), segregated for easy migration. This dissolves
+  the confidential service→Operator delivery channel for the initial
+  implementation.
 - Principle: redacted tokens leak no metadata; keep token shape uniform.
+- ACCEPTED limitation: disclosing an **array element** reveals the array's
+  length/position to the disclosure recipient (never at rest). Not padded — see
+  §8 for the rationale and the (small) decoy-padding fix if ever needed.
 - "Operator can't read confidential state" is deployment/attestation-dependent —
   and now load-bearing for whole reports (not just disclosures), since the
   service holds plaintext in an encrypted private table.
 - Each layer is standard; only the embedded *combination* is non-standard.
 
-## 12. Implementation: reuse map & layering
+## 12. Governance & versioning
+Even with a **single entity** operating the ledger, governance is not optional —
+CCF always runs under a **constitution + ≥1 member**, and the point of a
+transparency service is that *rule changes are themselves recorded on the
+append-only ledger*, so the operator cannot silently change behaviour. We split
+governance into two planes and deliberately keep only one of them:
+
+- **Data-plane governance (NOT used).** *Who-may-submit* control — accepted
+  issuers, trust anchors, a registration **policy engine**. Our
+  notary / sole-signer stance (open submission, **service is the sole signer**, §4)
+  removes the need for this entirely: we implement no submission-gating policy
+  or data-plane governance endpoints. See the note below for when it might be
+  reconsidered — **out of scope for the current PR**.
+- **Control-plane governance (used).** *Changing the rules*: app/code upgrades,
+  schema/format changes, config (incl. the Operator identity), signing-key
+  rotation, and service lifecycle / recovery. This is mostly **CCF's built-in
+  governance**; we add only a small amount of custom config.
+
+**Note — a programmable submission policy (JS/Rego), deferred.** A transparency
+service can embed a policy **engine** (a `ccf::js` JavaScript context, or a
+Rego/OPA interpreter, configured via governance) that runs on every submission to
+decide whether it is accepted. Such engines exist to police adversarial
+issuers/claims in services where **submitters sign their own statements** — a
+driver we structurally **do not have** (the service signs; submitters send raw
+content, so there is no submitted signature/identity to gate). Even the plausible
+uses for us (evolvable field validation, an enrolment allow-list, bug-bounty
+scope) are governance-managed **data**, which a C++ handler can read from a KV
+config table — they need no interpreter. An embedded JS/Rego engine only earns its
+keep for governance-managed **logic** we cannot anticipate in code, which realistically
+arises only if the ledger becomes **multi-tenant / consortium-operated** or grows
+**enrolled submission with complex, frequently-changing eligibility rules**. The
+cost is not CPU (a simple policy is sub-ms, dwarfed by the consensus round a
+submission already pays) but **trust surface and operations**: an interpreter on
+the **untrusted-input path inside the TEE** (attack surface + a larger attested
+code measurement), a **tail-latency/DoS** vector that must be bounded (e.g. heap
+and time caps on the interpreter plus a max input size), and the
+overhead of authoring/testing/governing policies. **Recommendation if the need
+lands:** prefer authenticated submission + a **governance-managed allow-list KV
+table validated in C++** over an embedded engine, and only adopt the engine for
+the genuinely-multi-stakeholder case. Not part of this PR.
+
+**What CCF's built-in governance already covers** (member proposals, recorded
+on-ledger, auditable):
+- **Open service**, add/remove members & users, disaster **recovery**.
+- **Code upgrade** — a new app binary is a new **code measurement**; nodes
+  running it are trusted only once governance accepts that measurement. Because
+  our **schema is compile-time** (`statement.h`: field IDs 1000–1008,
+  `CONTENT_FIELD_COUNT`, default `sd_alg`), **a schema change *is* a code
+  upgrade** and inherits this audited path.
+- Node certs, JWT issuers, and other CCF-native config.
+
+**Custom governance-set config we add** (small KV surface, member-writable):
+- **Operator identity** for the confidential-egress endpoints (§4/§9). See the
+  A/B decision below.
+- *(Optional)* a **schema-version pin** if we ever want the current version to be
+  runtime-configurable rather than purely code-bound.
+
+**Issuer-key rotation** (control-plane, §4): the app issuer key is registered
+on-ledger (public key in a history table, endorsed by its registration receipt).
+Rotation is a governance-audited action that appends a **new** registered key and
+**keeps the old ones**, so statements under a prior key stay verifiable — the
+app-key analogue of CCF's service-identity endorsement chain. Recovery is handled
+by CCF for the receipt side; the issuer key is KV data that survives recovery.
+
+**Disaster recovery — CCF-native, tested end-to-end (`test/e2e/test_recovery.py`).**
+Recovery adds **no app code**: `sandbox.sh --recover` drives CCF's
+`governance.recover_service` from the members' recovery shares, replays the
+persisted ledger onto a **new** service identity (`recovery_count` bumps, service
+cert rolls), and preserves the previous identity on disk
+(`predecessor_service_cert.pem`). The e2e test submits a report, tears the service
+down, recovers it, and asserts: (a) the **pre-recovery** statement is still
+retrievable and its original receipt still verifies (against the predecessor
+identity CCF preserved), and (b) the recovered service keeps operating — a new
+report commits and its receipt verifies against the new identity (the issuer
+signing key, being replayed KV data, survives with no re-init). **Recovery needs
+no app code:** the recovery mechanism, the ledger persistence, and the preserved
+identity chain are all CCF's. A verifier holding a pre-recovery receipt validates
+it against the **predecessor cert** (the same old key, which recovery writes to
+disk); we deliberately expose no historical service-key endpoint. *(The one thing
+we don't implement is embedding CCF's
+`service_endorsements` chain in the receipt so the current identity alone verifies
+old receipts — CCF's `populate_cose_service_endorsements` exists for this, but the
+Python `ccf.cose.verify_receipt` takes a single key with no chain support, so it
+would need a chain-following verifier too. Deferred; not needed for the model.)*
+
+### 12.1 Schema / statement versioning
+A verifier must know *which schema* a statement used in order to interpret its
+fields, and that binding must survive receipts and format changes. Approach:
+- **Explicit version claim.** Every statement carries a **clear** schema/profile
+  version (a fixed CWT-style claim, present in *all* statements). It is a *clear*
+  claim, so it does **not** affect the redacted-uniformity invariant (uniformity
+  is over the redacted content fields, §1). Self-describing and cheap. *(The
+  service-level `SCHEMA_VERSION` is Live and surfaced by `GET /version`; embedding
+  it as a per-statement clear claim is the remaining step, deferred.)*
+- **Authoritative binding = code measurement.** The version claim is a
+  convenience label; the *authoritative* statement of "what schema/behaviour
+  produced this" is the app **code measurement**, which is governance-audited and
+  on-ledger. A verifier can map measurement → schema version if it wants to
+  distrust a self-asserted label.
+- **Migration is forward-only.** The ledger is append-only: statements keep the
+  version they were signed under. A schema upgrade (governance-accepted new
+  measurement) affects **new** statements only; verifiers must retain the ability
+  to validate historical versions.
+
+### 12.2 Open decision — Operator identity mechanism
+The egress gate (§4/§9) is the one authorization we must pin. Two options:
+- **A. Config-pinned** — Operator cert set in node/app config at deploy; the app
+  checks the caller against it. Simplest, zero governance surface, but rotation =
+  reconfigure/redeploy (and is **not** independently recorded as a governance
+  action).
+- **B. Governance-set** — a governance proposal writes the Operator cert into a
+  KV table; a custom auth policy reads it. Rotatable, member-approved, and
+  **auditable on-ledger** — consistent with the control-plane philosophy above.
+- **Lean:** start with **A** to unblock the egress endpoints (single-operator
+  dev), but **B is the principled target** — a security-critical authorization
+  change *should* be an auditable governance action, not a silent config edit.
+  The switch is localized (only where the auth policy reads the Operator cert).
+
+## 13. Implementation: reuse map & layering
 **Two layers, built in order:**
 1. **Off-chain token layer (build first):** create + sign + redact + verify the
    COSE_Sign1 / SD-CWT tokens. Pure client-side crypto (CBOR + COSE + SHA-256),
@@ -346,25 +602,27 @@ are chain logic that *consumes* those tokens.
   `build_receipt_for_committed_tx`
 - COSE verify, SHA-256, KV (`Map`/`Value`/`RawCopySerialisedValue`), seqno indexing.
 
-**Reuse from SCITT (copy & adapt into `app/`, Apache-2.0):**
-- `cbor.h` (QCBOR helpers) — ~as-is
-- `cose.h` (COSE_Sign1 decode, header/COSE_Key parse, hash) — strip TSS/DID bits
-- `get_cose_receipt()` (CCF receipt → COSE receipt) — directly
-- register / local-commit flow → template for `submit_report`
-- `historical_queries_adapter.h` + `SeqnosForValue` indexing → seqno lookup
+**Patterns we reimplemented as original MIT code** (studied for approach, not
+copied — the `app/` sources are our own, MIT):
+- QCBOR helpers (`app/src/cbor.h`, an app-wide shared util) and COSE_Sign1
+  decode / header + COSE_Key parse (`app/src/token/cose.h`), with the TSS/DID
+  bits omitted
+- CCF-receipt → COSE-receipt conversion (`make_cose_receipt`)
+- the register / local-commit flow → template for `submit_report`
+- `historical_queries_adapter.h` + CCF `SeqnosForValue` indexing → seqno lookup
 - the QCBOR `FetchContent` block in `app/CMakeLists.txt`
-- optional: `configurable_auth.h` (empty/JWT) if we add access control
 
-**Not reused:** `verifier.h` (did:x509 / JWKS) → replaced by a ~50-line
-self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
+**Deliberately not adopted:** did:x509 / JWKS verification (replaced by a
+~50-line self-contained verifier); a registration policy engine; data-plane
+governance endpoints.
 
 **New code (the novel parts):**
 - `sd_cwt` **Python** library — redaction core (salts, disclosures, Redacted
   Claim Hashes, `redacted_claim_keys` / tag 60) + a `statement.py` schema layer.
-  Since the **service is the sole signer (Model A)**, authoritative statement
+  Since the **service is the sole signer**, authoritative statement
   construction is (re)implemented **in the C++ enclave**; the Python library is
   the **reference oracle** for that C++ code and the **researcher-side offline
-  verifier** (see §13).
+  verifier** (see §14).
 - **C++ token core** (`app/src/token/`: `cbor_value`, `cose`, `sd_cwt`,
   `statement`) — the in-enclave authoritative construction. Hand-assembles a
   `COSE_Sign1` with QCBOR and signs the `Sig_structure` via `ccf::crypto` (no
@@ -400,14 +658,14 @@ self-contained verifier; `policy_engine.h`; SCITT governance endpoints.
 
 **Dependency:** vendor **QCBOR** via CMake `FetchContent`.
 
-## 13. Off-chain token tooling: `sd_cwt` (Python)
-**Decision (Model A — service signs):** every statement is **constructed and
-signed by the service (TEE) in C++**, not by the submitter; researchers submit
+## 14. Off-chain token tooling: `sd_cwt` (Python)
+**Decision (service signs):** every statement is **constructed and
+signed by the service in C++**, not by the submitter; researchers submit
 **raw content**. The Python token tooling (issue/sign/redact/present/verify/
 validate) is therefore **(a)** the reference oracle mirroring the C++ issuer
 construction and **(b)** the researcher-side **offline verifier** (`validate`, or
-the receipt-anchored `validate_trusted`). This diverges from SCITT's "client
-signs, C++ verifies" split — here the service is the **sole signer**.
+the receipt-anchored `validate_trusted`). Here the service is the **sole signer**
+(submitters never sign).
 
 **`sd_cwt` is our own minimal, domain-agnostic package** (in-repo at `tools/sd_cwt/`,
 src-layout, own `pytest` suite). The core operates on arbitrary CBOR claims; the

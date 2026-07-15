@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #pragma once
 
-#include "token/cbor.h"
+#include "cbor.h"
 
 #include <cstdint>
 #include <string>

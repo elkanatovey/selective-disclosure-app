@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #include "token/sd_cwt.h"
 
-#include "token/cbor.h"
+#include "cbor.h"
 #include "token/cose.h"
 #include "token/sd_cwt_internal.h"
 
@@ -139,6 +139,37 @@ namespace sdcwt
       });
     }
 
+    // Re-emit a decoded scalar value without a preceding label, for the split
+    // key+value path used when the map label is a uint64 > INT64_MAX.
+    void emit_scalar_without_key(QCBOREncodeContext& ctx, const QCBORItem& v)
+    {
+      switch (v.uDataType)
+      {
+        case QCBOR_TYPE_INT64:
+          QCBOREncode_AddInt64(&ctx, v.val.int64);
+          break;
+        case QCBOR_TYPE_UINT64:
+          QCBOREncode_AddUInt64(&ctx, v.val.uint64);
+          break;
+        case QCBOR_TYPE_BYTE_STRING:
+          QCBOREncode_AddBytes(&ctx, v.val.string);
+          break;
+        case QCBOR_TYPE_TEXT_STRING:
+          QCBOREncode_AddText(&ctx, v.val.string);
+          break;
+        case QCBOR_TYPE_TRUE:
+        case QCBOR_TYPE_FALSE:
+          QCBOREncode_AddBool(&ctx, v.uDataType == QCBOR_TYPE_TRUE);
+          break;
+        case QCBOR_TYPE_NULL:
+          QCBOREncode_AddNULL(&ctx);
+          break;
+        default:
+          throw std::runtime_error(
+            "present: unsupported unprotected-header value type");
+      }
+    }
+
     // Re-emit a decoded unprotected-header scalar value under integer `label`.
     void emit_scalar_to_map(
       QCBOREncodeContext& ctx, int64_t label, const QCBORItem& v)
@@ -174,12 +205,14 @@ namespace sdcwt
     // Copy an issued token's unprotected-header map into `ctx`, preserving
     // every entry except sd_claims (17), which present() manages itself.
     // Mirrors the Python reference (dict(arr[1]) then override sd_claims), so
-    // entries such as kid / x5chain survive a present(). Only integer labels
-    // are supported (the COSE norm); a non-integer label throws rather than
-    // being silently dropped. Container values (arrays/maps, e.g. an x5chain
-    // certificate list) are copied verbatim as raw CBOR. The unprotected header
-    // is not signed, so entry order is immaterial and sd_claims is appended
-    // last.
+    // entries such as kid / x5chain survive a present(). Both definite-length
+    // and indefinite-length source maps are supported: the loop terminates on
+    // QCBOR_ERR_NO_MORE_ITEMS rather than on a pre-read count, so neither
+    // encoding causes a spurious throw. Integer labels in the full uint64 range
+    // are supported: labels that fit in int64 use the standard *ToMapN helpers;
+    // labels > INT64_MAX use a split QCBOREncode_AddUInt64 key + value emit.
+    // Container values (arrays/maps, e.g. an x5chain certificate list) are
+    // copied verbatim as raw CBOR. A non-integer label throws.
     void copy_uhdr_except_sd_claims(
       std::span<const uint8_t> uhdr_cbor, QCBOREncodeContext& ctx)
     {
@@ -191,14 +224,21 @@ namespace sdcwt
 
       QCBORItem map_item;
       QCBORDecode_EnterMap(&dc, &map_item);
-      const int count = map_item.val.uCount;
-      for (int i = 0; i < count; ++i)
+      (void)map_item; // uCount not used; loop terminates on NO_MORE_ITEMS
+
+      for (;;)
       {
         QCBORItem peek;
-        if (QCBORDecode_PeekNext(&dc, &peek) != QCBOR_SUCCESS)
+        const QCBORError peek_err = QCBORDecode_PeekNext(&dc, &peek);
+        if (peek_err == QCBOR_ERR_NO_MORE_ITEMS)
+        {
+          break;
+        }
+        if (peek_err != QCBOR_SUCCESS)
         {
           throw std::runtime_error("present: malformed unprotected header");
         }
+
         if (
           peek.uLabelType != QCBOR_TYPE_INT64 &&
           peek.uLabelType != QCBOR_TYPE_UINT64)
@@ -206,10 +246,17 @@ namespace sdcwt
           throw std::runtime_error(
             "present: unsupported non-integer unprotected-header label");
         }
-        const int64_t label = (peek.uLabelType == QCBOR_TYPE_INT64) ?
-          peek.label.int64 :
-          static_cast<int64_t>(peek.label.uint64);
-        const bool drop = (label == SD_CLAIMS_LABEL);
+
+        // Determine whether the label fits in int64 (all standard COSE labels
+        // do). SD_CLAIMS_LABEL (17) is always within int64 range.
+        const bool large_uint64 = (peek.uLabelType == QCBOR_TYPE_UINT64) &&
+          (peek.label.uint64 > static_cast<uint64_t>(INT64_MAX));
+        const int64_t label_i64 = large_uint64 ?
+          0 :
+          ((peek.uLabelType == QCBOR_TYPE_UINT64) ?
+            static_cast<int64_t>(peek.label.uint64) :
+            peek.label.int64);
+        const bool drop = !large_uint64 && (label_i64 == SD_CLAIMS_LABEL);
 
         if (peek.uDataType == QCBOR_TYPE_ARRAY)
         {
@@ -218,7 +265,15 @@ namespace sdcwt
           QCBORDecode_GetArray(&dc, &it, &raw);
           if (!drop)
           {
-            QCBOREncode_AddEncodedToMapN(&ctx, label, raw);
+            if (!large_uint64)
+            {
+              QCBOREncode_AddEncodedToMapN(&ctx, label_i64, raw);
+            }
+            else
+            {
+              QCBOREncode_AddUInt64(&ctx, peek.label.uint64);
+              QCBOREncode_AddEncoded(&ctx, raw);
+            }
           }
         }
         else if (peek.uDataType == QCBOR_TYPE_MAP)
@@ -228,7 +283,15 @@ namespace sdcwt
           QCBORDecode_GetMap(&dc, &it, &raw);
           if (!drop)
           {
-            QCBOREncode_AddEncodedToMapN(&ctx, label, raw);
+            if (!large_uint64)
+            {
+              QCBOREncode_AddEncodedToMapN(&ctx, label_i64, raw);
+            }
+            else
+            {
+              QCBOREncode_AddUInt64(&ctx, peek.label.uint64);
+              QCBOREncode_AddEncoded(&ctx, raw);
+            }
           }
         }
         else
@@ -237,7 +300,15 @@ namespace sdcwt
           QCBORDecode_VGetNext(&dc, &v);
           if (!drop)
           {
-            emit_scalar_to_map(ctx, label, v);
+            if (!large_uint64)
+            {
+              emit_scalar_to_map(ctx, label_i64, v);
+            }
+            else
+            {
+              QCBOREncode_AddUInt64(&ctx, peek.label.uint64);
+              emit_scalar_without_key(ctx, v);
+            }
           }
         }
       }
@@ -348,7 +419,8 @@ namespace sdcwt
       HashAlg sd_alg,
       const RandomSource& rng,
       size_t salt_len,
-      std::vector<Disclosure>& disclosures)
+      std::vector<Disclosure>& disclosures,
+      const Path& prefix = {})
     {
       if (node.kind == CborValue::Kind::Map)
       {
@@ -382,12 +454,18 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             value :
-            redact_node(value, deeper, sd_alg, rng, salt_len, disclosures);
+            redact_node(value, deeper, sd_alg, rng, salt_len, disclosures, [&] {
+              Path p = prefix;
+              p.push_back(key);
+              return p;
+            }());
 
           if (direct)
           {
             Disclosure d;
             d.key = key;
+            d.path = prefix;
+            d.path.push_back(key);
             d.salt = rng(salt_len);
             d.encoded = encode_map_disclosure(d.salt, child, key);
             d.digest = disclosure_digest(d.encoded, sd_alg);
@@ -435,12 +513,18 @@ namespace sdcwt
           const CborValue child = deeper.empty() ?
             node.array_v[i] :
             redact_node(
-              node.array_v[i], deeper, sd_alg, rng, salt_len, disclosures);
+              node.array_v[i], deeper, sd_alg, rng, salt_len, disclosures, [&] {
+                Path p = prefix;
+                p.push_back(static_cast<int64_t>(i));
+                return p;
+              }());
 
           if (direct)
           {
             Disclosure d;
             d.key = std::nullopt;
+            d.path = prefix;
+            d.path.push_back(static_cast<int64_t>(i));
             d.salt = rng(salt_len);
             d.encoded = encode_elem_disclosure(d.salt, child);
             d.digest = disclosure_digest(d.encoded, sd_alg);
@@ -586,14 +670,22 @@ namespace sdcwt
 
     const std::span<const uint8_t> uhdr_span{
       static_cast<const uint8_t*>(uhdr.ptr), uhdr.len};
+    // Preserve the original map's definite/indefinite-length encoding in the
+    // rebuilt unprotected header so round-tripping does not alter the wire
+    // format unnecessarily.
+    const bool uhdr_indefinite =
+      (uhdr_item.val.uCount == QCBOR_COUNT_INDICATES_INDEFINITE_LENGTH);
 
     return cbor_encode([&](QCBOREncodeContext& ctx) {
       QCBOREncode_AddTag(&ctx, 18); // COSE_Sign1
       QCBOREncode_OpenArray(&ctx);
       QCBOREncode_AddBytes(&ctx, phdr);
-      QCBOREncode_OpenMap(&ctx);
       // Carry through any pre-existing unprotected-header entries (e.g. kid,
       // x5chain) so present() never silently drops them.
+      if (uhdr_indefinite)
+        QCBOREncode_OpenMapIndefiniteLength(&ctx);
+      else
+        QCBOREncode_OpenMap(&ctx);
       copy_uhdr_except_sd_claims(uhdr_span, ctx);
       if (!selected.empty())
       {
@@ -604,7 +696,10 @@ namespace sdcwt
         }
         QCBOREncode_CloseArray(&ctx);
       }
-      QCBOREncode_CloseMap(&ctx);
+      if (uhdr_indefinite)
+        QCBOREncode_CloseMapIndefiniteLength(&ctx);
+      else
+        QCBOREncode_CloseMap(&ctx);
       QCBOREncode_AddBytes(&ctx, payload);
       QCBOREncode_AddBytes(&ctx, sig);
       QCBOREncode_CloseArray(&ctx);

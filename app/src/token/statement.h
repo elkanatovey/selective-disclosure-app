@@ -29,6 +29,12 @@ namespace sdcwt::statement
   // Number of content fields carried by every statement (strict uniformity).
   inline constexpr size_t CONTENT_FIELD_COUNT = 9;
 
+  // Schema/profile version this build implements. Bump on any change to the
+  // content field set, their IDs, or the redaction/uniformity rules (DESIGN
+  // §12.1). Surfaced by GET /version so a client knows which schema a live
+  // service speaks; the authoritative binding remains the app code measurement.
+  inline constexpr int64_t SCHEMA_VERSION = 1;
+
   // A statement's content. Absent fields are garbage-padded so every statement
   // has an identical redacted shape (report and note are indistinguishable).
   struct Fields

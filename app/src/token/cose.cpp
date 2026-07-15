@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #include "token/cose.h"
 
-#include "token/cbor.h"
+#include "cbor.h"
 
 #include <ccf/crypto/curve.h>
 #include <ccf/crypto/ecdsa.h>

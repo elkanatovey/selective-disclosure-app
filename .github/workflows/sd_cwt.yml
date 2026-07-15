@@ -1,8 +1,8 @@
 name: sd_cwt
 
 # CI for the off-chain SD-CWT Python package. Scoped to its path so unrelated
-# changes don't trigger it. Inspired by the SCITT repo's split of format/type
-# checks from the test run, with pip caching for fast installs.
+# changes don't trigger it. Splits format/type checks from the test run, with
+# pip caching for fast installs.
 on:
   push:
     paths:

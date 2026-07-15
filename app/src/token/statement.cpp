@@ -78,11 +78,28 @@ namespace sdcwt::statement
     const RandomSource& rng,
     size_t salt_len)
   {
+    // Redact each `references` element individually (in addition to the whole
+    // field), so the Operator can later disclose a single reference without
+    // revealing its siblings. Only when the field is actually present as an
+    // array — an absent field is a garbage sentinel with no elements. This does
+    // not change the redacted shape at rest: the whole array is still one
+    // top-level Redacted Claim Hash; the element hashes live inside it and are
+    // seen only once the array itself is disclosed.
+    std::vector<Path> redact_paths;
+    if (fields.references.has_value())
+    {
+      for (size_t i = 0; i < fields.references->size(); ++i)
+      {
+        redact_paths.push_back(
+          Path{PathElem(REFERENCES), PathElem(static_cast<int64_t>(i))});
+      }
+    }
+
     return sdcwt::detail::issue(
       detail::build_claims(iss, iat, fields, rng, salt_len),
       key,
       sd_alg,
-      {},
+      redact_paths,
       rng,
       salt_len);
   }
