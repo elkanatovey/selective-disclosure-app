@@ -10,7 +10,6 @@
 #include "ccf/http_consts.h"
 #include "ccf/http_query.h"
 #include "ccf/indexing/strategies/seqnos_by_key_bucketed.h"
-#include "ccf/json_handler.h"
 #include "ccf/receipt.h"
 #include "ccf/tx_status.h"
 #include "ccf/version.h"
@@ -98,6 +97,19 @@ namespace selectivedisclosure
     return value;
   }
 
+  // Send a 200 response with the given content type and body. Centralises the
+  // status + Content-Type + body triple shared by every success path (COSE
+  // statements/receipts and CBOR metadata).
+  inline void respond_ok(
+    ccf::RpcContext& rpc_ctx,
+    const std::string_view& content_type,
+    std::vector<uint8_t> body)
+  {
+    rpc_ctx.set_response_status(HTTP_STATUS_OK);
+    rpc_ctx.set_response_header(ccf::http::headers::CONTENT_TYPE, content_type);
+    rpc_ctx.set_response_body(std::move(body));
+  }
+
   class ReportLedgerHandlers : public ccf::UserEndpointRegistry
   {
   public:
@@ -143,11 +155,8 @@ namespace selectivedisclosure
           QCBOREncode_AddSZStringToMap(&c, "ccf_version", ccf::ccf_version);
           QCBOREncode_CloseMap(&c);
         });
-        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-        ctx.rpc_ctx->set_response_header(
-          ccf::http::headers::CONTENT_TYPE,
-          ccf::http::headervalues::contenttype::CBOR);
-        ctx.rpc_ctx->set_response_body(body);
+        respond_ok(
+          *ctx.rpc_ctx, ccf::http::headervalues::contenttype::CBOR, body);
       };
       make_read_only_endpoint(
         "/version", HTTP_GET, get_version, {ccf::empty_auth_policy})
@@ -247,11 +256,8 @@ namespace selectivedisclosure
           QCBOREncode_AddBytesToMap(&c, "receipt", sdcwt::to_ubc(receipt));
           QCBOREncode_CloseMap(&c);
         });
-        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-        ctx.rpc_ctx->set_response_header(
-          ccf::http::headers::CONTENT_TYPE,
-          ccf::http::headervalues::contenttype::CBOR);
-        ctx.rpc_ctx->set_response_body(body);
+        respond_ok(
+          *ctx.rpc_ctx, ccf::http::headervalues::contenttype::CBOR, body);
       };
 
       auto key_is_committed =
@@ -326,11 +332,10 @@ namespace selectivedisclosure
         const auto transparent =
           present_transparent(entry.value(), state->receipt, {});
 
-        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-        ctx.rpc_ctx->set_response_header(
-          ccf::http::headers::CONTENT_TYPE,
-          ccf::http::headervalues::contenttype::COSE);
-        ctx.rpc_ctx->set_response_body(transparent);
+        respond_ok(
+          *ctx.rpc_ctx,
+          ccf::http::headervalues::contenttype::COSE,
+          transparent);
       };
 
       auto is_tx_committed =
@@ -347,8 +352,7 @@ namespace selectivedisclosure
       make_read_only_endpoint(
         "/statements/{txid}",
         HTTP_GET,
-        [get_statement_adapter](
-          ccf::endpoints::ReadOnlyEndpointContext& ctx) {
+        [get_statement_adapter](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
           if (!validate_txid_format(*ctx.rpc_ctx, "txid"))
             return;
           get_statement_adapter(ctx);
@@ -370,15 +374,13 @@ namespace selectivedisclosure
             return;
           }
           const auto receipt = make_cose_receipt(state->receipt);
-          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-          ctx.rpc_ctx->set_response_header(
-            ccf::http::headers::CONTENT_TYPE,
-            ccf::http::headervalues::contenttype::COSE);
-          ctx.rpc_ctx->set_response_body(receipt);
+          respond_ok(
+            *ctx.rpc_ctx, ccf::http::headervalues::contenttype::COSE, receipt);
         };
 
-      auto get_statement_receipt_adapter = ccf::historical::read_only_adapter_v4(
-        get_statement_receipt, context, is_tx_committed, txid_from_path);
+      auto get_statement_receipt_adapter =
+        ccf::historical::read_only_adapter_v4(
+          get_statement_receipt, context, is_tx_committed, txid_from_path);
       make_read_only_endpoint(
         "/statements/{txid}/receipt",
         HTTP_GET,
@@ -468,11 +470,8 @@ namespace selectivedisclosure
           return;
         }
 
-        ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-        ctx.rpc_ctx->set_response_header(
-          ccf::http::headers::CONTENT_TYPE,
-          ccf::http::headervalues::contenttype::COSE);
-        ctx.rpc_ctx->set_response_body(presented);
+        respond_ok(
+          *ctx.rpc_ctx, ccf::http::headervalues::contenttype::COSE, presented);
       };
 
       auto make_disclosure_adapter = ccf::historical::read_only_adapter_v4(
@@ -549,57 +548,53 @@ namespace selectivedisclosure
       // statement (every disclosure presented + receipt), for the Operator.
       // Same machinery as make_disclosure, but presents all disclosures.
       // -------
-      auto get_operator_statement =
-        [](
-          ccf::endpoints::ReadOnlyEndpointContext& ctx,
-          ccf::historical::StatePtr state) {
-          mark_no_store(*ctx.rpc_ctx);
-          const auto token = committed_statement_token(state, *ctx.rpc_ctx);
-          if (!token.has_value())
-          {
-            return;
-          }
+      auto get_operator_statement = [](
+                                      ccf::endpoints::ReadOnlyEndpointContext&
+                                        ctx,
+                                      ccf::historical::StatePtr state) {
+        mark_no_store(*ctx.rpc_ctx);
+        const auto token = committed_statement_token(state, *ctx.rpc_ctx);
+        if (!token.has_value())
+        {
+          return;
+        }
 
-          std::vector<uint8_t> presented;
-          auto htx = state->store->create_read_only_tx();
-          const auto stored =
-            htx.template ro<DisclosureTable>(DISCLOSURE_TABLE)->get();
-          if (!stored.has_value())
+        std::vector<uint8_t> presented;
+        auto htx = state->store->create_read_only_tx();
+        const auto stored =
+          htx.template ro<DisclosureTable>(DISCLOSURE_TABLE)->get();
+        if (!stored.has_value())
+        {
+          // No retained confidential store => nothing to unredact. Match
+          // make_disclosure's 404 rather than returning an all-redacted 200,
+          // so both Operator endpoints report a missing store consistently.
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_NOT_FOUND,
+            ccf::errors::ResourceNotFound,
+            "No confidential disclosures were retained for this statement.");
+          return;
+        }
+        try
+        {
+          std::vector<std::vector<uint8_t>> all;
+          for (auto& d : decode_disclosure_store(stored.value()))
           {
-            // No retained confidential store => nothing to unredact. Match
-            // make_disclosure's 404 rather than returning an all-redacted 200,
-            // so both Operator endpoints report a missing store consistently.
-            ctx.rpc_ctx->set_error(
-              HTTP_STATUS_NOT_FOUND,
-              ccf::errors::ResourceNotFound,
-              "No confidential disclosures were retained for this statement.");
-            return;
+            all.push_back(std::move(d.encoded));
           }
-          try
-          {
-            std::vector<std::vector<uint8_t>> all;
-            for (auto& d : decode_disclosure_store(stored.value()))
-            {
-              all.push_back(std::move(d.encoded));
-            }
-            presented = present_transparent(token.value(), state->receipt, all);
-          }
-          catch (const std::exception& e)
-          {
-            ctx.rpc_ctx->set_error(
-              HTTP_STATUS_INTERNAL_SERVER_ERROR,
-              ccf::errors::InternalError,
-              fmt::format(
-                "Failed to build unredacted statement: {}", e.what()));
-            return;
-          }
+          presented = present_transparent(token.value(), state->receipt, all);
+        }
+        catch (const std::exception& e)
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_INTERNAL_SERVER_ERROR,
+            ccf::errors::InternalError,
+            fmt::format("Failed to build unredacted statement: {}", e.what()));
+          return;
+        }
 
-          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-          ctx.rpc_ctx->set_response_header(
-            ccf::http::headers::CONTENT_TYPE,
-            ccf::http::headervalues::contenttype::COSE);
-          ctx.rpc_ctx->set_response_body(presented);
-        };
+        respond_ok(
+          *ctx.rpc_ctx, ccf::http::headervalues::contenttype::COSE, presented);
+      };
 
       auto get_operator_statement_adapter =
         ccf::historical::read_only_adapter_v4(
@@ -729,11 +724,8 @@ namespace selectivedisclosure
             QCBOREncode_CloseMap(&c);
           });
 
-          ctx.rpc_ctx->set_response_status(HTTP_STATUS_OK);
-          ctx.rpc_ctx->set_response_header(
-            ccf::http::headers::CONTENT_TYPE,
-            ccf::http::headervalues::contenttype::CBOR);
-          ctx.rpc_ctx->set_response_body(body);
+          respond_ok(
+            *ctx.rpc_ctx, ccf::http::headervalues::contenttype::CBOR, body);
         };
 
       make_read_only_endpoint(

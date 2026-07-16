@@ -111,8 +111,6 @@ _TYPES: dict[int, tuple[type, ...]] = {
 #: Length (bytes) of the random garbage sentinel padding absent content fields.
 PAD_LEN = 16
 
-_REDACTED_CLAIM_KEYS = 59  # simple(59): "redacted_claim_keys" placeholder key
-
 
 def build_claims(iss: str, iat: int, fields: dict[int, Any]) -> dict[Any, Any]:
     """Assemble a full, strictly-uniform claims map.
@@ -253,7 +251,7 @@ def redacted_shape(token: bytes) -> tuple[tuple[int, ...], int]:
     level -- the invariant strict uniformity guarantees.
     """
     payload = _payload_of(token)
-    red_key = CBORSimpleValue(_REDACTED_CLAIM_KEYS)
+    red_key = CBORSimpleValue(REDACTED_CLAIM_KEYS)
     n_redacted = len(payload.get(red_key, []))
     clear_keys = tuple(sorted(k for k in payload if isinstance(k, int)))
     return clear_keys, n_redacted
