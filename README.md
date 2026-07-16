@@ -44,7 +44,7 @@ git submodule update --init --recursive   # first checkout
 Build outputs land under the mounted repo (`.ccf-install/`, `*/build/`) so they
 persist across container restarts.
 
-## Demo (one command)
+## Interactive Demo
 For a narrated end-to-end walkthrough — boot a node, submit a report, retrieve
 the redacted token, then have the Operator pull the full report and release a
 *partial* disclosure — run:
