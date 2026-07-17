@@ -14,7 +14,7 @@ at `app/src/app.cpp`, currently a plain key/value store.
 ## 1. Goal / use case
 - Registration is provable and tamper-evident via monotonic seqno ordering.
 - Report contents are hidden by default.
-- The Operator can selectively disclose chosen fields to a researcher to prove a
+- The Operator can selectively disclose chosen fields to a researcher to provide evidence of a
   duplicate, revealing nothing else.
 
 A statement is a multi-field object. The content fields are `title`, `body`,
