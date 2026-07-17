@@ -1,15 +1,18 @@
 # Selective Disclosure Report Ledger
 
 A confidential, append-only bug-report transparency ledger built on
-[CCF](https://github.com/microsoft/CCF), the Confidential Consortium Framework.
+[CCF](https://github.com/microsoft/CCF).
 
 Reports are stored as redacted, service-signed
-[SD-CWT](https://datatracker.ietf.org/doc/draft-ietf-spice-sd-cwt/) tokens, or
-Selective Disclosure CBOR Web Tokens. Anyone can prove a report's existence,
-ordering, and integrity, while its contents stay hidden. A vendor triaging
-reports acts as the Operator, a CCF user authorised by governance, and can
-selectively disclose individual fields of a stored report. For instance, it can
-prove that a new submission duplicates an earlier one without revealing the rest.
+[SD-CWT](https://datatracker.ietf.org/doc/draft-ietf-spice-sd-cwt/) tokens.
+This enables proving a reports existence and ordering, while masking it's contents.
+A vendor triaging
+reports acts as the service Operator, a CCF user authorised by governance, and can
+choose to selectively disclose individual fields of a stored report to users.
+It can also prove statements about hidden fields in a stored report without revealing
+the contents of the field.
+This can be used to release evidence that a report is a duplicate of a previous report 
+without revealing the full contents of the previous report.
 
 The service is the sole signer. It builds and signs every statement, and
 submitters only ever send raw content. Every statement has the same redacted
@@ -24,21 +27,21 @@ API contract.
   store.
 - `tools/sd_cwt/` — a Python SD-CWT reference library that issues, redacts,
   presents, and verifies tokens. It is the conformance oracle for the C++ core
-  and the researcher-side offline verifier.
+  and the researcher-side offline verifier of released unredacted tokens.
 - `spec/` — CDDL schemas (RFC 8610) for the statement and API CBOR formats, the
   language-neutral contract both implementations follow.
 - `third_party/CCF` — CCF as a git submodule, pinned to `ccf-7.0.5`.
 - `docker/` — dev image and build helpers.
 - `test/e2e/` — pytest end-to-end suite against a live sandbox node.
 
-## Build (edit on host, build in container)
+## Build
 ```bash
 git submodule update --init --recursive   # first checkout
-./docker/build-image.sh                   # build the toolchain image (once)
+./docker/build-image.sh                   # build the toolchain image
 ./docker/dev.sh                           # enter dev container (repo at /workspace)
 
 # Inside the container:
-./docker/build-ccf.sh                     # build + install CCF (slow, first time only)
+./docker/build-ccf.sh                     # build + install CCF
 ./docker/build-app.sh                     # build the app -> app/build/selective_disclosure
 ```
 Build outputs land under the mounted repo, in `.ccf-install/` and `*/build/`, so
@@ -95,7 +98,7 @@ curl -s --cacert "$CA" https://127.0.0.1:8000/app/version \
 `curl` is fine for smoke tests, but bodies are CBOR and submissions must be
 CBOR-encoded, so the Python example below is the practical way to use the API.
 
-## Example (Python)
+## Python Example
 Requires `pip install requests` and `pip install -e tools/sd_cwt`, which brings
 in `cbor2`, `pycose`, and `cryptography`. Point it at a running sandbox.
 ```python
@@ -111,7 +114,7 @@ operator = (str(COMMON / "user0_cert.pem"), str(COMMON / "user0_privk.pem"))
 # 0) One-time: initialise the issuer signing key (governance / member-gated).
 requests.post(f"{BASE}/signing-key", data=b"", cert=member, verify=CA)
 
-# 1) Submit a report (CBOR). The committed transaction id comes back in a header.
+# 1) Submit a report. The committed transaction id comes back in a header.
 report = {"title": "heap overflow", "component": "parser",
           "severity": "high", "fingerprint": b"\xde\xad\xbe\xef"}
 r = requests.post(f"{BASE}/reports", data=cbor2.dumps(report),
@@ -167,7 +170,7 @@ INSTALL_DIR=$PWD/.ccf-install ./scripts/ci-e2e-tests.sh
 ```
 
 ## Notes
-- CCF is built from source as a submodule, so the framework itself can be
-  modified, and all CCF build options are left enabled. Parallelism is throttled
+- CCF is built from source as a submodule for dev purposes,
+  and all CCF build options are left enabled. Parallelism is throttled
   in `docker/build-ccf.sh` through `NPROC_COMPILE` and `NPROC_LINK` to avoid
-  running out of memory on 16 GB.
+  running out of memory on 16 GB RAM machines.
