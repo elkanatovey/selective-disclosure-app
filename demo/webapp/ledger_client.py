@@ -93,9 +93,19 @@ def report_from_form(form: dict) -> dict:
         if raw is None or (isinstance(raw, str) and raw.strip() == ""):
             continue
         if kind == "hex":
-            report[name] = bytes.fromhex(raw.strip().removeprefix("0x"))
+            try:
+                report[name] = bytes.fromhex(raw.strip().removeprefix("0x"))
+            except ValueError:
+                raise ValueError(
+                    f"{name} must be hex bytes (e.g. deadbeef), got {raw!r}"
+                )
         elif kind == "int":
-            report[name] = int(raw)
+            try:
+                report[name] = int(raw.strip())
+            except ValueError:
+                raise ValueError(
+                    f"{name} must be a whole number, e.g. a unix time, got {raw!r}"
+                )
         elif kind == "list":
             items = [line.strip() for line in raw.replace(",", "\n").splitlines()]
             report[name] = [i for i in items if i]

@@ -97,6 +97,7 @@ textarea { resize: vertical; }
 .kv .k { color: var(--researcher); font-weight: 600; }
 .kv .v { font-family: ui-monospace, monospace; word-break: break-all; }
 .muted { color: var(--muted); font-size: 14px; }
+.err { color: var(--err); font-size: 14px; margin: 8px 0 0; }
 
 /* operator */
 .split { display: grid; grid-template-columns: 260px 1fr; gap: 22px; margin-top: 16px; }

@@ -114,9 +114,11 @@ function initMember() {
 // --- Client -----------------------------------------------------------------
 function initClient() {
   const form = $("#report-form");
+  const errBox = $("#client-error");
   form.onsubmit = async (e) => {
     e.preventDefault();
     const result = $("#client-result");
+    errBox.classList.add("hidden");
     try {
       const r = await api("POST", "/api/client/reports", new FormData(form));
       $("#r-txid").textContent = r.txid;
@@ -126,7 +128,10 @@ function initClient() {
         : `✓ no submitted plaintext appears in the token bytes`;
       renderFields($("#r-public"), r.public_view);
       result.classList.remove("hidden");
-    } catch (err) { alert("submit failed: " + err.message); }
+    } catch (err) {
+      errBox.textContent = "⚠ " + err.message;
+      errBox.classList.remove("hidden");
+    }
   };
 }
 

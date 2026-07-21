@@ -124,8 +124,6 @@ async def submit_report(request: Request):
         report = report_from_form(form)
     except ValueError as e:
         raise HTTPException(400, f"bad field: {e}")
-    if not report:
-        raise HTTPException(400, "empty report")
 
     try:
         txid = await asyncio.to_thread(_anon().submit_report, report)
@@ -231,8 +229,6 @@ async def operator_followup(parent_txid: str, request: Request):
         report = report_from_form(form)
     except ValueError as e:
         raise HTTPException(400, f"bad field: {e}")
-    if not report:
-        raise HTTPException(400, "empty follow-up")
     try:
         txid = await asyncio.to_thread(
             clients["operator"].submit_report, report, parent_txid

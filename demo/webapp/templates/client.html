@@ -7,6 +7,7 @@
     back a redacted token. The contents never appear on the wire; only
     existence and ordering are provable to the public.
   </p>
+  <p class="muted">All fields are optional — fill in as many or as few as you like.</p>
 
   <form id="report-form" class="form">
     {% for name, kind in submit_fields %}
@@ -14,12 +15,17 @@
       <span>{{ name }}{% if kind == "hex" %} <em>(hex)</em>{% elif kind == "int" %} <em>(unix time)</em>{% elif kind == "list" %} <em>(one per line)</em>{% endif %}</span>
       {% if kind == "textarea" or kind == "list" %}
       <textarea name="{{ name }}" rows="2"></textarea>
+      {% elif kind == "hex" %}
+      <input type="text" name="{{ name }}" inputmode="latin" pattern="[0-9a-fA-Fx]*" placeholder="deadbeef">
+      {% elif kind == "int" %}
+      <input type="number" name="{{ name }}" min="0" step="1" placeholder="e.g. 1767225600">
       {% else %}
       <input type="text" name="{{ name }}">
       {% endif %}
     </label>
     {% endfor %}
     <button type="submit" class="btn primary">Submit report</button>
+    <p id="client-error" class="err hidden"></p>
   </form>
 
   <div id="client-result" class="result hidden">
