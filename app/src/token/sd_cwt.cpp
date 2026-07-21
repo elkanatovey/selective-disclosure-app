@@ -365,7 +365,7 @@ namespace sdcwt
     // Walk `path` through `root` and confirm every element resolves to an
     // existing map entry / in-range array element. A redaction path that
     // matches nothing would otherwise silently produce no redaction, so we
-    // reject it here (stricter than the Python reference, which ignores it).
+    // reject it here, matching the fail-closed Python reference behavior.
     bool path_resolves(const CborValue& root, const Path& path)
     {
       const CborValue* node = &root;

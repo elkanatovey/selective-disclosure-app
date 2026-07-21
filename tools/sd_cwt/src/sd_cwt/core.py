@@ -479,6 +479,8 @@ def issue(
         (shorthand for `(key, index)`).
       * `redact_paths` — arbitrary-depth paths, e.g. `(503, "region")` or
         `(700, "a", "b", 1)`, mixing map keys and array indices.
+    Every requested path must resolve to an existing entry or element; otherwise
+    issuance fails with `ValueError` before any token is created.
 
     `cnf`, if given, is a public key embedded as the RFC 8747 confirmation
     claim (8) in the clear payload; the holder of the matching private key
