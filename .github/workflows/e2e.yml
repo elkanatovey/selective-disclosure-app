@@ -11,6 +11,7 @@ on:
       - "tools/sd_cwt/**"
       - "docker/build-app.sh"
       - "scripts/ci-e2e-tests.sh"
+      - "scripts/setup-sandbox-venv.sh"
       - ".github/workflows/e2e.yml"
   pull_request:
     paths:
@@ -19,6 +20,7 @@ on:
       - "tools/sd_cwt/**"
       - "docker/build-app.sh"
       - "scripts/ci-e2e-tests.sh"
+      - "scripts/setup-sandbox-venv.sh"
       - ".github/workflows/e2e.yml"
   workflow_dispatch:
 

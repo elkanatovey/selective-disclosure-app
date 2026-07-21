@@ -1,21 +1,22 @@
 ; Copyright (c) Microsoft Corporation.
 ; Licensed under the MIT License.
 ;
-; CDDL (RFC 8610) for the HTTP request/response CBOR bodies of the Selective
-; Disclosure Report Ledger. Endpoint semantics, status codes and auth live in
-; docs/API.md; this file pins the CBOR shapes.
+; CDDL (RFC 8610) for the HTTP request and response bodies of the Selective
+; Disclosure Report Ledger. Endpoint semantics, status codes, and auth are
+; documented in docs/API.md.
 ;
-; Conventions: requests are application/cbor; responses are application/cbor or
-; application/cose (statements/receipts -- see spec/statement.cddl). 204/202
-; responses carry no body (the transaction id is in the x-ms-ccf-transaction-id
-; header). Error bodies are the CCF standard JSON envelope (not CBOR).
+; Requests use application/cbor. Responses use application/cbor or
+; application/cose for statements and receipts (see spec/statement.cddl).
+; 204/202 responses have no body; the transaction id is in the
+; x-ms-ccf-transaction-id header. Error bodies use CCF's standard JSON
+; envelope.
 
 ; ==========================================================================
 ; POST /reports  (and  POST /reports/{parent_txid}/follow-ups)
-; Request body: a content-fields map. All fields optional; native CBOR types.
-; `parent` is NOT accepted here -- it is server-derived for follow-ups.
-; Response: 204 (sync) / 202 (?wait=false), no body; COSE statement is fetched
-; separately via GET /statements/{txid}.
+; Request body: a content-fields map. All fields are optional and use native
+; CBOR types. `parent` is not accepted; the server derives it for follow-ups.
+; Response: 204 (sync) or 202 (?wait=false), with no body. Fetch the COSE
+; statement separately with GET /statements/{txid}.
 ; ==========================================================================
 report-submission = {
   ? "title"       : tstr,
@@ -30,10 +31,10 @@ report-submission = {
 
 ; ==========================================================================
 ; POST /operator/statements/{txid}/disclosure   (Operator)
-; Request: the fields/paths to reveal. An entry is either a whole top-level
-; field (by name) or a path to a nested array element ([name, index, ...]).
-; Response: application/cose -- a presented transparent statement
-; (see spec/statement.cddl), or the CCF JSON error envelope.
+; Request: fields or paths to reveal. An entry is either a top-level field name
+; or a path to a nested array element ([name, index, ...]).
+; Response: application/cose containing a presented statement (see
+; spec/statement.cddl), or the CCF JSON error envelope.
 ; ==========================================================================
 disclosure-request = {
   "fields" : [* disclosure-target],
@@ -63,8 +64,8 @@ signing-key-response = {
 
 ; ==========================================================================
 ; GET /operator/statements?from={seqno}&to={seqno}   (Operator)
-; A page of statement txids over a seqno range, plus the ledger watermark and
-; (when the range spans more than one page) a `next` cursor.
+; A page of statement txids over a seqno range, with the ledger watermark and,
+; when needed, a `next` cursor.
 ; ==========================================================================
 statement-stream-response = {
   "statements" : [* txid],   ; statement txids in [from, to], seqno order
@@ -78,10 +79,9 @@ statement-stream-response = {
 txid = tstr
 
 ; ==========================================================================
-; Confidential disclosure store (INTERNAL -- the private DisclosureTable value,
-; never on the wire). An ordered array of [path, encoded-disclosure] pairs;
-; `path` is the disclosure's absolute location in the claims tree. See
-; app/src/disclosure_store.{h,cpp}.
+; Confidential disclosure store (internal; not sent over the wire). An ordered
+; array of [path, encoded-disclosure] pairs. `path` is the disclosure's
+; absolute location in the claims tree. See app/src/disclosure_store.{h,cpp}.
 ; ==========================================================================
 disclosure-store = [* [path, encoded : bstr]]
 path = [* (int / tstr)]   ; map keys (int) and/or array indices (int) / names (tstr)
