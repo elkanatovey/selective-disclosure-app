@@ -2,7 +2,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Run the sd_cwt format / type / notice / test checks (mirrors the CI jobs).
+# Run a local superset of the CI checks. CI keeps lint and tests in separate
+# dependency environments; this script combines them and also checks notices.
 # Pass -f to auto-fix formatting and import order.
 set -euo pipefail
 cd "$(dirname "$0")/.."
