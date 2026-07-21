@@ -5,7 +5,7 @@ A confidential, append-only bug-report transparency ledger built on
 
 Reports are stored as redacted, service-signed
 [SD-CWT](https://datatracker.ietf.org/doc/draft-ietf-spice-sd-cwt/) tokens.
-This enables proving a reports existence and ordering, while masking it's contents.
+This enables proving a report's existence and ordering while masking its contents.
 A vendor triaging
 reports acts as the service Operator, a CCF user authorised by governance, and can
 choose to selectively disclose individual fields of a stored report to users.
