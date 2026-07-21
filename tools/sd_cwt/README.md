@@ -54,7 +54,9 @@ kbt_verify(kbt, issuer_pub, *, expected_aud, expected_cnonce=None) -> KBTResult
 Redaction targets are paths from the root: `redact` covers whole top-level map
 entries, `redact_elements` covers top-level array indices, and `redact_paths`
 covers arbitrary depth (mixing map keys and array indices). Disclosing a redacted
-parent reveals a still-redacted child (ancestor-disclosure rule).
+parent reveals a still-redacted child (ancestor-disclosure rule). Every requested
+path must resolve to an existing entry or element; otherwise `issue` raises
+`ValueError` rather than risk leaving intended data unredacted.
 
 `sd_cwt` is domain-agnostic (arbitrary CBOR claims); the report/note schema and
 `parent_report` rules live in the application layer on top.

@@ -360,6 +360,38 @@ def _check_date_claims(claims: Any) -> None:
             raise ValueError("exp/nbf/iat magnitude exceeds 2^53 (draft-08 s5.2)")
 
 
+def _validate_redaction_path(root: Any, path: tuple) -> None:
+    """Require every path element to select an existing map entry or array item."""
+    if not path:
+        raise ValueError("redact_path must not be empty")
+
+    node = root
+    for elem in path:
+        if isinstance(node, dict):
+            if (
+                isinstance(elem, bool)
+                or not isinstance(elem, (int, str))
+                or elem not in node
+            ):
+                raise ValueError(
+                    "redact_path does not resolve to an existing claim/element"
+                )
+            node = node[elem]
+        elif isinstance(node, list):
+            if (
+                isinstance(elem, bool)
+                or not isinstance(elem, int)
+                or elem < 0
+                or elem >= len(node)
+            ):
+                raise ValueError(
+                    "redact_path does not resolve to an existing claim/element"
+                )
+            node = node[elem]
+        else:
+            raise ValueError("redaction path descends into a non-container value")
+
+
 def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> Any:
     """Recursively redact `node` at the given relative `paths`.
 
@@ -464,6 +496,9 @@ def issue(
     work: dict[ClaimKey, Any] = dict(claims)
     if cnf is not None:
         work[8] = _cnf_from_key(cnf)  # RFC 8747 confirmation claim (clear)
+
+    for path in paths:
+        _validate_redaction_path(work, path)
 
     disclosures: list[Disclosure] = []
     payload = _redact_node(work, paths, sd_alg, disclosures)

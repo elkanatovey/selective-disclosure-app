@@ -101,3 +101,22 @@ def test_redact_paths_equivalent_to_top_level_shortcuts(signer):
     assert out.clear[1] == "iss"
     assert out.disclosed[500] == "secret"
     assert out.clear[502] == ["e0", "e1"]
+
+
+@pytest.mark.parametrize(
+    "redaction",
+    [
+        {"redact": {999}},
+        {"redact": set(), "redact_elements": {502: {2}}},
+        {"redact": set(), "redact_paths": [()]},
+        {"redact": set(), "redact_paths": [(700, "missing")]},
+        {"redact": set(), "redact_paths": [(700, "items", -1)]},
+        {"redact": set(), "redact_paths": [(700, "items", "0")]},
+        {"redact": set(), "redact_paths": [(700, "scalar", "child")]},
+    ],
+)
+def test_issue_rejects_unresolved_redaction_paths(signer, redaction):
+    claims = {502: ["a", "b"], 700: {"items": ["x"], "scalar": "value"}}
+
+    with pytest.raises(ValueError):
+        sd_cwt.issue(claims, signer=signer, **redaction)
