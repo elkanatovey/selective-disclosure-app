@@ -55,8 +55,8 @@ and release a partial disclosure.
 ./demo/run_demo.sh          # add --step to pause between steps
 ```
 The demo builds nothing itself. It needs the app built with
-`./docker/build-app.sh` and a CCF install at `./.ccf-install`. On the first run
-it creates a Python venv for the sandbox and verifier, boots the node, runs
+`./docker/build-app.sh` and a CCF install at `./.ccf-install`. It creates or
+refreshes a Python venv for the sandbox and verifier, boots the node, runs
 [`demo/demo.py`](demo/demo.py), and tears the node down on exit. See
 [`demo/`](demo) for details.
 

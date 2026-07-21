@@ -8,7 +8,7 @@
 # Prereqs (all produced by the normal dev flow):
 #   - the app is built:            ./docker/build-app.sh   (-> app/build/selective_disclosure)
 #   - a CCF install is available:  ./.ccf-install          (symlink or INSTALL_DIR)
-# The script creates a Python venv for the sandbox + demo on first run.
+# The script creates or refreshes a Python venv for the sandbox + demo.
 #
 # Usage:
 #   ./demo/run_demo.sh            # runs straight through
@@ -34,15 +34,8 @@ if [ ! -x "$APP" ]; then
   exit 1
 fi
 
-# venv with the sandbox runtime + the demo's verifier deps.
-if [ ! -f "$VENV_DIR/bin/activate" ]; then
-  echo "== First run: creating $VENV_DIR (sandbox + demo deps) =="
-  python3 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/pip" install -q -U pip
-  "$VENV_DIR/bin/pip" install -q "ccf==${CCF_PY_VERSION:-7.0.6}"
-  "$VENV_DIR/bin/pip" install -q -r .ccf-install/bin/requirements.txt
-  "$VENV_DIR/bin/pip" install -q requests "cbor2<5.6" pycose -e tools/sd_cwt
-fi
+echo "== Creating or refreshing $VENV_DIR (sandbox + verifier deps) =="
+./scripts/setup-sandbox-venv.sh "$VENV_DIR"
 
 LOG="$(mktemp)"
 NODE_PID=""
