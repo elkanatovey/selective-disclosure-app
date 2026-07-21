@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · SD Ledger</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body data-page="{{ title|lower }}">
+  <header class="topbar">
+    <a class="brand" href="/">SD&nbsp;Ledger</a>
+    <nav>
+      <a href="/member" target="member">Member</a>
+      <a href="/client" target="client">Client</a>
+      <a href="/operator" target="operator">Operator</a>
+      <a href="/researcher" target="researcher">Researcher</a>
+      <a href="/wall" target="wall">Wall</a>
+    </nav>
+    <span id="health" class="pill pill-wait" title="{{ node_url }}">connecting…</span>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <aside id="ticker" class="ticker" aria-live="polite">
+    <h3>Live events</h3>
+    <ul id="ticker-list"></ul>
+  </aside>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
