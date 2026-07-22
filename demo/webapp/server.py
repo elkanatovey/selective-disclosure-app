@@ -25,9 +25,11 @@ from .ledger_client import (
     SUBMIT_FIELDS,
     LedgerClient,
     LedgerError,
+    leaked_fields,
     load_clients,
     render_claims,
     report_from_form,
+    seqno_of,
 )
 
 HERE = Path(__file__).parent
@@ -51,9 +53,14 @@ def _anon() -> LedgerClient:
     return clients["anonymous"]
 
 
-def _verify(token: bytes):
-    """Validate a token offline against the current endorsed issuer key."""
-    key = _anon().issuer_key()
+def _verify(token: bytes, at: int | None = None):
+    """Validate a token offline against the issuer key active at ``at``.
+
+    ``at`` is the statement's seqno; passing it lets an older statement verify
+    against the key that signed it even after a later rotation. Without it the
+    latest key is used.
+    """
+    key = _anon().issuer_key(at)
     return st.validate_statement(token, key)
 
 
@@ -100,7 +107,7 @@ async def health():
     key_ready = True
     try:
         await asyncio.to_thread(_anon().issuer_key)
-    except LedgerError:
+    except Exception:
         key_ready = False
     return {"node_up": True, "version": version, "signing_key_ready": key_ready}
 
@@ -128,16 +135,12 @@ async def submit_report(request: Request):
     try:
         txid = await asyncio.to_thread(_anon().submit_report, report)
         redacted = await asyncio.to_thread(_anon().redacted_statement, txid)
-        claims = await asyncio.to_thread(_verify, redacted)
+        claims = await asyncio.to_thread(_verify, redacted, seqno_of(txid))
     except LedgerError as e:
         raise HTTPException(e.status, e.detail)
 
     # Prove submitted plaintext is absent from the token bytes on the wire.
-    leaked = [
-        name
-        for name, value in report.items()
-        if isinstance(value, str) and value.encode() in redacted
-    ]
+    leaked = leaked_fields(report, redacted)
     rendered = render_claims(claims)
     payload = {
         "txid": txid,
@@ -159,9 +162,14 @@ async def ledger():
         while True:
             page = await asyncio.to_thread(clients["operator"].list_statements, frm)
             out.extend(page.get("statements", []))
-            if page["to"] >= page["watermark"]:
+            to = page.get("to")
+            watermark = page.get("watermark")
+            if to is None or watermark is None:
+                raise LedgerError(502, "malformed paging response from ledger")
+            # `to` must advance past `frm`, else a malformed page would spin here.
+            if to >= watermark or to < frm:
                 break
-            frm = page["to"] + 1
+            frm = to + 1
     except LedgerError as e:
         raise HTTPException(e.status, e.detail)
     return {"statements": out}
@@ -171,7 +179,7 @@ async def ledger():
 async def operator_full(txid: str):
     try:
         token = await asyncio.to_thread(clients["operator"].full_statement, txid)
-        claims = await asyncio.to_thread(_verify, token)
+        claims = await asyncio.to_thread(_verify, token, seqno_of(txid))
     except LedgerError as e:
         raise HTTPException(e.status, e.detail)
     # Show that an anonymous caller is refused on the same endpoint.
@@ -187,15 +195,20 @@ async def operator_full(txid: str):
 
 @app.post("/api/operator/disclose/{txid}")
 async def operator_disclose(txid: str, request: Request):
-    body = await request.json()
-    fields = body.get("fields", [])
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    fields = body.get("fields", []) if isinstance(body, dict) else []
     if not fields:
         raise HTTPException(400, "choose at least one field to disclose")
     try:
         token = await asyncio.to_thread(clients["operator"].disclose, txid, fields)
-        claims = await asyncio.to_thread(_verify, token)
+        claims = await asyncio.to_thread(_verify, token, seqno_of(txid))
     except LedgerError as e:
         raise HTTPException(e.status, e.detail)
+    except Exception as e:  # offline verification of the fresh token failed
+        raise HTTPException(502, f"disclosure did not verify: {e}")
 
     global _artifact_seq
     _artifact_seq += 1
@@ -251,13 +264,16 @@ async def list_artifacts():
 
 @app.post("/api/researcher/verify")
 async def researcher_verify(request: Request):
-    body = await request.json()
-    artifact_id = body.get("artifact_id")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    artifact_id = body.get("artifact_id") if isinstance(body, dict) else None
     art = artifacts.get(artifact_id)
     if art is None:
         raise HTTPException(404, "unknown artifact")
     try:
-        claims = await asyncio.to_thread(_verify, art["bytes"])
+        claims = await asyncio.to_thread(_verify, art["bytes"], seqno_of(art["txid"]))
     except LedgerError as e:
         raise HTTPException(e.status, e.detail)
     except Exception as e:

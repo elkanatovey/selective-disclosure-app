@@ -42,6 +42,43 @@ SUBMIT_FIELDS: tuple[tuple[str, str], ...] = (
 # internal ``parent`` linkage which is padding on a root report).
 DISCLOSABLE_FIELDS: tuple[str, ...] = tuple(name for name, _ in SUBMIT_FIELDS)
 
+# A submitted value shorter than this (encoded) can appear in a redacted token
+# purely as CBOR/COSE framing: a 1-byte needle collides ~95% of the time and a
+# 2-byte one ~1.5% in a ~900-byte token, while >=4 bytes never collided across
+# tens of thousands of random trials. So the leak check only asserts on probes
+# at least this long; shorter values are not distinguishable from framing and a
+# correct ledger never leaks them anyway.
+MIN_LEAK_PROBE_BYTES = 4
+
+
+def _leak_probes(value: Any):
+    """Yield candidate plaintext byte-needles for a submitted field value."""
+    if isinstance(value, str):
+        yield value.encode()
+    elif isinstance(value, bytes):
+        yield value
+    elif isinstance(value, int) and not isinstance(value, bool):
+        yield cbor2.dumps(value)  # how the int would sit in the token, if leaked
+    elif isinstance(value, list):
+        for item in value:
+            yield from _leak_probes(item)
+
+
+def leaked_fields(report: dict, token: bytes) -> list[str]:
+    """Names of submitted fields whose plaintext appears verbatim in ``token``.
+
+    Covers every field type, not just strings, and ignores probes too short to
+    be told apart from token framing (see ``MIN_LEAK_PROBE_BYTES``).
+    """
+    leaked = []
+    for name, value in report.items():
+        if any(
+            len(needle) >= MIN_LEAK_PROBE_BYTES and needle in token
+            for needle in _leak_probes(value)
+        ):
+            leaked.append(name)
+    return leaked
+
 
 class LedgerError(RuntimeError):
     """A ledger call returned a non-success status."""
@@ -50,6 +87,14 @@ class LedgerError(RuntimeError):
         super().__init__(f"ledger returned {status}: {detail}".rstrip(": "))
         self.status = status
         self.detail = detail
+
+
+def seqno_of(txid: str) -> Optional[int]:
+    """The seqno half of a ``view.seqno`` transaction id, or None if malformed."""
+    try:
+        return int(txid.split(".")[1])
+    except (IndexError, ValueError, AttributeError):
+        return None
 
 
 @dataclass
@@ -141,12 +186,27 @@ class LedgerClient:
     def _historical(
         self, method: str, path: str, body=None, ctype=None, timeout_s: float = 20
     ) -> requests.Response:
-        """Retry while a CCF historical read is still fetching (202/404/503)."""
+        """Retry while a CCF historical read is still fetching (202/404/503).
+
+        A 404 whose body says the transaction is *Pending* is retried (it is
+        committing), but one that says *Unknown* or *Invalid* is terminal — a
+        bogus or future txid — and returns fast rather than blocking a
+        threadpool thread for the full timeout.
+        """
         deadline = time.time() + timeout_s
         while True:
             r = self._req(method, path, body, ctype)
-            pending = r.status_code in (202, 503) or (
-                r.status_code == 404 and b"TransactionPendingOrUnknown" in r.content
+            if r.status_code == 200:
+                return r
+            terminal_404 = r.status_code == 404 and (
+                b"is Unknown" in r.content or b"is Invalid" in r.content
+            )
+            pending = not terminal_404 and (
+                r.status_code in (202, 503)
+                or (
+                    r.status_code == 404
+                    and b"TransactionPendingOrUnknown" in r.content
+                )
             )
             if not pending or time.time() >= deadline:
                 return r
@@ -212,17 +272,27 @@ class LedgerClient:
             raise LedgerError(r.status_code, r.text)
         return cbor2.loads(r.content)
 
-    def issuer_key(self) -> EC2Key:
-        """Fetch the endorsed issuer public key and build a COSE verify key."""
-        r = self._historical("GET", "/signing-key")
+    def issuer_key(self, at: Optional[int] = None) -> EC2Key:
+        """Fetch an endorsed issuer public key and build a COSE verify key.
+
+        With ``at`` set to a statement's seqno, the ledger returns the key that
+        was active at that seqno (``GET /signing-key?at={seqno}``), so a
+        statement signed before a later rotation still verifies. Without it, the
+        latest key is returned.
+        """
+        path = "/signing-key" + (f"?at={at}" if at is not None else "")
+        r = self._historical("GET", path)
         if r.status_code != 200:
             raise LedgerError(r.status_code, r.text)
         pub = load_pem_public_key(cbor2.loads(r.content)["key"])
-        crv, size = {
+        curve = {
             "secp256r1": (P256, 32),
             "secp384r1": (P384, 48),
             "secp521r1": (P521, 66),
-        }[pub.curve.name]
+        }.get(pub.curve.name)
+        if curve is None:
+            raise LedgerError(500, f"unsupported issuer key curve {pub.curve.name}")
+        crv, size = curve
         n = pub.public_numbers()
         return EC2Key(crv=crv, x=n.x.to_bytes(size, "big"), y=n.y.to_bytes(size, "big"))
 

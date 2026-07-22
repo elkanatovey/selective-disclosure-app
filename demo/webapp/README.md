@@ -13,6 +13,22 @@ The launcher boots a CCF sandbox node, serves the web UI against it, and tears
 the node down on exit. It needs the app built (`./docker/build-app.sh`) and a
 CCF install at `./.ccf-install`, exactly like [`run_demo.sh`](../run_demo.sh).
 
+### In a Codespace / dev container
+
+Opening this repo in a Codespace (or "Reopen in Container" in VS Code) runs
+[`.devcontainer/post-create.sh`](../../.devcontainer/post-create.sh), which
+installs a matching CCF release, points `./.ccf-install` at it, and builds the
+app. Once it finishes, just run the launcher — port 8080 is forwarded and opens
+in your browser:
+
+```bash
+./demo/run_web_demo.sh
+```
+
+The single-node sandbox the demo boots only binds loopback, so it does not need
+the `NET_ADMIN`/`NET_RAW` capabilities the dev container requests (those are for
+CCF's own multi-node/partition tooling).
+
 ## How it works
 
 The browser never talks to the ledger directly: it cannot present the mutual-TLS
