@@ -29,6 +29,31 @@ The single-node sandbox the demo boots only binds loopback, so it does not need
 the `NET_ADMIN`/`NET_RAW` capabilities the dev container requests (those are for
 CCF's own multi-node/partition tooling).
 
+In a Codespace the URL is **not** `127.0.0.1:8080`. The launcher still prints
+`http://127.0.0.1:8080`, but reach it at the forwarded URL instead — open the
+**Ports** tab and click the 8080 forward, or use
+`https://<codespace-name>-8080.app.github.dev`. The role paths below work the
+same way: append them to whichever origin you're using.
+
+## Opening each role
+
+Each role has its own page. Open it directly by URL, or use the nav bar (and the
+landing-page cards), whose links carry a `target` per role so each opens in its
+own named browser window — handy for placing them side by side and watching the
+live event ticker update across all of them at once.
+
+| Role | Path | Local URL |
+| ---- | ---- | --------- |
+| Landing | `/` | `http://127.0.0.1:8080/` |
+| Member | `/member` | `http://127.0.0.1:8080/member` |
+| Client | `/client` | `http://127.0.0.1:8080/client` |
+| Operator | `/operator` | `http://127.0.0.1:8080/operator` |
+| Researcher | `/researcher` | `http://127.0.0.1:8080/researcher` |
+| Wall (live feed) | `/wall` | `http://127.0.0.1:8080/wall` |
+
+In a Codespace, swap the `http://127.0.0.1:8080` prefix for your forwarded
+origin (e.g. `https://<codespace-name>-8080.app.github.dev/operator`).
+
 ## How it works
 
 The browser never talks to the ledger directly: it cannot present the mutual-TLS
