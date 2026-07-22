@@ -60,9 +60,11 @@ NODE_PID=$!
 set +m
 
 echo -n "   waiting for the node to open"
+node_up=false
 for _ in $(seq 1 120); do
   if grep -q "Started CCF network" "$LOG" 2>/dev/null; then
     echo " ... up."
+    node_up=true
     break
   fi
   if ! kill -0 "$NODE_PID" 2>/dev/null; then
@@ -71,6 +73,9 @@ for _ in $(seq 1 120); do
   echo -n "."
   sleep 1
 done
+if [ "$node_up" != true ]; then
+  echo; echo "error: node did not open within 120s. Log:" >&2; tail -30 "$LOG" >&2; exit 1
+fi
 
 echo "== Serving the web UI on http://$HOST:$PORT =="
 echo "   open it in a browser, then pop out each role window."

@@ -123,7 +123,7 @@ function initClient() {
       const r = await api("POST", "/api/client/reports", new FormData(form));
       $("#r-txid").textContent = r.txid;
       $("#r-bytes").textContent = r.token_bytes;
-      $("#r-leak").innerHTML = r.leaked_fields.length
+      $("#r-leak").textContent = r.leaked_fields.length
         ? `⚠ plaintext leaked on the wire: ${r.leaked_fields.join(", ")}`
         : `✓ no submitted plaintext appears in the token bytes`;
       renderFields($("#r-public"), r.public_view);
@@ -219,7 +219,7 @@ function initResearcher() {
     try {
       const r = await postJSON("/api/researcher/verify", { artifact_id: pick.value });
       $("#verify-result").classList.remove("hidden");
-      $("#v-status").innerHTML = r.verified
+      $("#v-status").textContent = r.verified
         ? `✓ signature valid · statement ${r.txid}`
         : `⚠ verification failed: ${r.error}`;
       renderFields($("#v-revealed"), r.revealed || []);

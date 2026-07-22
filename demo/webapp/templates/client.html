@@ -16,7 +16,7 @@
       {% if kind == "textarea" or kind == "list" %}
       <textarea name="{{ name }}" rows="2"></textarea>
       {% elif kind == "hex" %}
-      <input type="text" name="{{ name }}" inputmode="latin" pattern="[0-9a-fA-Fx]*" placeholder="deadbeef">
+      <input type="text" name="{{ name }}" inputmode="text" pattern="[0-9a-fA-Fx]*" placeholder="deadbeef">
       {% elif kind == "int" %}
       <input type="number" name="{{ name }}" min="0" step="1" placeholder="e.g. 1767225600">
       {% else %}
