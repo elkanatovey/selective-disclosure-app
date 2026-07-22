@@ -26,12 +26,14 @@ namespace selectivedisclosure::paging
   //   std::optional<Iterable<ccf::SeqNo>>  // ascending, inclusive [from, to]
   //     get_write_txs_in_range(ccf::SeqNo from, ccf::SeqNo to)
 
-  // The window size to use: at most `max_requestable_range()` seqnos, so a
-  // window's inclusive range length (`hi - lo`) is strictly below the limit.
+  // The window size to use: strictly below `max_requestable_range()` (floored
+  // at 1), so a single index query can never exceed the limit.
   template <typename Index>
   ccf::SeqNo window_span(Index& index)
   {
-    return std::max<ccf::SeqNo>(index.max_requestable_range(), 1);
+    return std::max<ccf::SeqNo>(
+      index.max_requestable_range() > 1 ? index.max_requestable_range() - 1 : 1,
+      1);
   }
 
   // The highest write seqno at most `upper` (`upper == 0` = up to the index
