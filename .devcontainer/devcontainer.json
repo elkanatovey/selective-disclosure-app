@@ -19,6 +19,18 @@
     "--cap-add=SYS_PTRACE"
   ],
 
+  // Install a matching CCF release and build the app so the interactive web demo
+  // (./demo/run_web_demo.sh) is runnable out of the box — the base image ships
+  // only the toolchain. Runs once when the container is created.
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // The web demo serves on 8080; the CCF sandbox node listens on 8000.
+  "forwardPorts": [8080, 8000],
+  "portsAttributes": {
+    "8080": { "label": "SD web demo", "onAutoForward": "openBrowser" },
+    "8000": { "label": "CCF node", "onAutoForward": "silent" }
+  },
+
   "customizations": {
     "vscode": {
       "extensions": [
