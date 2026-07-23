@@ -42,12 +42,9 @@ SUBMIT_FIELDS: tuple[tuple[str, str], ...] = (
 # internal ``parent`` linkage which is padding on a root report).
 DISCLOSABLE_FIELDS: tuple[str, ...] = tuple(name for name, _ in SUBMIT_FIELDS)
 
-# A submitted value shorter than this (encoded) can appear in a redacted token
-# purely as CBOR/COSE framing: a 1-byte needle collides ~95% of the time and a
-# 2-byte one ~1.5% in a ~900-byte token, while >=4 bytes never collided across
-# tens of thousands of random trials. So the leak check only asserts on probes
-# at least this long; shorter values are not distinguishable from framing and a
-# correct ledger never leaks them anyway.
+# Shorter encoded values collide with CBOR/COSE framing often enough to flag
+# false leaks (a 1-byte needle matches ~95% of a ~900-byte token); 4+ bytes do
+# not. Only probe with needles at least this long.
 MIN_LEAK_PROBE_BYTES = 4
 
 
@@ -58,7 +55,7 @@ def _leak_probes(value: Any):
     elif isinstance(value, bytes):
         yield value
     elif isinstance(value, int) and not isinstance(value, bool):
-        yield cbor2.dumps(value)  # how the int would sit in the token, if leaked
+        yield cbor2.dumps(value)
     elif isinstance(value, list):
         for item in value:
             yield from _leak_probes(item)
