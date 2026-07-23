@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>Selective Disclosure Report Ledger</h1>
+  <p class="lead">
+    A confidential, append-only bug-report ledger. Existence and ordering are
+    provable to anyone; contents are revealed only by the Operator, field by
+    field. Open each role in its own window and play them side by side.
+  </p>
+
+  <div class="cards">
+    <a class="card role-member" href="/member" target="member">
+      <h2>Member</h2>
+      <p>Governance. Initialise the issuer signing key. Do this first.</p>
+    </a>
+    <a class="card role-client" href="/client" target="client">
+      <h2>Client</h2>
+      <p>Anonymous. File a report and get back a sealed, verifiable token.</p>
+    </a>
+    <a class="card role-operator" href="/operator" target="operator">
+      <h2>Operator</h2>
+      <p>Read reports in full and release partial, field-level disclosures.</p>
+    </a>
+    <a class="card role-researcher" href="/researcher" target="researcher">
+      <h2>Researcher</h2>
+      <p>Verify a released disclosure offline against the endorsed issuer key.</p>
+    </a>
+  </div>
+
+  <p class="hint">
+    Suggested order: <b>Member</b> initialises the key →
+    <b>Client</b> submits → <b>Operator</b> discloses a field →
+    <b>Researcher</b> verifies.
+  </p>
+</section>
+{% endblock %}

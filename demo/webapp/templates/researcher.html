@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel role-researcher">
+  <h1>Researcher <span class="sub">offline verifier</span></h1>
+  <p>
+    A researcher trusts nothing but the endorsed issuer key. Pick a disclosure
+    the Operator released and verify it offline: the signature checks out, only
+    the revealed fields are readable, and the hidden ones stay sealed.
+  </p>
+
+  <div class="row">
+    <select id="artifact-pick" class="select"><option value="">— released disclosures —</option></select>
+    <button id="verify" class="btn primary" disabled>Verify offline</button>
+  </div>
+
+  <div id="verify-result" class="result hidden">
+    <p id="v-status"></p>
+    <h3>Revealed</h3>
+    <div id="v-revealed" class="fields"></div>
+    <p id="v-hidden" class="muted"></p>
+  </div>
+</section>
+{% endblock %}

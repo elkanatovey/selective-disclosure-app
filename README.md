@@ -60,6 +60,17 @@ refreshes a Python venv for the sandbox and verifier, boots the node, runs
 [`demo/demo.py`](demo/demo.py), and tears the node down on exit. See
 [`demo/`](demo) for details.
 
+### Interactive web demo
+For a browser-based version with a page per role (member, client, operator,
+researcher) that you can play in separate windows, with live updates:
+```bash
+./demo/run_web_demo.sh      # serves http://127.0.0.1:8080
+```
+Same prereqs as above. A small FastAPI backend holds the sandbox certs and acts
+as the real ledger client (mutual TLS + CBOR/COSE + offline `sd_cwt`
+verification); the browser talks JSON to it. See
+[`demo/webapp/`](demo/webapp) for details.
+
 ## Run the node
 The app is the node, a CCF 7.x standalone binary. Launch a single-node dev
 sandbox with the installed `sandbox.sh`:
