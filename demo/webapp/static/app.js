@@ -140,8 +140,14 @@ function initOperator() {
   let selected = null;
 
   async function loadLedger() {
-    const { statements } = await getJSON("/api/ledger");
     const list = $("#ledger-list");
+    let statements;
+    try {
+      ({ statements } = await getJSON("/api/ledger"));
+    } catch (e) {
+      list.replaceChildren(el("li", { className: "muted", textContent: "ledger unavailable — will retry" }));
+      return;
+    }
     list.replaceChildren();
     statements.forEach((txid) => {
       const li = el("li", { textContent: txid });
@@ -203,7 +209,13 @@ function initResearcher() {
   const verifyBtn = $("#verify");
 
   async function loadArtifacts() {
-    const { artifacts } = await getJSON("/api/artifacts");
+    let artifacts;
+    try {
+      ({ artifacts } = await getJSON("/api/artifacts"));
+    } catch (e) {
+      verifyBtn.disabled = true;
+      return;
+    }
     const cur = pick.value;
     pick.replaceChildren(el("option", { value: "", textContent: "— released disclosures —" }));
     artifacts.forEach((a) =>

@@ -227,7 +227,10 @@ class LedgerClient:
         r = self._req("POST", path, cbor2.dumps(report), "application/cbor")
         if r.status_code not in (200, 202, 204):
             raise LedgerError(r.status_code, r.text)
-        return r.headers["x-ms-ccf-transaction-id"]
+        txid = r.headers.get("x-ms-ccf-transaction-id")
+        if txid is None:
+            raise LedgerError(r.status_code, "ledger response missing transaction-id header")
+        return txid
 
     def redacted_statement(self, txid: str) -> bytes:
         r = self._historical("GET", f"/statements/{txid}")
