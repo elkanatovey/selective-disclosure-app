@@ -26,8 +26,10 @@ namespace selectivedisclosure::paging
   //   std::optional<Iterable<ccf::SeqNo>>  // ascending, inclusive [from, to]
   //     get_write_txs_in_range(ccf::SeqNo from, ccf::SeqNo to)
 
-  // The window size to use: strictly below `max_requestable_range()` (floored
-  // at 1), so a single index query can never exceed the limit.
+  // The window size to use: `max_requestable_range() - 1`, so a single index
+  // query's inclusive range stays strictly below the limit. Falls back to 1
+  // when the limit is 0 or 1 (a degenerate index that can only be queried one
+  // seqno at a time).
   template <typename Index>
   ccf::SeqNo window_span(Index& index)
   {
