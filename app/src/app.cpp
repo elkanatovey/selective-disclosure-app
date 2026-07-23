@@ -249,7 +249,19 @@ namespace selectivedisclosure
             "No issuer key at the registration seqno.");
           return;
         }
-        const auto receipt = make_cose_receipt(state->receipt);
+        std::vector<uint8_t> receipt;
+        try
+        {
+          receipt = make_cose_receipt(state->receipt);
+        }
+        catch (const std::exception& e)
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_INTERNAL_SERVER_ERROR,
+            ccf::errors::InternalError,
+            fmt::format("Failed to build signing-key receipt: {}", e.what()));
+          return;
+        }
         const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
           QCBOREncode_OpenMap(&c);
           QCBOREncode_AddBytesToMap(&c, "key", sdcwt::to_ubc(*pubkey));
@@ -329,8 +341,19 @@ namespace selectivedisclosure
         // The bare redacted statement, made transparent: embed the receipt with
         // no disclosures. present_transparent({}) yields exactly the redacted
         // token + embedded receipt (an empty selection adds no sd_claims).
-        const auto transparent =
-          present_transparent(entry.value(), state->receipt, {});
+        std::vector<uint8_t> transparent;
+        try
+        {
+          transparent = present_transparent(entry.value(), state->receipt, {});
+        }
+        catch (const std::exception& e)
+        {
+          ctx.rpc_ctx->set_error(
+            HTTP_STATUS_INTERNAL_SERVER_ERROR,
+            ccf::errors::InternalError,
+            fmt::format("Failed to build transparent statement: {}", e.what()));
+          return;
+        }
 
         respond_ok(
           *ctx.rpc_ctx,
@@ -373,7 +396,19 @@ namespace selectivedisclosure
           {
             return;
           }
-          const auto receipt = make_cose_receipt(state->receipt);
+          std::vector<uint8_t> receipt;
+          try
+          {
+            receipt = make_cose_receipt(state->receipt);
+          }
+          catch (const std::exception& e)
+          {
+            ctx.rpc_ctx->set_error(
+              HTTP_STATUS_INTERNAL_SERVER_ERROR,
+              ccf::errors::InternalError,
+              fmt::format("Failed to build statement receipt: {}", e.what()));
+            return;
+          }
           respond_ok(
             *ctx.rpc_ctx, ccf::http::headervalues::contenttype::COSE, receipt);
         };
