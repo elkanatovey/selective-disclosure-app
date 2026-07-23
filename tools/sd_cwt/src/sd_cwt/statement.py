@@ -14,8 +14,8 @@ Visibility
 ----------
 * **Clear** (standard CWT keys, service-set): ``iss`` (1), ``iat`` (6). Plus the
   ``sd_alg`` machinery header added by the token core.
-* **Selectively-disclosable** (all content, private-use keys): ``parent`` and
-  every other field below.
+* **Selectively-disclosable** (all content, application-specific keys):
+  ``parent`` and every other field below.
 
 Strict uniformity
 -----------------
@@ -53,7 +53,11 @@ from .core import (
 ISS = 1
 IAT = 6
 
-# --- Content claims (private-use block); all selectively-disclosable -------
+# --- Content claims; all selectively-disclosable --------------------------
+# Application-specific claim keys, not IANA-registered. They fall in the CWT
+# claims registry's 256-65535 "Specification Required" range (RFC 8392 / the
+# IANA CWT Claims registry); there is no dedicated "private use" range for CWT
+# claims. Kept local to this profile's statement schema.
 PARENT = 1000
 TITLE = 1001
 BODY = 1002
