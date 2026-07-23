@@ -7,43 +7,41 @@ Based on draft-ietf-spice-sd-cwt-08, covering the subset used by this project.
 
 Implemented:
   * COSE_Sign1 issuer-signed CWT (via pycose).
-  * Flat (top-level) map-entry redaction: Redacted Claim Hash in
-    `redacted_claim_keys` (CBOR simple(59)); disclosures `[salt, value, key]`
-    in the unprotected header (`sd_claims`, label 17).
-  * Flat array-element redaction: element replaced inline by its Redacted Claim
-    Hash wrapped in CBOR tag 60; disclosures `[salt, value]` (no key).
-  * Nested / recursive redaction at arbitrary depth via `redact_paths`,
-    including the ancestor-disclosure rule (a disclosed parent may reveal a
-    still-redacted child).
-  * Hash-algorithm agility driven by the protected `sd_alg` header
-    (SHA-256/384/512).
+  * Map-entry redaction: Redacted Claim Hash in `redacted_claim_keys` (CBOR
+    simple(59)); disclosures `[salt, value, key]` in the `sd_claims` (label 17)
+    unprotected header.
+  * Array-element redaction: element replaced inline by its Redacted Claim Hash
+    in CBOR tag 60; disclosures `[salt, value]` (no key).
+  * Nested/recursive redaction at arbitrary depth via `redact_paths`, including
+    the ancestor-disclosure rule (a disclosed parent may reveal a still-redacted
+    child).
+  * Hash-algorithm agility via the protected `sd_alg` header (SHA-256/384/512).
   * Redacted Claim Hash computed over the `bstr-encoded-salted` disclosure (the
-    CBOR-wrapped byte string, per the CDDL and Appendix G) -- matching every
+    CBOR-wrapped byte string, per the CDDL and Appendix G), matching every
     reference-generated example token.
-  * Decoy padding via `pad_to=N` for a uniform token shape; each decoy is a
-    salt-only disclosure `[salt]` returned to the holder (draft-08 s10).
+  * Decoy padding via `pad_to=N`; each decoy is a salt-only disclosure `[salt]`
+    returned to the holder (draft-08 s10).
   * Key Binding Token presentation & verification (`kbt_sign` / `kbt_verify`):
     holder proof-of-possession over the RFC 8747 `cnf` key, `kcwt` (13) header,
     `application/kb+cwt` (typ 294), KBT + SD-CWT audience and `cnonce` binding
     (draft-08 s8/s9).
-  * Encoding MUSTs enforced on untrusted input: definite-length only (s5.1),
-    finite exp/nbf/iat encodings (s5.2), map-key type/length limits (s5.3),
+  * Encoding MUSTs on untrusted input: definite-length only (s5.1), finite
+    exp/nbf/iat encodings (s5.2), map-key type/length limits (s5.3),
     duplicate-map-key rejection (s5.4), max nesting depth 16 (s5.5), and
     non-empty `sd_claims` (s9 step 2).
-  * Duplicate-claim-key rejection at validation: a disclosure whose Claim Key
-    collides with another disclosed key or a non-redacted key at the same map
-    level invalidates the whole SD-CWT (s9 step 8).
+  * Duplicate-claim-key rejection at validation (s9 step 8): a disclosed Claim
+    Key colliding with another disclosed or non-redacted key at the same map
+    level invalidates the SD-CWT.
 
 Note on array-element redaction: an undisclosed redacted element is dropped from
 the reconstructed claim set, which shortens the array and shifts the indices of
 later elements (draft-08 s9, step 10). Where element position carries meaning,
-prefer redacting whole map entries (which never reindex) or redacting the entire
-array as one entry.
+prefer redacting whole map entries (which never reindex) or the entire array as
+one entry.
 
 Out of scope by design:
   * Temporal *validity* checks (comparing `exp`/`nbf`/`iat` against a clock or
-    each other) -- left to the caller or enclosing protocol; only the s5.2
-    encoding checks on those claims are enforced.
+    each other) -- left to the caller; only the s5.2 encoding checks are done.
   * AEAD-encrypted disclosures (`sd_aead*`) and pre-issuance To-Be-Redacted /
     To-Be-Decoy tags.
 
@@ -88,7 +86,7 @@ CTI = 7
 CNF = 8
 CNONCE = 39
 
-SALT_LEN = 16  # 128-bit salt, CSPRNG
+SALT_LEN = 16  # draft-08 s6.1: MUST be a unique CSPRNG salt of >= 128 bits
 
 
 class HashAlg(IntEnum):
@@ -104,17 +102,14 @@ ClaimKey = Union[int, str]
 
 def _cde(obj: Any) -> Any:
     """Return a copy of ``obj`` with every map's keys in CBOR Common
-    Deterministic Encoding order (RFC 8949 §4.2.1): entries sorted by the
-    bytewise-lexicographic order of their encoded key. Recurses into nested
-    maps and arrays; scalars, byte strings and tags are returned unchanged.
+    Deterministic Encoding order (RFC 8949 s4.2.1): sorted by the bytewise
+    order of their encoded key, recursing into nested maps and arrays.
 
-    Applied to everything the Issuer/Holder *emits* (SD-CWT payload, KBT
-    payload, Salted Disclosed Claims) so this reference oracle is byte-identical
-    to the deterministic C++ token core.
-
-    Note: cbor2's own ``canonical=True`` uses length-first ordering (RFC 8949
-    §4.2.3), which differs from CDE when a map mixes multi-byte unsigned and
-    negative keys, so ordering is done explicitly here.
+    Applied to everything the Issuer/Holder emits so this reference oracle
+    stays byte-identical to the deterministic C++ token core. Note: cbor2's
+    ``canonical=True`` uses length-first ordering (RFC 8949 s4.2.3), which
+    differs from CDE for maps mixing multi-byte unsigned and negative keys, so
+    the ordering is done explicitly here.
     """
     if isinstance(obj, dict):
         return {
@@ -225,7 +220,8 @@ def _sign_alg(signer: Any):
 
 
 def _cnf_from_key(key: Any) -> dict:
-    """Build an RFC 8747 `cnf` claim `{1: COSE_Key}` holding `key`'s PUBLIC part.
+    """Build an RFC 8747 confirmation (``cnf``) claim ``{1: COSE_Key}`` holding
+    ``key``'s PUBLIC part.
 
     Only the EC2 public coordinates are copied; the private scalar is never
     included. The confirmation key is caller-supplied policy — the token layer
@@ -234,9 +230,9 @@ def _cnf_from_key(key: Any) -> dict:
     crv = getattr(key, "crv", P256)
     cose_key = {
         1: 2,  # kty: EC2
-        -1: getattr(crv, "identifier", 1),  # crv
-        -2: key.x,  # x coordinate
-        -3: key.y,  # y coordinate
+        -1: getattr(crv, "identifier", 1),
+        -2: key.x,
+        -3: key.y,
     }
     return {1: cose_key}  # cnf confirmation method 1 = COSE_Key
 
@@ -270,8 +266,14 @@ def _scan_cbor(data: bytes, off: int, depth: int, is_key: bool = False) -> int:
     nesting deeper than `MAX_DEPTH` (s5.5). When `is_key` is set, also enforces
     the map-key type/length limits (s5.3): only uint, negint, text string of at
     most 255 octets, or the simple(59) redaction marker may be a map key.
-    Returns the offset just past the scanned item. `cbor2` accepts all of these
-    silently, so decoders of untrusted tokens must enforce them explicitly.
+    Returns the offset just past the scanned item.
+
+    This is a deliberate byte-level pass, not redundant hand-rolling: `cbor2`
+    has no strict-decode mode and destroys the information these MUSTs turn on.
+    Indefinite-length items (s5.1) decode identically to definite-length ones,
+    and duplicate keys (s5.4) are collapsed into a `dict` before any decode hook
+    can see them -- so both are undetectable after `cbor2.loads`. Enforcing them
+    on untrusted tokens requires inspecting the wire encoding directly.
     """
     if depth > MAX_DEPTH:
         raise ValueError("CBOR nesting exceeds maximum depth (draft-08 s5.5)")
@@ -596,11 +598,14 @@ def match_disclosures(
 
     `payload` is the decoded (still-redacted) CWT claims map; `presented` is the
     list of bstr-encoded Salted Disclosed Claims (the `sd_claims` header value).
-    Resolution is recursive and enforces the same MUSTs as `validate()`: every
-    presented disclosure must match a reachable Redacted Claim Hash, and a
-    disclosed key must not duplicate another key at the same level (s9 step 8).
-    Top-level map disclosures populate `disclosed`; everything else resolves
-    under `clear`. Raw Redacted Claim Hashes are never surfaced.
+    Resolution is recursive (the ancestor-disclosure rule: a disclosed map entry
+    or array element may itself contain further redactions resolved by additional
+    disclosures) and enforces the same MUSTs as `validate()`: every presented
+    disclosure must match a reachable Redacted Claim Hash, and a disclosed key
+    must not duplicate another key at the same level (s9 step 8). Top-level map
+    disclosures populate `disclosed`; everything else (clear claims, arrays,
+    nested maps) resolves under `clear`. Raw Redacted Claim Hashes (the
+    `simple(59)` array and `tag(60)` wrappers) are never surfaced.
     """
     redacted_key = CBORSimpleValue(REDACTED_CLAIM_KEYS)
 
@@ -683,17 +688,13 @@ def match_disclosures(
 
 
 def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
-    """Verify, then hash-match presented disclosures into clear/disclosed claims.
+    """Verify the COSE signature, then hash-match presented disclosures.
 
-    Resolution is recursive: a disclosed map entry or array element may itself
-    contain further redactions, resolved by additional disclosures (the
-    ancestor-disclosure rule). Top-level map disclosures populate `disclosed`;
-    everything else (clear claims, arrays, nested maps) is resolved under
-    `clear`. Undisclosed redactions are omitted, and any presented disclosure
-    that matches no reachable Redacted Claim Hash is rejected. Raw Redacted
-    Claim Hashes (the `simple(59)` array and `tag(60)` wrappers) are never
-    surfaced in the returned claims — only resolved values appear. The
-    signature-free hash-matching core is exposed as `match_disclosures`.
+    Convenience wrapper: runs `verify()` (Issuer signature + structural/encoding
+    MUSTs) and then resolves the `sd_claims` disclosures via `match_disclosures`.
+    See `match_disclosures` for the resolution semantics -- the recursive
+    ancestor-disclosure rule, the clear/disclosed split, and rejection of any
+    disclosure that matches no reachable Redacted Claim Hash.
     """
     verified = verify(token, pubkey)
     presented = _presented_from_arr(_cose_array(token))
@@ -759,16 +760,15 @@ def kbt_sign(
     }
 
     payload: dict[int, Any] = {AUD: aud}
-    if iat is not None:
-        payload[IAT] = iat
-    if cti is not None:
-        payload[CTI] = cti
-    if exp is not None:
-        payload[EXP] = exp
-    if nbf is not None:
-        payload[NBF] = nbf
-    if cnonce is not None:
-        payload[CNONCE] = cnonce
+    for label, value in (
+        (IAT, iat),
+        (CTI, cti),
+        (EXP, exp),
+        (NBF, nbf),
+        (CNONCE, cnonce),
+    ):
+        if value is not None:
+            payload[label] = value
 
     msg = Sign1Message(
         phdr=_cde_header(phdr), uhdr={}, payload=cbor2.dumps(_cde(payload))
