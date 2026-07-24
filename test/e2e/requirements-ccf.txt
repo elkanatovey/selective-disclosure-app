@@ -1,0 +1,8 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# The native CCF runtime is 7.0.5, whose matching Python package is not
+# published. The adjacent 7.0.6 client is compatible and is shared by the e2e
+# suite and demo. Install this file before requirements.txt: CCF declares
+# cbor2>=5.6, while the SD-CWT/pycose stack currently requires cbor2<5.6.
+ccf==7.0.6

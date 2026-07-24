@@ -1,0 +1,19 @@
+name: license-headers
+
+# Enforce the MIT notice header on all first-party source files (repo-wide).
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  notice:
+    runs-on: ubuntu-latest
+    steps:
+      # No submodules needed: notice-check skips third_party/ and uses git ls-files.
+      - uses: actions/checkout@v4
+      - name: Check MIT notice headers
+        run: python3 scripts/notice-check.py

@@ -1,0 +1,5 @@
+CompileFlags:
+  # Point clangd at the app's compile database explicitly so navigation works
+  # regardless of which build dirs exist (app/build vs app/build-debug). clangd
+  # searches this path (and ./build under it) for compile_commands.json.
+  CompilationDatabase: app/build

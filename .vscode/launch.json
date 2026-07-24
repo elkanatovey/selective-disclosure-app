@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Recommended for debugging: waits, then attaches to the DEBUG build
+      // (-O0 -g) launched by the "run (sandbox, debug)" task.
+      "name": "Debug CCF node (waitFor, debug build)",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/app/build-debug/selective_disclosure",
+      "waitFor": true
+    },
+    {
+      // Start this FIRST (it waits), then run the "run (sandbox)" task.
+      // CodeLLDB attaches the moment the node process spawns, so breakpoints
+      // in init_handlers() (startup) AND the put/get lambdas (per-request) hit.
+      "name": "Attach to CCF node (waitFor)",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/app/build/selective_disclosure",
+      "waitFor": true
+    },
+    {
+      // Use when the sandbox is ALREADY running: pick the selective_disclosure
+      // process from the list. Good for breakpoints in request handlers.
+      "name": "Attach to CCF node (pick process)",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/app/build/selective_disclosure",
+      "pid": "${command:pickProcess}"
+    }
+  ]
+}

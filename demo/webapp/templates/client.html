@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel role-client">
+  <h1>Client <span class="sub">anonymous submitter</span></h1>
+  <p>
+    File a confidential bug report. The service signs and stores it, then hands
+    back a redacted token. The contents never appear on the wire; only
+    existence and ordering are provable to the public.
+  </p>
+  <p class="muted">All fields are optional — fill in as many or as few as you like.</p>
+
+  <form id="report-form" class="form">
+    {% for name, kind in submit_fields %}
+    <label class="field">
+      <span>{{ name }}{% if kind == "hex" %} <em>(hex)</em>{% elif kind == "int" %} <em>(unix time)</em>{% elif kind == "list" %} <em>(one per line)</em>{% endif %}</span>
+      {% if kind == "textarea" or kind == "list" %}
+      <textarea name="{{ name }}" rows="2"></textarea>
+      {% elif kind == "hex" %}
+      <input type="text" name="{{ name }}" inputmode="text" pattern="[0-9a-fA-Fx]*" placeholder="deadbeef">
+      {% elif kind == "int" %}
+      <input type="number" name="{{ name }}" min="0" step="1" placeholder="e.g. 1767225600">
+      {% else %}
+      <input type="text" name="{{ name }}">
+      {% endif %}
+    </label>
+    {% endfor %}
+    <button type="submit" class="btn primary">Submit report</button>
+    <p id="client-error" class="err hidden"></p>
+  </form>
+
+  <div id="client-result" class="result hidden">
+    <h2>Committed as <code id="r-txid"></code></h2>
+    <p>Redacted token: <b id="r-bytes"></b> bytes of COSE.</p>
+    <p id="r-leak"></p>
+    <h3>What a public verifier can read</h3>
+    <div id="r-public" class="fields"></div>
+  </div>
+</section>
+{% endblock %}

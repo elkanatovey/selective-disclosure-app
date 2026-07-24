@@ -1,0 +1,87 @@
+; Copyright (c) Microsoft Corporation.
+; Licensed under the MIT License.
+;
+; CDDL (RFC 8610) for the HTTP request and response bodies of the Selective
+; Disclosure Report Ledger. Endpoint semantics, status codes, and auth are
+; documented in docs/API.md.
+;
+; Requests use application/cbor. Responses use application/cbor or
+; application/cose for statements and receipts (see spec/statement.cddl).
+; 204/202 responses have no body; the transaction id is in the
+; x-ms-ccf-transaction-id header. Error bodies use CCF's standard JSON
+; envelope.
+
+; ==========================================================================
+; POST /reports  (and  POST /reports/{parent_txid}/follow-ups)
+; Request body: a content-fields map. All fields are optional and use native
+; CBOR types. `parent` is not accepted; the server derives it for follow-ups.
+; Response: 204 (sync) or 202 (?wait=false), with no body. Fetch the COSE
+; statement separately with GET /statements/{txid}.
+; ==========================================================================
+report-submission = {
+  ? "title"       : tstr,
+  ? "body"        : tstr,
+  ? "component"   : tstr,
+  ? "severity"    : tstr,
+  ? "patch"       : tstr,
+  ? "fingerprint" : bstr,
+  ? "references"  : [* tstr],
+  ? "patch_date"  : int,
+}
+
+; ==========================================================================
+; POST /operator/statements/{txid}/disclosure   (Operator)
+; Request: fields or paths to reveal. An entry is either a top-level field name
+; or a path to a nested array element ([name, index, ...]).
+; Response: application/cose containing a presented statement (see
+; spec/statement.cddl), or the CCF JSON error envelope.
+; ==========================================================================
+disclosure-request = {
+  "fields" : [* disclosure-target],
+}
+
+disclosure-target =
+    tstr                    ; a whole top-level field, e.g. "fingerprint"
+  / [tstr, + uint]          ; a nested array element, e.g. ["references", 0]
+
+; ==========================================================================
+; GET /version   (public)
+; ==========================================================================
+version-response = {
+  "app_version"    : tstr,   ; ledger app semantic version
+  "schema_version" : int,    ; statement schema version (see spec/statement.cddl)
+  "ccf_version"    : tstr,   ; underlying CCF platform version
+}
+
+; ==========================================================================
+; GET /signing-key[?at={seqno}]   (public)
+; The issuer public key plus its on-ledger endorsement (registration receipt).
+; ==========================================================================
+signing-key-response = {
+  "key"     : bstr,   ; issuer public key, PEM bytes
+  "receipt" : bstr,   ; COSE receipt of the key's registration tx (claims digest = hash(key))
+}
+
+; ==========================================================================
+; GET /operator/statements?from={seqno}&to={seqno}   (Operator)
+; A page of statement txids over a seqno range, with the ledger watermark and,
+; when needed, a `next` cursor.
+; ==========================================================================
+statement-stream-response = {
+  "statements" : [* txid],   ; statement txids in [from, to], seqno order
+  "from"       : uint,       ; first seqno this page covers
+  "to"         : uint,       ; highest seqno this page covers (poll next from to+1)
+  "watermark"  : uint,       ; current ledger tip (block count / "caught up" signal)
+  ? "next"     : uint,       ; present iff the requested range spans another page
+}
+
+; A CCF transaction id, "<view>.<seqno>", e.g. "2.13".
+txid = tstr
+
+; ==========================================================================
+; Confidential disclosure store (internal; not sent over the wire). An ordered
+; array of [path, encoded-disclosure] pairs. `path` is the disclosure's
+; absolute location in the claims tree. See app/src/disclosure_store.{h,cpp}.
+; ==========================================================================
+disclosure-store = [* [path, encoded : bstr]]
+path = [* (int / tstr)]   ; map keys (int) and/or array indices (int) / names (tstr)

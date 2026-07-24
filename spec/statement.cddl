@@ -1,0 +1,111 @@
+; Copyright (c) Microsoft Corporation.
+; Licensed under the MIT License.
+;
+; CDDL (RFC 8610) for the Selective Disclosure Report Ledger statement format.
+; The format is an SD-CWT (draft-ietf-spice-sd-cwt) profile built on COSE
+; (RFC 9052) and CWT (RFC 8392).
+;
+; The C++ and Python implementations use this schema. Rationale and endpoint
+; behavior are described in docs/DESIGN.md and docs/API.md.
+
+; ==========================================================================
+; A statement is a redacted SD-CWT (a COSE_Sign1), optionally carrying a CCF
+; receipt and disclosures.
+; ==========================================================================
+
+; A COSE_Sign1 (RFC 9052) tagged with 18.
+statement = #6.18([
+  protected   : bstr .cbor protected-header,   ; signed
+  unprotected : unprotected-header,            ; NOT signed (receipt/disclosures)
+  payload     : bstr .cbor claims,             ; signed: the (redacted) CWT claims
+  signature   : bstr,                          ; issuer ECDSA over the Sig_structure
+])
+
+; --- Protected header (signed) --------------------------------------------
+; Emitted in CDE key order (RFC 8949 4.2): 1 < 16 < 170.
+protected-header = {
+  1   : cose-alg,       ; COSE algorithm (issuer signature)
+  16  : 293,            ; typ = application/sd-cwt
+  170 : sd-alg,         ; SD-CWT redaction hash algorithm
+}
+
+cose-alg = &(
+  ES256: -7,
+  ES384: -35,
+  ES512: -36,
+)
+
+sd-alg = &(
+  SHA-256: -16,
+  SHA-384: -43,
+  SHA-512: -44,
+)
+
+; --- Unprotected header (NOT signed) --------------------------------------
+; `sd_claims` (17): disclosures presented by the holder. The key is omitted
+;   when there are no disclosures (draft-08 section 8 forbids an empty value).
+; `receipts` (394): embedded CCF transparency receipt(s). Present on the
+;   /statements and /operator/statements responses.
+unprotected-header = {
+  ? 17  : [+ disclosure],   ; sd_claims -- MUST be non-empty when present
+  ? 394 : [+ receipt],      ; embedded COSE receipt(s)
+}
+
+; A CCF receipt as a standalone COSE_Sign1 over the signed Merkle tree root,
+; carrying the inclusion proof. Opaque here; see the CCF receipt profile.
+receipt = #6.18([bstr, header-map, bstr / nil, bstr])
+header-map = { * (int / tstr) => any }
+
+; ==========================================================================
+; Claims use a CWT claims set. Clear claims retain their key/value pairs.
+; Redacted content fields are represented by hashes in the simple(59) array.
+; A disclosed field is restored to `content-key => value` by the verifier.
+; ==========================================================================
+
+claims = {
+  1        : tstr,             ; iss -- the service identity (constant)
+  6        : int,              ; iat -- issued-at (untrusted host wall-clock)
+  #7.59    => [* redacted-hash],  ; redacted_claim_keys: hashes of redacted entries
+  * content-key => any,       ; only appears for fields resolved from a disclosure
+}
+
+; The CBOR simple value 59 (#7.59) marks redacted map keys. The array contains
+; one Redacted Claim Hash per redacted entry, sorted in CDE order.
+redacted-hash = bstr          ; = sd-alg( bstr .cbor disclosure )
+
+; Content field IDs (private-use claim keys). Every statement carries all of
+; them, with absent fields padded by garbage values. All are redacted; see
+; DESIGN.md section 8.
+content-key = &(
+  parent:      1000,   ; SHA-256 of a parent statement's token (follow-up link)
+  title:       1001,
+  body:        1002,
+  component:   1003,
+  severity:    1004,
+  fingerprint: 1005,
+  references:  1006,
+  patch:       1007,
+  patch_date:  1008,
+)
+
+; ==========================================================================
+; A disclosure is an opening presented in sd_claims or retained in the
+; confidential store. It is a bstr containing a CBOR array.
+;
+; A redacted map entry contributes a Redacted Claim Hash to the #7.59 array
+; and is opened as [salt, value, key]. A redacted array element remains in the
+; disclosed array as tag(60) wrapping its hash and is opened as [salt, value].
+; ==========================================================================
+
+disclosure = bstr .cbor disclosure-opening
+
+disclosure-opening =
+    map-disclosure       ; a redacted map entry:    [salt, value, key]
+  / element-disclosure   ; a redacted array element:[salt, value]
+  / decoy-disclosure     ; salt-only padding:       [salt]
+
+map-disclosure     = [salt, value: any, key: (int / tstr)]
+element-disclosure = [salt, value: any]
+decoy-disclosure   = [salt]
+
+salt = bstr .size 16    ; 128-bit CSPRNG salt, one per disclosure
