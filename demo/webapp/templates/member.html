@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel role-member">
+  <h1>Member <span class="sub">governance</span></h1>
+  <p>
+    The Member initialises the issuer signing key on-ledger. Until this is done,
+    submissions fail. Rotation registers a new key while keeping older
+    statements verifiable.
+  </p>
+  <div class="row">
+    <button id="init-key" class="btn primary">Initialise signing key</button>
+    <button id="rotate-key" class="btn">Rotate key</button>
+  </div>
+  <pre id="member-out" class="out"></pre>
+</section>
+{% endblock %}

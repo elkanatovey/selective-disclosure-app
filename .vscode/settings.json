@@ -1,0 +1,18 @@
+{
+  // C/C++ IntelliSense is provided by clangd (reads compile_commands.json from
+  // app/build and third_party/CCF/build). Disable the Microsoft C/C++ engine so
+  // the two don't fight over the same files.
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "clangd.path": "/usr/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--header-insertion=never",
+    "--clang-tidy"
+  ],
+  // CMake Tools: the build is driven by docker/build-*.sh, not by configuring
+  // from the editor, so don't auto-configure on open.
+  "cmake.configureOnOpen": false,
+  "files.associations": {
+    "*.h": "cpp"
+  }
+}

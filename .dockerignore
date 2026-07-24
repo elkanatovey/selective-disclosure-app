@@ -1,0 +1,13 @@
+# Keep the Docker build context tiny: the image only needs the two CCF setup
+# scripts (COPYed explicitly in the Dockerfile). Everything else is mounted at
+# runtime. Docker requires each parent directory to be un-ignored to reach a
+# nested file after a `*` exclude.
+*
+!third_party
+third_party/*
+!third_party/CCF
+third_party/CCF/*
+!third_party/CCF/scripts
+third_party/CCF/scripts/*
+!third_party/CCF/scripts/setup-ci.sh
+!third_party/CCF/scripts/setup-dev.sh

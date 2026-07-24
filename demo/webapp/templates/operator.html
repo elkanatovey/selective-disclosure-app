@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel role-operator">
+  <h1>Operator <span class="sub">user0 · confidential egress</span></h1>
+  <p>
+    The Operator is the only role that can read a report in full or release its
+    fields. Pick a statement, read it unredacted, then choose exactly which
+    fields to disclose.
+  </p>
+
+  <div class="split">
+    <div class="col">
+      <h2>Ledger</h2>
+      <button id="refresh-ledger" class="btn">Refresh</button>
+      <ul id="ledger-list" class="ledger"></ul>
+    </div>
+
+    <div class="col">
+      <h2>Selected: <code id="sel-txid">—</code></h2>
+      <button id="read-full" class="btn" disabled>Read full (unredacted)</button>
+      <p id="anon-note" class="muted"></p>
+      <div id="full-fields" class="fields"></div>
+
+      <h3>Release a partial disclosure</h3>
+      <div id="disclosure-choices" class="choices">
+        {% for name in disclosable_fields %}
+        <label><input type="checkbox" value="{{ name }}"> {{ name }}</label>
+        {% endfor %}
+      </div>
+      <button id="disclose" class="btn primary" disabled>Release disclosure</button>
+      <div id="disclose-result" class="fields"></div>
+
+      <h3>File a follow-up <span class="sub">duplicate-proof, bound to the selection</span></h3>
+      <form id="followup-form" class="form">
+        <label class="field"><span>title</span><input type="text" name="title" placeholder="e.g. duplicate of prior report"></label>
+        <label class="field"><span>component</span><input type="text" name="component"></label>
+        <label class="field"><span>severity</span><input type="text" name="severity"></label>
+        <button type="submit" class="btn" disabled id="followup-btn">File follow-up</button>
+      </form>
+      <p id="followup-out" class="muted"></p>
+    </div>
+  </div>
+</section>
+{% endblock %}

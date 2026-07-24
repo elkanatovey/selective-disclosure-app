@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sd_cwt"
+version = "0.0.1"
+description = "Minimal Selective Disclosure CBOR Web Token (SD-CWT) — custom profile"
+requires-python = ">=3.10"
+dependencies = [
+    "pycose>=1.1.0",
+    # pycose 1.1.0 needs cbor2 to decode tag values as lists; cbor2 >= 5.6
+    # returns tuples and breaks pycose's decode. Pin to a compatible release.
+    "cbor2>=5.4.6,<5.6",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+lint = ["black>=24", "isort>=5", "mypy>=1.8", "pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.isort]
+profile = "black"
+known_first_party = ["sd_cwt"]
+
+[tool.mypy]
+ignore_missing_imports = true
+
+# cbor2/pycose decode to dynamic CBOR; treat them as untyped (as SCITT's
+# pyscitt does) so decoded values are Any, avoiding cast() noise. Safety comes
+# from runtime checks, not from the libraries' partial type hints.
+[[tool.mypy.overrides]]
+module = ["cbor2", "cbor2.*", "pycose", "pycose.*"]
+follow_imports = "skip"
+ignore_missing_imports = true

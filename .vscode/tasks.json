@@ -1,0 +1,59 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build app",
+      "type": "shell",
+      "command": "./docker/build-app.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "build ccf (slow)",
+      "type": "shell",
+      "command": "./docker/build-ccf.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "build app (debug)",
+      "type": "shell",
+      "command": "BUILD_TYPE=Debug ./docker/build-app.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "run (sandbox)",
+      "type": "shell",
+      "command": "./.ccf-install/bin/sandbox.sh --package ${workspaceFolder}/app/build/selective_disclosure",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHON_PACKAGE_PATH": "${workspaceFolder}/third_party/CCF/python"
+        }
+      },
+      "dependsOn": ["build app"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "run (sandbox, debug)",
+      "type": "shell",
+      "command": "./.ccf-install/bin/sandbox.sh --package ${workspaceFolder}/app/build-debug/selective_disclosure",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHON_PACKAGE_PATH": "${workspaceFolder}/third_party/CCF/python"
+        }
+      },
+      "dependsOn": ["build app (debug)"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}

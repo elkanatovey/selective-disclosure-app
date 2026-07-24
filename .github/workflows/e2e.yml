@@ -1,0 +1,105 @@
+name: e2e
+
+# End-to-end CI: builds the app and runs the pytest e2e suite (test/e2e) against
+# a real CCF sandbox node. Like token-core, everything runs inside CCF's Azure
+# Linux base image with the official CCF development RPM installed.
+on:
+  push:
+    paths:
+      - "app/**"
+      - "test/e2e/**"
+      - "tools/sd_cwt/**"
+      - "docker/build-app.sh"
+      - "scripts/ci-e2e-tests.sh"
+      - "scripts/setup-sandbox-venv.sh"
+      - ".github/workflows/e2e.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "test/e2e/**"
+      - "tools/sd_cwt/**"
+      - "docker/build-app.sh"
+      - "scripts/ci-e2e-tests.sh"
+      - "scripts/setup-sandbox-venv.sh"
+      - ".github/workflows/e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: e2e Python format & lint (black / isort / flake8)
+    runs-on: ubuntu-latest
+    steps:
+      # Pure-Python lint of the e2e harness; no CCF/sandbox needed, so it runs
+      # on a plain runner and gives fast feedback independent of the heavy e2e
+      # job below.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install lint deps
+        run: pip install "black>=24" "isort>=5" "flake8>=7"
+      - name: black
+        run: black --check test/e2e
+      - name: isort
+        run: isort --check --profile black test/e2e
+      - name: flake8 (correctness only, black-compatible)
+        # Pyflakes (F) + syntax (E9): unused imports, undefined names, etc.
+        # Style/line-length are owned by black, so they are not re-checked here.
+        run: flake8 --select=F,E9 test/e2e
+
+  e2e:
+    name: App e2e (sandbox node)
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/azurelinux/base/core:3.0
+      # NET_ADMIN/NET_RAW: the CCF sandbox configures loopback networking for the
+      # node via python-iptables. SYS_PTRACE mirrors CCF's own CI.
+      options: --user root --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_PTRACE
+    env:
+      CCF_VERSION: "7.0.5"
+    steps:
+      - name: Set up environment (GPG key, base tools, CCF RPM)
+        run: |
+          set -ex
+          gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
+          tdnf -y update
+          tdnf -y install \
+            git build-essential cmake ninja-build python3-pip python3-devel \
+            ca-certificates jq which procps tar clang clang-tools-extra-devel \
+            iptables openssl curl
+          curl -L "https://github.com/microsoft/CCF/releases/download/ccf-${CCF_VERSION}/ccf_devel_${CCF_VERSION//-/_}_x86_64.rpm" -o ccf.rpm
+          tdnf -y install ./ccf.rpm
+          rm -f ccf.rpm
+
+      - uses: actions/checkout@v5
+
+      - name: Work around git safe.directory in container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Locate CCF install
+        id: ccf
+        run: |
+          set -ex
+          cfg=$(rpm -ql ccf_devel | grep -m1 '/ccf-config\.cmake$')
+          test -n "$cfg"
+          echo "prefix=$(dirname "$(dirname "$cfg")")" >> "$GITHUB_OUTPUT"
+
+      - name: Build app + run e2e suite
+        env:
+          INSTALL_DIR: ${{ steps.ccf.outputs.prefix }}
+        run: ./scripts/ci-e2e-tests.sh
+
+      - name: Upload sandbox logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-logs
+          path: |
+            workspace/**/*.log
+            workspace/**/out
+            workspace/**/err
+          if-no-files-found: ignore
