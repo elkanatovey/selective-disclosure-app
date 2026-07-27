@@ -4,7 +4,6 @@
 
 #include "token/cbor_value.h"
 
-#include <functional>
 #include <gtest/gtest.h>
 #include <stdexcept>
 
@@ -94,6 +93,15 @@ TEST(DisclosureStore, RejectsMalformedEntry)
 {
   // [ 1 ] — a bare integer where a pair is expected.
   const std::vector<uint8_t> bad = {0x81, 0x01};
+  EXPECT_THROW(decode_disclosure_store(bad), std::invalid_argument);
+}
+
+// An entry with more than two elements is rejected rather than silently read as
+// a pair with its tail ignored.
+TEST(DisclosureStore, RejectsOversizedEntry)
+{
+  // [ [ [], h'01', 99 ] ] — a 3-element entry.
+  const std::vector<uint8_t> bad = {0x81, 0x83, 0x80, 0x41, 0x01, 0x18, 0x63};
   EXPECT_THROW(decode_disclosure_store(bad), std::invalid_argument);
 }
 

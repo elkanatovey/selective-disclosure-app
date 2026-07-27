@@ -6,7 +6,6 @@
 #include "token/cose.h"
 
 #include <algorithm>
-#include <cstring>
 #include <gtest/gtest.h>
 
 namespace
@@ -473,4 +472,65 @@ TEST(SdCwt, PresentRejectsLabelAboveInt64Max)
   const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
 
   EXPECT_THROW((void)sdcwt::present(token, {disclosure}), std::runtime_error);
+}
+// present() manages sd_claims(17) rather than appending to it: presenting an
+// already-presented token must REPLACE the previous selection, not accumulate.
+// The disclosures a recipient sees are exactly the ones the Operator chose, so
+// a stale entry surviving here would over-disclose.
+TEST(SdCwt, PresentReplacesExistingSdClaims)
+{
+  namespace cbor = ccf::cbor;
+  const std::vector<uint8_t> empty;
+  const std::vector<uint8_t> first = {0x81, 0x41, 0xAA}; // [h'AA']
+  const std::vector<uint8_t> second = {0x81, 0x41, 0xBB}; // [h'BB']
+
+  const auto token = cbor::serialize(cbor::make_tagged(
+    cbor::tag::COSE_SIGN_1,
+    cbor::make_array(
+      {sdcwt::bytes_value(empty), // phdr
+       cbor::make_map({}), // uhdr
+       sdcwt::bytes_value(empty), // payload
+       sdcwt::bytes_value(empty)}))); // sig
+
+  const auto once = sdcwt::present(token, {first});
+  const auto twice = sdcwt::present(once, {second});
+
+  const auto out = cbor::parse(twice);
+  const auto& parts =
+    std::get<cbor::Array>(out->tag_at(cbor::tag::COSE_SIGN_1)->value).items;
+  const auto& sd_claims = parts[1]->map_at(cbor::make_signed(17));
+
+  ASSERT_EQ(sd_claims->size(), 1u);
+  const auto only = sd_claims->array_at(0)->as_bytes();
+  EXPECT_TRUE(std::equal(only.begin(), only.end(), second.begin()));
+}
+
+// The CDE (RFC 8949 §4.2) map-key order applied in cbor_value.cpp is
+// load-bearing: the C++ signer and the Python oracle must agree byte for byte,
+// and ccf::cbor::serialize preserves insertion order rather than sorting, so
+// the ordering is ours to get right. Conformance covers it only indirectly.
+//
+// This also pins the invariant the sort relies on — that every int and text key
+// encodes with a first byte below simple(59) (0xf8), so the redacted-claim-keys
+// entry always lands last.
+TEST(CborValue, CdeOrdersMapKeysAndPutsSimple59Last)
+{
+  sdcwt::CborValue m = sdcwt::CborValue::Map({});
+  // Inserted deliberately out of order, mixing text, positive and negative int.
+  m.map_put(sdcwt::CborKey(std::string("b")), sdcwt::value::integer(4));
+  m.map_put(sdcwt::CborKey(int64_t{10}), sdcwt::value::integer(2));
+  m.map_put(sdcwt::CborKey(std::string("a")), sdcwt::value::integer(3));
+  m.map_put(sdcwt::CborKey(int64_t{-1}), sdcwt::value::integer(1));
+  m.map_put(sdcwt::CborKey(int64_t{1}), sdcwt::value::integer(0));
+  m.redacted_hashes.push_back({0xAA});
+
+  // a6                map(6), in CDE order by encoded key bytes:
+  //   01 00             1   (0x01)
+  //   0a 02             10  (0x0a)
+  //   20 01             -1  (0x20)
+  //   61 61 03          "a" (0x61...)
+  //   61 62 04          "b"
+  //   f8 3b 81 41 aa    simple(59) (0xf8) -> [h'AA'], necessarily last
+  EXPECT_EQ(
+    to_hex(sdcwt::encode_value(m)), "a601000a022001616103616204f83b8141aa");
 }
