@@ -152,3 +152,61 @@ TEST(CcfCbor, ParsedBytesAliasTheInputBuffer)
   // Same storage, not a copy: the Value borrows from `raw`.
   EXPECT_EQ(view.data(), raw.data() + 1);
 }
+
+// --- SD-CWT shapes: can ccf::cbor express what the token core needs? -------
+// Replacing sdcwt::CborValue with ccf::cbor::Value requires two encodings the
+// generic API is not obviously built for: the simple(59) redacted-claim-keys
+// map key, and the tag(60) redacted array element. Both are pinned here
+// because if either cannot round-trip, cbor_value.cpp cannot be deleted.
+
+TEST(CcfCbor, EncodesSimpleValue59AsMapKey)
+{
+  // draft-08: redacted claim keys sit under the simple(59) label.
+  const auto digest = bytes({0xaa, 0xbb});
+  const auto m = ccf::cbor::make_map(
+    {{ccf::cbor::make_simple(static_cast<ccf::cbor::SimpleValue>(59)),
+      ccf::cbor::make_array({ccf::cbor::make_bytes(digest)})}});
+
+  // a1          map(1)
+  //   f8 3b       simple(59)
+  //   81 42 aabb  [h'AABB']
+  EXPECT_EQ(
+    ccf::cbor::serialize(m), bytes({0xa1, 0xf8, 0x3b, 0x81, 0x42, 0xaa, 0xbb}));
+}
+
+// GAP in ccf::cbor: `map_at` cannot look up a simple-value key. Its comparison
+// visitor handles Signed, Bytes and String and returns false for every other
+// alternative, so a simple(59) key never matches and lookup throws
+// KEY_NOT_FOUND -- even though `serialize` emits, and `parse` accepts, that
+// exact key. Migrated code must iterate `Map::items` for such keys instead.
+// Worth fixing upstream alongside the request to make this header public.
+TEST(CcfCbor, MapAtCannotFindSimpleValueKeys)
+{
+  const auto encoded = bytes({0xa1, 0xf8, 0x3b, 0x81, 0x42, 0xaa, 0xbb});
+  const auto parsed = ccf::cbor::parse(encoded);
+
+  EXPECT_THROW(
+    parsed->map_at(
+      ccf::cbor::make_simple(static_cast<ccf::cbor::SimpleValue>(59))),
+    std::exception);
+
+  // The entry is present and reachable by walking the map directly.
+  const auto& items = std::get<ccf::cbor::Map>(parsed->value).items;
+  ASSERT_EQ(items.size(), 1u);
+  EXPECT_EQ(items[0].first->as_simple(), 59);
+  EXPECT_EQ(items[0].second->array_at(0)->as_bytes()[0], 0xaa);
+}
+
+TEST(CcfCbor, SupportsTag60RedactedArrayElement)
+{
+  // draft-08: a redacted array element is tag(60) wrapping its claim hash.
+  const auto digest = bytes({0xde, 0xad});
+  const auto tagged = ccf::cbor::make_tagged(60, ccf::cbor::make_bytes(digest));
+
+  // d8 3c 42 dead = tag(60) h'DEAD'
+  const auto encoded = ccf::cbor::serialize(tagged);
+  EXPECT_EQ(encoded, bytes({0xd8, 0x3c, 0x42, 0xde, 0xad}));
+
+  const auto parsed = ccf::cbor::parse(encoded);
+  EXPECT_EQ(parsed->tag_at(60)->as_bytes()[1], 0xad);
+}
