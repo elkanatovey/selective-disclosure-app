@@ -210,3 +210,26 @@ TEST(CcfCbor, SupportsTag60RedactedArrayElement)
   const auto parsed = ccf::cbor::parse(encoded);
   EXPECT_EQ(parsed->tag_at(60)->as_bytes()[1], 0xad);
 }
+
+// --- HAZARD 4: builders do not take ownership either -----------------------
+// `make_bytes`/`make_string` store the span/view they are handed rather than
+// copying, so a built Value borrows from its arguments exactly as a parsed one
+// borrows from the input buffer. ccf::cbor::Value is therefore NOT a
+// self-contained value tree the way sdcwt::CborValue (which owns a vector and
+// a string) is. Anything replacing CborValue must keep the backing storage
+// alive for as long as the Value.
+
+TEST(CcfCbor, MakeBytesDoesNotCopy)
+{
+  const auto src = bytes({0x01, 0x02, 0x03});
+  const auto v = ccf::cbor::make_bytes(src);
+  // Same storage, not a copy.
+  EXPECT_EQ(v->as_bytes().data(), src.data());
+}
+
+TEST(CcfCbor, MakeStringDoesNotCopy)
+{
+  const std::string src = "borrowed";
+  const auto v = ccf::cbor::make_string(src);
+  EXPECT_EQ(v->as_string().data(), src.data());
+}
