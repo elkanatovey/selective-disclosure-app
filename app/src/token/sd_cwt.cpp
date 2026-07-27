@@ -99,44 +99,25 @@ namespace sdcwt
     std::vector<uint8_t> encode_map_disclosure(
       std::span<const uint8_t> salt, const CborValue& value, const CborKey& key)
     {
-      return cbor_encode([&](QCBOREncodeContext& ctx) {
-        QCBOREncode_OpenArray(&ctx);
-        QCBOREncode_AddBytes(&ctx, to_ubc(salt));
-        encode_value(ctx, value);
-        if (std::holds_alternative<int64_t>(key))
-        {
-          QCBOREncode_AddInt64(&ctx, std::get<int64_t>(key));
-        }
-        else
-        {
-          const auto& s = std::get<std::string>(key);
-          QCBOREncode_AddText(&ctx, UsefulBufC{s.data(), s.size()});
-        }
-        QCBOREncode_CloseArray(&ctx);
-      });
+      // Views borrow from salt/value/key, all alive across this call.
+      return ccf::cbor::serialize(ccf::cbor::make_array(
+        {ccf::cbor::make_bytes(salt), to_ccf_cbor(value), to_ccf_cbor(key)}));
     }
 
     // cbor([salt, <value>]) for a redacted array element.
     std::vector<uint8_t> encode_elem_disclosure(
       std::span<const uint8_t> salt, const CborValue& value)
     {
-      return cbor_encode([&](QCBOREncodeContext& ctx) {
-        QCBOREncode_OpenArray(&ctx);
-        QCBOREncode_AddBytes(&ctx, to_ubc(salt));
-        encode_value(ctx, value);
-        QCBOREncode_CloseArray(&ctx);
-      });
+      return ccf::cbor::serialize(ccf::cbor::make_array(
+        {ccf::cbor::make_bytes(salt), to_ccf_cbor(value)}));
     }
 
     // cbor([salt]) for a salt-only decoy disclosure (pads the redacted-hash
     // count without corresponding to any real claim).
     std::vector<uint8_t> encode_decoy_disclosure(std::span<const uint8_t> salt)
     {
-      return cbor_encode([&](QCBOREncodeContext& ctx) {
-        QCBOREncode_OpenArray(&ctx);
-        QCBOREncode_AddBytes(&ctx, to_ubc(salt));
-        QCBOREncode_CloseArray(&ctx);
-      });
+      return ccf::cbor::serialize(
+        ccf::cbor::make_array({ccf::cbor::make_bytes(salt)}));
     }
 
     // Re-emit a decoded scalar value without a preceding label, for the split

@@ -2,8 +2,7 @@
 // Licensed under the MIT License.
 #pragma once
 
-#include "cbor.h"
-
+#include <ccf/_private/crypto/cbor.h>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -52,10 +51,17 @@ namespace sdcwt
     void map_put(CborKey key, CborValue value);
   };
 
-  // Encode a value into an open QCBOR context. Map entries are emitted in CDE
-  // (RFC 8949 §4.2) key order; a map's redacted_hashes, if any, are emitted
-  // last under the simple(59) label.
-  void encode_value(QCBOREncodeContext& ctx, const CborValue& v);
+  // Build a `ccf::cbor` view of a value/key for encoding. Map entries are
+  // ordered by encoded-key bytes (CDE, RFC 8949 §4.2) — `ccf::cbor::serialize`
+  // preserves insertion order rather than sorting — and a map's
+  // `redacted_hashes`, if any, are emitted last under the simple(59) key.
+  //
+  // LIFETIME: the result BORROWS from `v`. `ccf::cbor::Bytes` is a span and
+  // `String` a string_view, so no node copies its data; a CborValue is the
+  // owning storage the view points into. Serialize the result in the same
+  // expression, and never let it outlive `v`.
+  ccf::cbor::Value to_ccf_cbor(const CborValue& v);
+  ccf::cbor::Value to_ccf_cbor(const CborKey& k);
 
   // Encode a value to standalone CBOR bytes.
   std::vector<uint8_t> encode_value(const CborValue& v);

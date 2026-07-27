@@ -39,13 +39,10 @@ TEST(SdCwt, DisclosureDigestMatchesPythonReference)
   }
 
   const auto value = sdcwt::value::text("heap overflow");
-  const auto encoded = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArray(&ctx);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(salt));
-    sdcwt::encode_value(ctx, value);
-    QCBOREncode_AddInt64(&ctx, 1002);
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto encoded = ccf::cbor::serialize(ccf::cbor::make_array(
+    {ccf::cbor::make_bytes(salt),
+     sdcwt::to_ccf_cbor(value),
+     ccf::cbor::make_signed(1002)}));
 
   EXPECT_EQ(
     to_hex(encoded),

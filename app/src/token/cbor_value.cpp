@@ -66,106 +66,101 @@ namespace sdcwt
 
   namespace
   {
-    std::vector<uint8_t> encode_key(const CborKey& key)
-    {
-      return cbor_encode([&](QCBOREncodeContext& ctx) {
-        if (std::holds_alternative<int64_t>(key))
-        {
-          QCBOREncode_AddInt64(&ctx, std::get<int64_t>(key));
-        }
-        else
-        {
-          const auto& s = std::get<std::string>(key);
-          QCBOREncode_AddText(&ctx, UsefulBufC{s.data(), s.size()});
-        }
-      });
-    }
+    // draft-08 wire labels. Kept as literals here rather than pulled from
+    // sd_cwt.h, which includes this header.
+    constexpr uint8_t REDACTED_CLAIM_KEYS = 59; // simple(59) map key
+    constexpr uint64_t REDACTED_ELEMENT_TAG = 60; // tag(60) array element
 
-    void add_key(QCBOREncodeContext& ctx, const CborKey& key)
+    std::vector<uint8_t> encoded_key_bytes(const CborKey& key)
     {
-      if (std::holds_alternative<int64_t>(key))
-      {
-        QCBOREncode_AddInt64(&ctx, std::get<int64_t>(key));
-      }
-      else
-      {
-        const auto& s = std::get<std::string>(key);
-        QCBOREncode_AddText(&ctx, UsefulBufC{s.data(), s.size()});
-      }
+      return ccf::cbor::serialize(to_ccf_cbor(key));
     }
   }
 
-  void encode_value(QCBOREncodeContext& ctx, const CborValue& v)
+  ccf::cbor::Value to_ccf_cbor(const CborKey& key)
+  {
+    if (std::holds_alternative<int64_t>(key))
+    {
+      return ccf::cbor::make_signed(std::get<int64_t>(key));
+    }
+    return ccf::cbor::make_string(std::get<std::string>(key));
+  }
+
+  ccf::cbor::Value to_ccf_cbor(const CborValue& v)
   {
     switch (v.kind)
     {
       case CborValue::Kind::Int:
-        QCBOREncode_AddInt64(&ctx, v.int_v);
-        break;
+        return ccf::cbor::make_signed(v.int_v);
       case CborValue::Kind::Bytes:
-        QCBOREncode_AddBytes(&ctx, to_ubc(v.bytes_v));
-        break;
+        return ccf::cbor::make_bytes(v.bytes_v);
       case CborValue::Kind::Text:
-        QCBOREncode_AddText(&ctx, UsefulBufC{v.text_v.data(), v.text_v.size()});
-        break;
+        return ccf::cbor::make_string(v.text_v);
       case CborValue::Kind::RedactedElement:
         // An array element replaced by tag(60) wrapping its Redacted Claim
         // Hash.
-        QCBOREncode_AddTag(&ctx, 60);
-        QCBOREncode_AddBytes(&ctx, to_ubc(v.bytes_v));
-        break;
+        return ccf::cbor::make_tagged(
+          REDACTED_ELEMENT_TAG, ccf::cbor::make_bytes(v.bytes_v));
       case CborValue::Kind::Array:
-        QCBOREncode_OpenArray(&ctx);
+      {
+        std::vector<ccf::cbor::Value> items;
+        items.reserve(v.array_v.size());
         for (const auto& elem : v.array_v)
         {
-          encode_value(ctx, elem);
+          items.push_back(to_ccf_cbor(elem));
         }
-        QCBOREncode_CloseArray(&ctx);
-        break;
+        return ccf::cbor::make_array(std::move(items));
+      }
       case CborValue::Kind::Map:
       {
-        // CDE (RFC 8949 §4.2): emit entries sorted by encoded-key bytes. int
-        // and text keys all encode with a first byte < simple(59) (0xf8), so
-        // the redacted-keys entry is emitted last.
+        // CDE (RFC 8949 §4.2): order entries by encoded-key bytes. int and
+        // text keys all encode with a first byte < simple(59) (0xf8), so the
+        // redacted-keys entry below always sorts last.
+        std::vector<std::vector<uint8_t>> keys;
+        keys.reserve(v.map_keys.size());
+        for (const auto& k : v.map_keys)
+        {
+          keys.push_back(encoded_key_bytes(k));
+        }
         std::vector<size_t> order(v.map_keys.size());
         for (size_t i = 0; i < order.size(); ++i)
         {
           order[i] = i;
         }
-        std::vector<std::vector<uint8_t>> keys;
-        keys.reserve(v.map_keys.size());
-        for (const auto& k : v.map_keys)
-        {
-          keys.push_back(encode_key(k));
-        }
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
           return keys[a] < keys[b];
         });
 
-        QCBOREncode_OpenMap(&ctx);
+        std::vector<ccf::cbor::MapItem> items;
+        items.reserve(v.map_keys.size() + 1);
         for (const size_t idx : order)
         {
-          add_key(ctx, v.map_keys[idx]);
-          encode_value(ctx, v.map_vals[idx]);
+          items.emplace_back(
+            to_ccf_cbor(v.map_keys[idx]), to_ccf_cbor(v.map_vals[idx]));
         }
+
         if (!v.redacted_hashes.empty())
         {
-          QCBOREncode_AddSimple(&ctx, 59); // redacted_claim_keys
-          QCBOREncode_OpenArray(&ctx);
+          std::vector<ccf::cbor::Value> hashes;
+          hashes.reserve(v.redacted_hashes.size());
           for (const auto& dig : v.redacted_hashes)
           {
-            QCBOREncode_AddBytes(&ctx, to_ubc(dig));
+            hashes.push_back(ccf::cbor::make_bytes(dig));
           }
-          QCBOREncode_CloseArray(&ctx);
+          items.emplace_back(
+            ccf::cbor::make_simple(
+              static_cast<ccf::cbor::SimpleValue>(REDACTED_CLAIM_KEYS)),
+            ccf::cbor::make_array(std::move(hashes)));
         }
-        QCBOREncode_CloseMap(&ctx);
-        break;
+        return ccf::cbor::make_map(std::move(items));
       }
     }
+    throw std::runtime_error("unhandled CborValue kind");
   }
 
   std::vector<uint8_t> encode_value(const CborValue& v)
   {
-    return cbor_encode([&](QCBOREncodeContext& ctx) { encode_value(ctx, v); });
+    // The view is consumed here, while `v` is still alive.
+    return ccf::cbor::serialize(to_ccf_cbor(v));
   }
 }
