@@ -2,11 +2,10 @@
 // Licensed under the MIT License.
 #include "disclosure_store.h"
 
-#include "cbor.h"
+#include "token/cbor_value.h"
 
 #include <algorithm>
-#include <qcbor/qcbor_decode.h>
-#include <qcbor/qcbor_spiffy_decode.h>
+#include <ccf/_private/crypto/cbor.h>
 #include <stdexcept>
 #include <variant>
 
@@ -14,54 +13,51 @@ namespace selectivedisclosure
 {
   namespace
   {
-    void encode_path(QCBOREncodeContext& ctx, const sdcwt::Path& path)
+    namespace cbor = ccf::cbor;
+
+    template <typename T>
+    bool is(const cbor::Value& v)
     {
-      QCBOREncode_OpenArray(&ctx);
+      return std::holds_alternative<T>(v->value);
+    }
+
+    // A path is an array of int (map key / array index) or text (map key).
+    // Borrows from `path`, which outlives the enclosing serialize().
+    cbor::Value encode_path(const sdcwt::Path& path)
+    {
+      std::vector<cbor::Value> elems;
+      elems.reserve(path.size());
       for (const auto& elem : path)
       {
         if (std::holds_alternative<int64_t>(elem))
         {
-          QCBOREncode_AddInt64(&ctx, std::get<int64_t>(elem));
+          elems.push_back(cbor::make_signed(std::get<int64_t>(elem)));
         }
         else
         {
-          QCBOREncode_AddSZString(&ctx, std::get<std::string>(elem).c_str());
+          elems.push_back(cbor::make_string(std::get<std::string>(elem)));
         }
       }
-      QCBOREncode_CloseArray(&ctx);
+      return cbor::make_array(std::move(elems));
     }
 
-    sdcwt::Path decode_path(QCBORDecodeContext& dc)
+    sdcwt::Path decode_path(const cbor::Value& v)
     {
-      QCBORDecode_EnterArray(&dc, nullptr);
-      if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+      if (!is<cbor::Array>(v))
       {
         throw std::invalid_argument("disclosure store: path must be an array");
       }
       sdcwt::Path path;
-      while (true)
+      for (const auto& item : std::get<cbor::Array>(v->value).items)
       {
-        QCBORItem item;
-        QCBORDecode_VGetNext(&dc, &item);
-        const QCBORError e = QCBORDecode_GetError(&dc);
-        if (e == QCBOR_ERR_NO_MORE_ITEMS)
+        if (is<cbor::Signed>(item))
         {
-          QCBORDecode_GetAndResetError(&dc);
-          break;
+          path.emplace_back(item->as_signed());
         }
-        if (e != QCBOR_SUCCESS)
+        else if (is<cbor::String>(item))
         {
-          throw std::invalid_argument("disclosure store: malformed path");
-        }
-        if (item.uDataType == QCBOR_TYPE_INT64)
-        {
-          path.emplace_back(item.val.int64);
-        }
-        else if (item.uDataType == QCBOR_TYPE_TEXT_STRING)
-        {
-          path.emplace_back(std::string(
-            static_cast<const char*>(item.val.string.ptr),
-            item.val.string.len));
+          // Copied out: as_string() is a view over the caller's buffer.
+          path.emplace_back(std::string(item->as_string()));
         }
         else
         {
@@ -69,7 +65,6 @@ namespace selectivedisclosure
             "disclosure store: path element must be int or text");
         }
       }
-      QCBORDecode_ExitArray(&dc);
       return path;
     }
 
@@ -87,73 +82,61 @@ namespace selectivedisclosure
   std::vector<uint8_t> encode_disclosure_store(
     const std::vector<sdcwt::Disclosure>& disclosures)
   {
-    return sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : disclosures)
-      {
-        QCBOREncode_OpenArray(&ctx);
-        encode_path(ctx, d.path);
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-        QCBOREncode_CloseArray(&ctx);
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    std::vector<cbor::Value> entries;
+    entries.reserve(disclosures.size());
+    for (const auto& d : disclosures)
+    {
+      entries.push_back(
+        cbor::make_array({encode_path(d.path), sdcwt::bytes_value(d.encoded)}));
+    }
+    // Borrows from `disclosures`, alive across this call.
+    return cbor::serialize(cbor::make_array(std::move(entries)));
   }
 
   std::vector<StoredDisclosure> decode_disclosure_store(
-    std::span<const uint8_t> cbor)
+    std::span<const uint8_t> raw)
   {
-    QCBORDecodeContext dc;
-    QCBORDecode_Init(
-      &dc, UsefulBufC{cbor.data(), cbor.size()}, QCBOR_DECODE_MODE_NORMAL);
-
-    QCBORDecode_EnterArray(&dc, nullptr);
-    if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+    cbor::Value root;
+    try
+    {
+      root = cbor::parse(raw);
+    }
+    catch (const std::exception&)
+    {
+      throw std::invalid_argument("malformed disclosure store");
+    }
+    if (!is<cbor::Array>(root))
     {
       throw std::invalid_argument("disclosure store must be a CBOR array");
     }
 
     std::vector<StoredDisclosure> out;
-    while (true)
+    for (const auto& entry : std::get<cbor::Array>(root->value).items)
     {
-      QCBORItem peek;
-      const QCBORError e = QCBORDecode_PeekNext(&dc, &peek);
-      if (e == QCBOR_ERR_NO_MORE_ITEMS)
-      {
-        QCBORDecode_GetAndResetError(&dc);
-        break;
-      }
-      if (e != QCBOR_SUCCESS)
-      {
-        throw std::invalid_argument("malformed disclosure store");
-      }
-
       // Each entry is a [path, encoded] pair.
-      QCBORDecode_EnterArray(&dc, nullptr);
-      if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+      if (!is<cbor::Array>(entry))
       {
         throw std::invalid_argument(
           "disclosure store entry must be a [path, encoded] pair");
       }
+      const auto& pair = std::get<cbor::Array>(entry->value).items;
+      if (pair.size() != 2)
+      {
+        throw std::invalid_argument(
+          "disclosure store entry must be a [path, encoded] pair");
+      }
+
       StoredDisclosure d;
-      d.path = decode_path(dc);
-      UsefulBufC b = NULLUsefulBufC;
-      QCBORDecode_GetByteString(&dc, &b);
-      if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+      d.path = decode_path(pair[0]);
+      if (!is<cbor::Bytes>(pair[1]))
       {
         throw std::invalid_argument(
           "disclosure store entry must carry encoded bytes");
       }
-      const auto* p = static_cast<const uint8_t*>(b.ptr);
-      d.encoded.assign(p, p + b.len);
-      QCBORDecode_ExitArray(&dc);
+      // Copied out: as_bytes() is a view over `raw`.
+      const auto b = pair[1]->as_bytes();
+      d.encoded.assign(b.begin(), b.end());
       out.push_back(std::move(d));
-    }
-
-    QCBORDecode_ExitArray(&dc);
-    if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
-    {
-      throw std::invalid_argument("malformed disclosure store");
     }
     return out;
   }

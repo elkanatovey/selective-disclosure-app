@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "cbor.h"
 #include "ccf/app_interface.h"
 #include "ccf/claims_digest.h"
 #include "ccf/common_auth_policies.h"
@@ -145,16 +144,14 @@ namespace selectivedisclosure
       // client knows which schema a live service speaks, DESIGN §12.1), and the
       // underlying CCF platform version. Unauthenticated on purpose. ----------
       auto get_version = [](ccf::endpoints::ReadOnlyEndpointContext& ctx) {
-        const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
-          QCBOREncode_OpenMap(&c);
-          QCBOREncode_AddSZStringToMap(&c, "app_version", kAppVersion);
-          QCBOREncode_AddInt64ToMap(
-            &c,
-            "schema_version",
-            static_cast<int64_t>(statement::SCHEMA_VERSION));
-          QCBOREncode_AddSZStringToMap(&c, "ccf_version", ccf::ccf_version);
-          QCBOREncode_CloseMap(&c);
-        });
+        const auto body = ccf::cbor::serialize(ccf::cbor::make_map(
+          {{ccf::cbor::make_string("app_version"),
+            ccf::cbor::make_string(kAppVersion)},
+           {ccf::cbor::make_string("schema_version"),
+            ccf::cbor::make_signed(
+              static_cast<int64_t>(statement::SCHEMA_VERSION))},
+           {ccf::cbor::make_string("ccf_version"),
+            ccf::cbor::make_string(ccf::ccf_version)}}));
         respond_ok(
           *ctx.rpc_ctx, ccf::http::headervalues::contenttype::CBOR, body);
       };
@@ -262,12 +259,9 @@ namespace selectivedisclosure
             fmt::format("Failed to build signing-key receipt: {}", e.what()));
           return;
         }
-        const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
-          QCBOREncode_OpenMap(&c);
-          QCBOREncode_AddBytesToMap(&c, "key", sdcwt::to_ubc(*pubkey));
-          QCBOREncode_AddBytesToMap(&c, "receipt", sdcwt::to_ubc(receipt));
-          QCBOREncode_CloseMap(&c);
-        });
+        const auto body = ccf::cbor::serialize(ccf::cbor::make_map(
+          {{ccf::cbor::make_string("key"), sdcwt::bytes_value(*pubkey)},
+           {ccf::cbor::make_string("receipt"), sdcwt::bytes_value(receipt)}}));
         respond_ok(
           *ctx.rpc_ctx, ccf::http::headervalues::contenttype::CBOR, body);
       };
@@ -734,30 +728,40 @@ namespace selectivedisclosure
           }
           const bool more = page_end < to;
 
-          const auto body = sdcwt::cbor_encode([&](QCBOREncodeContext& c) {
-            QCBOREncode_OpenMap(&c);
-            QCBOREncode_OpenArrayInMapSZ(&c, "statements");
-            for (const auto& t : txids)
-            {
-              QCBOREncode_AddSZString(&c, t.c_str());
-            }
-            QCBOREncode_CloseArray(&c);
-            QCBOREncode_AddInt64ToMap(&c, "from", static_cast<int64_t>(from));
-            // The highest seqno this page covers; the Operator's next poll
-            // starts at `to + 1`.
-            QCBOREncode_AddInt64ToMap(&c, "to", static_cast<int64_t>(page_end));
-            // The current ledger tip: the Operator's block count and its
-            // "caught up" signal (once `to == watermark`, the stream is
-            // drained).
-            QCBOREncode_AddInt64ToMap(
-              &c, "watermark", static_cast<int64_t>(watermark));
-            if (more)
-            {
-              QCBOREncode_AddInt64ToMap(
-                &c, "next", static_cast<int64_t>(page_end + 1));
-            }
-            QCBOREncode_CloseMap(&c);
-          });
+          std::vector<ccf::cbor::Value> statement_ids;
+          statement_ids.reserve(txids.size());
+          for (const auto& t : txids)
+          {
+            statement_ids.push_back(ccf::cbor::make_string(t));
+          }
+
+          std::vector<ccf::cbor::MapItem> fields;
+          fields.emplace_back(
+            ccf::cbor::make_string("statements"),
+            ccf::cbor::make_array(std::move(statement_ids)));
+          fields.emplace_back(
+            ccf::cbor::make_string("from"),
+            ccf::cbor::make_signed(static_cast<int64_t>(from)));
+          // The highest seqno this page covers; the Operator's next poll
+          // starts at `to + 1`.
+          fields.emplace_back(
+            ccf::cbor::make_string("to"),
+            ccf::cbor::make_signed(static_cast<int64_t>(page_end)));
+          // The current ledger tip: the Operator's block count and its
+          // "caught up" signal (once `to == watermark`, the stream is
+          // drained).
+          fields.emplace_back(
+            ccf::cbor::make_string("watermark"),
+            ccf::cbor::make_signed(static_cast<int64_t>(watermark)));
+          if (more)
+          {
+            fields.emplace_back(
+              ccf::cbor::make_string("next"),
+              ccf::cbor::make_signed(static_cast<int64_t>(page_end + 1)));
+          }
+          // Borrows from `txids`, which outlives this call.
+          const auto body =
+            ccf::cbor::serialize(ccf::cbor::make_map(std::move(fields)));
 
           respond_ok(
             *ctx.rpc_ctx, ccf::http::headervalues::contenttype::CBOR, body);
