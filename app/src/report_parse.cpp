@@ -5,133 +5,153 @@
 #include "token/statement.h"
 
 #include <array>
-#include <qcbor/qcbor_decode.h>
-#include <qcbor/qcbor_spiffy_decode.h>
+#include <ccf/_private/crypto/cbor.h>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
+#include <variant>
 
 namespace selectivedisclosure
 {
   namespace
   {
+    namespace cbor = ccf::cbor;
+
     [[noreturn]] void bad(const char* msg)
     {
       throw std::invalid_argument(msg);
     }
 
-    std::optional<std::string> opt_text(QCBORDecodeContext& dc, const char* key)
+    template <typename T>
+    bool is(const cbor::Value& v)
     {
-      UsefulBufC s = NULLUsefulBufC;
-      QCBORDecode_GetTextStringInMapSZ(&dc, key, &s);
-      const QCBORError e = QCBORDecode_GetAndResetError(&dc);
-      if (e == QCBOR_ERR_LABEL_NOT_FOUND)
+      return std::holds_alternative<T>(v->value);
+    }
+
+    // The value stored under text key `key`, or nullptr if the map has no such
+    // key. Only text-string keys match, so an integer key that happens to share
+    // a field's numeric spelling is never mistaken for that field.
+    const cbor::Value* find(const cbor::Value& map, std::string_view key)
+    {
+      for (const auto& [k, v] : std::get<cbor::Map>(map->value).items)
+      {
+        if (is<cbor::String>(k) && k->as_string() == key)
+        {
+          return &v;
+        }
+      }
+      return nullptr;
+    }
+
+    // Each opt_* returns nullopt for an absent field and throws for a present
+    // one of the wrong type. Values are copied out eagerly: cbor::String and
+    // cbor::Bytes are views over the caller's buffer, so nothing returned here
+    // may alias the parsed input.
+    std::optional<std::string> opt_text(const cbor::Value& map, const char* key)
+    {
+      const auto* v = find(map, key);
+      if (v == nullptr)
       {
         return std::nullopt;
       }
-      if (e != QCBOR_SUCCESS)
+      if (!is<cbor::String>(*v))
       {
         bad("string field has the wrong type");
       }
-      return std::string(static_cast<const char*>(s.ptr), s.len);
+      return std::string((*v)->as_string());
     }
 
     std::optional<std::vector<uint8_t>> opt_bytes(
-      QCBORDecodeContext& dc, const char* key)
+      const cbor::Value& map, const char* key)
     {
-      UsefulBufC b = NULLUsefulBufC;
-      QCBORDecode_GetByteStringInMapSZ(&dc, key, &b);
-      const QCBORError e = QCBORDecode_GetAndResetError(&dc);
-      if (e == QCBOR_ERR_LABEL_NOT_FOUND)
+      const auto* v = find(map, key);
+      if (v == nullptr)
       {
         return std::nullopt;
       }
-      if (e != QCBOR_SUCCESS)
+      if (!is<cbor::Bytes>(*v))
       {
         bad("byte-string field has the wrong type");
       }
-      const auto* p = static_cast<const uint8_t*>(b.ptr);
-      return std::vector<uint8_t>(p, p + b.len);
+      const auto b = (*v)->as_bytes();
+      return std::vector<uint8_t>(b.begin(), b.end());
     }
 
-    std::optional<int64_t> opt_int(QCBORDecodeContext& dc, const char* key)
+    std::optional<int64_t> opt_int(const cbor::Value& map, const char* key)
     {
-      int64_t v = 0;
-      QCBORDecode_GetInt64InMapSZ(&dc, key, &v);
-      const QCBORError e = QCBORDecode_GetAndResetError(&dc);
-      if (e == QCBOR_ERR_LABEL_NOT_FOUND)
+      const auto* v = find(map, key);
+      if (v == nullptr)
       {
         return std::nullopt;
       }
-      if (e != QCBOR_SUCCESS)
+      if (!is<cbor::Signed>(*v))
       {
         bad("integer field has the wrong type");
       }
-      return v;
+      return (*v)->as_signed();
     }
 
     std::optional<std::vector<std::string>> opt_text_array(
-      QCBORDecodeContext& dc, const char* key)
+      const cbor::Value& map, const char* key)
     {
-      QCBORDecode_EnterArrayFromMapSZ(&dc, key);
-      const QCBORError entered = QCBORDecode_GetAndResetError(&dc);
-      if (entered == QCBOR_ERR_LABEL_NOT_FOUND)
+      const auto* v = find(map, key);
+      if (v == nullptr)
       {
         return std::nullopt;
       }
-      if (entered != QCBOR_SUCCESS)
+      if (!is<cbor::Array>(*v))
       {
         bad("`references` must be an array");
       }
 
       std::vector<std::string> out;
-      while (true)
+      for (const auto& item : std::get<cbor::Array>((*v)->value).items)
       {
-        UsefulBufC s = NULLUsefulBufC;
-        QCBORDecode_GetTextString(&dc, &s);
-        const QCBORError e = QCBORDecode_GetError(&dc);
-        if (e == QCBOR_ERR_NO_MORE_ITEMS)
-        {
-          QCBORDecode_GetAndResetError(&dc); // normal end of array
-          break;
-        }
-        if (e != QCBOR_SUCCESS)
+        if (!is<cbor::String>(item))
         {
           bad("`references` must contain only strings");
         }
-        out.emplace_back(static_cast<const char*>(s.ptr), s.len);
+        out.emplace_back(item->as_string());
       }
-      QCBORDecode_ExitArray(&dc);
       return out;
+    }
+
+    // Parse a request body as a CBOR map. `ccf::cbor::parse` also enforces the
+    // draft-08 encoding MUSTs (definite-length only, no duplicate map keys,
+    // nesting bounded by max_depth) and rejects trailing bytes, so a successful
+    // return means the body is well-formed, complete, and a map.
+    cbor::Value parse_map(std::span<const uint8_t> raw, const char* what)
+    {
+      cbor::Value v;
+      try
+      {
+        v = cbor::parse(raw);
+      }
+      catch (const std::exception&)
+      {
+        bad(what);
+      }
+      if (!is<cbor::Map>(v))
+      {
+        bad(what);
+      }
+      return v;
     }
   }
 
-  sdcwt::statement::Fields parse_report_fields(std::span<const uint8_t> cbor)
+  sdcwt::statement::Fields parse_report_fields(std::span<const uint8_t> cbor_in)
   {
-    QCBORDecodeContext dc;
-    QCBORDecode_Init(
-      &dc, UsefulBufC{cbor.data(), cbor.size()}, QCBOR_DECODE_MODE_NORMAL);
-
-    QCBORDecode_EnterMap(&dc, nullptr);
-    if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
-    {
-      bad("request body must be a CBOR map");
-    }
+    const auto map = parse_map(cbor_in, "request body must be a CBOR map");
 
     sdcwt::statement::Fields f;
-    f.title = opt_text(dc, "title");
-    f.body = opt_text(dc, "body");
-    f.component = opt_text(dc, "component");
-    f.severity = opt_text(dc, "severity");
-    f.patch = opt_text(dc, "patch");
-    f.fingerprint = opt_bytes(dc, "fingerprint");
-    f.references = opt_text_array(dc, "references");
-    f.patch_date = opt_int(dc, "patch_date");
-
-    QCBORDecode_ExitMap(&dc);
-    if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
-    {
-      bad("malformed CBOR request body");
-    }
+    f.title = opt_text(map, "title");
+    f.body = opt_text(map, "body");
+    f.component = opt_text(map, "component");
+    f.severity = opt_text(map, "severity");
+    f.patch = opt_text(map, "patch");
+    f.fingerprint = opt_bytes(map, "fingerprint");
+    f.references = opt_text_array(map, "references");
+    f.patch_date = opt_int(map, "patch_date");
     return f;
   }
 
@@ -160,92 +180,54 @@ namespace selectivedisclosure
   }
 
   std::vector<FieldPath> parse_disclosure_selection(
-    std::span<const uint8_t> cbor)
+    std::span<const uint8_t> cbor_in)
   {
-    QCBORDecodeContext dc;
-    QCBORDecode_Init(
-      &dc, UsefulBufC{cbor.data(), cbor.size()}, QCBOR_DECODE_MODE_NORMAL);
+    const auto map =
+      parse_map(cbor_in, "disclosure request must be a CBOR map");
 
-    QCBORDecode_EnterMap(&dc, nullptr);
-    if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
-    {
-      bad("disclosure request must be a CBOR map");
-    }
-
-    QCBORDecode_EnterArrayFromMapSZ(&dc, "fields");
-    if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+    const auto* fields = find(map, "fields");
+    if (fields == nullptr || !is<cbor::Array>(*fields))
     {
       bad("disclosure request must have a `fields` array");
     }
 
     std::vector<FieldPath> out;
-    while (true)
+    for (const auto& entry : std::get<cbor::Array>((*fields)->value).items)
     {
-      QCBORItem peek;
-      const QCBORError e = QCBORDecode_PeekNext(&dc, &peek);
-      if (e == QCBOR_ERR_NO_MORE_ITEMS)
-      {
-        QCBORDecode_GetAndResetError(&dc); // normal end of array
-        break;
-      }
-      if (e != QCBOR_SUCCESS)
-      {
-        bad("malformed `fields` entry");
-      }
-
       FieldPath fp;
-      if (peek.uDataType == QCBOR_TYPE_TEXT_STRING)
+      if (is<cbor::String>(entry))
       {
         // A bare field name: a whole top-level field.
-        UsefulBufC s = NULLUsefulBufC;
-        QCBORDecode_GetTextString(&dc, &s);
-        fp.name.assign(static_cast<const char*>(s.ptr), s.len);
+        fp.name = entry->as_string();
       }
-      else if (peek.uDataType == QCBOR_TYPE_ARRAY)
+      else if (is<cbor::Array>(entry))
       {
         // A path: [name, idx, idx, ...].
-        QCBORDecode_EnterArray(&dc, nullptr);
-        UsefulBufC s = NULLUsefulBufC;
-        QCBORDecode_GetTextString(&dc, &s);
-        if (QCBORDecode_GetError(&dc) != QCBOR_SUCCESS)
+        const auto& path = std::get<cbor::Array>(entry->value).items;
+        if (path.empty() || !is<cbor::String>(path[0]))
         {
           bad("a `fields` path must start with a field name");
         }
-        fp.name.assign(static_cast<const char*>(s.ptr), s.len);
-        while (true)
+        fp.name = path[0]->as_string();
+        for (size_t i = 1; i < path.size(); i++)
         {
-          int64_t idx = 0;
-          QCBORDecode_GetInt64(&dc, &idx);
-          const QCBORError ie = QCBORDecode_GetError(&dc);
-          if (ie == QCBOR_ERR_NO_MORE_ITEMS)
-          {
-            QCBORDecode_GetAndResetError(&dc);
-            break;
-          }
-          if (ie != QCBOR_SUCCESS)
+          if (!is<cbor::Signed>(path[i]))
           {
             bad("a `fields` path index must be an integer");
           }
+          const auto idx = path[i]->as_signed();
           if (idx < 0)
           {
             bad("a `fields` path index must be non-negative");
           }
           fp.indices.push_back(idx);
         }
-        QCBORDecode_ExitArray(&dc);
       }
       else
       {
         bad("a `fields` entry must be a name or a [name, idx, ...] path");
       }
       out.push_back(std::move(fp));
-    }
-    QCBORDecode_ExitArray(&dc);
-
-    QCBORDecode_ExitMap(&dc);
-    if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
-    {
-      bad("malformed disclosure request");
     }
     return out;
   }
