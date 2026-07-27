@@ -29,6 +29,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  format:
+    name: C++ format (clang-format)
+    runs-on: ubuntu-latest
+    steps:
+      # Formatting only needs clang-format and the sources, so it runs on a
+      # plain runner rather than the CCF container and gives fast feedback
+      # independent of the build/test job below.
+      - uses: actions/checkout@v5
+      # Pinned to 18 so CI and developers converge on identical output: the
+      # .clang-format options here are version-sensitive and a different major
+      # version would reformat files this job just passed.
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - name: clang-format
+        run: |
+          set -euo pipefail
+          files=$(git ls-files app | grep -e '\.h$' -e '\.cpp$')
+          if ! echo "$files" | xargs clang-format-18 -n -Werror -style=file; then
+            echo "::error::Formatting differs. Fix locally with:"
+            echo "  git ls-files app | grep -e '\.h\$' -e '\.cpp\$' | xargs clang-format -style=file -i"
+            exit 1
+          fi
+
   cpp-tests:
     name: C++ token core + conformance
     runs-on: ubuntu-latest
