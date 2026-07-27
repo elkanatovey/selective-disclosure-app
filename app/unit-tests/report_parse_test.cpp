@@ -2,9 +2,9 @@
 // Licensed under the MIT License.
 #include "report_parse.h"
 
-#include "cbor.h"
+#include "token/cbor_value.h"
 
-#include <functional>
+#include <ccf/_private/crypto/cbor.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
 
@@ -12,14 +12,17 @@ using selectivedisclosure::parse_report_fields;
 
 namespace
 {
+  namespace cbor = ccf::cbor;
+
   // Encode a submission CBOR map for the tests, mirroring what a client sends.
-  std::vector<uint8_t> body(const std::function<void(QCBOREncodeContext&)>& add)
+  std::vector<uint8_t> body(std::vector<cbor::MapItem> entries)
   {
-    return sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenMap(&ctx);
-      add(ctx);
-      QCBOREncode_CloseMap(&ctx);
-    });
+    return cbor::serialize(cbor::make_map(std::move(entries)));
+  }
+
+  cbor::Value text(std::string_view s)
+  {
+    return cbor::make_string(s);
   }
 }
 
@@ -27,21 +30,18 @@ namespace
 TEST(ReportParse, DecodesAllFields)
 {
   const std::vector<uint8_t> fp = {0xde, 0xad, 0xbe, 0xef};
-  const auto cbor = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddSZStringToMap(&ctx, "title", "heap overflow");
-    QCBOREncode_AddSZStringToMap(&ctx, "body", "details");
-    QCBOREncode_AddSZStringToMap(&ctx, "component", "parser");
-    QCBOREncode_AddSZStringToMap(&ctx, "severity", "high");
-    QCBOREncode_AddSZStringToMap(&ctx, "patch", "fixed");
-    QCBOREncode_AddBytesToMap(&ctx, "fingerprint", sdcwt::to_ubc(fp));
-    QCBOREncode_OpenArrayInMap(&ctx, "references");
-    QCBOREncode_AddSZString(&ctx, "CVE-2025-1");
-    QCBOREncode_AddSZString(&ctx, "CVE-2025-2");
-    QCBOREncode_CloseArray(&ctx);
-    QCBOREncode_AddInt64ToMap(&ctx, "patch_date", 1700100000);
-  });
+  const auto cbor_body = body(
+    {{text("title"), text("heap overflow")},
+     {text("body"), text("details")},
+     {text("component"), text("parser")},
+     {text("severity"), text("high")},
+     {text("patch"), text("fixed")},
+     {text("fingerprint"), sdcwt::bytes_value(fp)},
+     {text("references"),
+      cbor::make_array({text("CVE-2025-1"), text("CVE-2025-2")})},
+     {text("patch_date"), cbor::make_signed(1700100000)}});
 
-  const auto f = parse_report_fields(cbor);
+  const auto f = parse_report_fields(cbor_body);
   EXPECT_EQ(f.title, "heap overflow");
   EXPECT_EQ(f.body, "details");
   EXPECT_EQ(f.component, "parser");
@@ -58,8 +58,7 @@ TEST(ReportParse, DecodesAllFields)
 // All fields are optional: an empty map yields an all-empty Fields.
 TEST(ReportParse, MissingFieldsAreNullopt)
 {
-  const auto cbor = body([](QCBOREncodeContext&) {});
-  const auto f = parse_report_fields(cbor);
+  const auto f = parse_report_fields(body({}));
   EXPECT_FALSE(f.title.has_value());
   EXPECT_FALSE(f.fingerprint.has_value());
   EXPECT_FALSE(f.references.has_value());
@@ -70,10 +69,8 @@ TEST(ReportParse, MissingFieldsAreNullopt)
 TEST(ReportParse, FingerprintIsBytes)
 {
   const std::vector<uint8_t> fp = {0x00, 0x01, 0x02, 0xff};
-  const auto cbor = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddBytesToMap(&ctx, "fingerprint", sdcwt::to_ubc(fp));
-  });
-  const auto f = parse_report_fields(cbor);
+  const auto f =
+    parse_report_fields(body({{text("fingerprint"), sdcwt::bytes_value(fp)}}));
   ASSERT_TRUE(f.fingerprint.has_value());
   EXPECT_EQ(*f.fingerprint, fp);
 }
@@ -81,30 +78,25 @@ TEST(ReportParse, FingerprintIsBytes)
 // A wrong-typed field is rejected (title as int, not text).
 TEST(ReportParse, WrongFieldTypeThrows)
 {
-  const auto cbor = body([](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddInt64ToMap(&ctx, "title", 42);
-  });
-  EXPECT_THROW(parse_report_fields(cbor), std::invalid_argument);
+  EXPECT_THROW(
+    parse_report_fields(body({{text("title"), cbor::make_signed(42)}})),
+    std::invalid_argument);
 }
 
 // A non-map body is rejected.
 TEST(ReportParse, NonMapBodyThrows)
 {
-  const auto cbor = sdcwt::cbor_encode([](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddSZString(&ctx, "not a map");
-  });
-  EXPECT_THROW(parse_report_fields(cbor), std::invalid_argument);
+  const auto not_a_map = cbor::serialize(text("not a map"));
+  EXPECT_THROW(parse_report_fields(not_a_map), std::invalid_argument);
 }
 
 // references with a non-string element is rejected.
 TEST(ReportParse, ReferencesMustBeStrings)
 {
-  const auto cbor = body([](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArrayInMap(&ctx, "references");
-    QCBOREncode_AddInt64(&ctx, 7);
-    QCBOREncode_CloseArray(&ctx);
-  });
-  EXPECT_THROW(parse_report_fields(cbor), std::invalid_argument);
+  EXPECT_THROW(
+    parse_report_fields(
+      body({{text("references"), cbor::make_array({cbor::make_signed(7)})}})),
+    std::invalid_argument);
 }
 
 // --- content_field_id: the name<->id source of truth ----------------------
@@ -135,12 +127,8 @@ TEST(ContentFieldId, RejectsUnknownName)
 TEST(FieldSelection, ParsesBareNames)
 {
   using selectivedisclosure::parse_disclosure_selection;
-  const auto req = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArrayInMap(&ctx, "fields");
-    QCBOREncode_AddSZString(&ctx, "title");
-    QCBOREncode_AddSZString(&ctx, "component");
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto req = body(
+    {{text("fields"), cbor::make_array({text("title"), text("component")})}});
   const auto sel = parse_disclosure_selection(req);
   ASSERT_EQ(sel.size(), 2u);
   EXPECT_EQ(sel[0].name, "title");
@@ -151,15 +139,12 @@ TEST(FieldSelection, ParsesBareNames)
 TEST(FieldSelection, ParsesNestedPath)
 {
   using selectivedisclosure::parse_disclosure_selection;
-  const auto req = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArrayInMap(&ctx, "fields");
-    QCBOREncode_AddSZString(&ctx, "title"); // bare name
-    QCBOREncode_OpenArray(&ctx); // ["references", 2]
-    QCBOREncode_AddSZString(&ctx, "references");
-    QCBOREncode_AddInt64(&ctx, 2);
-    QCBOREncode_CloseArray(&ctx);
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto req = body(
+    {{text("fields"),
+      cbor::make_array(
+        {text("title"), // bare name
+         cbor::make_array( // ["references", 2]
+           {text("references"), cbor::make_signed(2)})})}});
   const auto sel = parse_disclosure_selection(req);
   ASSERT_EQ(sel.size(), 2u);
   EXPECT_EQ(sel[0].name, "title");
@@ -172,42 +157,31 @@ TEST(FieldSelection, ParsesNestedPath)
 TEST(FieldSelection, ParsesEmptyFieldsArray)
 {
   using selectivedisclosure::parse_disclosure_selection;
-  const auto req = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArrayInMap(&ctx, "fields");
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto req = body({{text("fields"), cbor::make_array({})}});
   EXPECT_TRUE(parse_disclosure_selection(req).empty());
 }
 
 TEST(FieldSelection, RejectsMissingFields)
 {
   using selectivedisclosure::parse_disclosure_selection;
-  const auto req = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddSZStringToMap(&ctx, "other", "x");
-  });
+  const auto req = body({{text("other"), text("x")}});
   EXPECT_THROW(parse_disclosure_selection(req), std::invalid_argument);
 }
 
 TEST(FieldSelection, RejectsBareIntEntry)
 {
   using selectivedisclosure::parse_disclosure_selection;
-  const auto req = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArrayInMap(&ctx, "fields");
-    QCBOREncode_AddInt64(&ctx, 7);
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto req =
+    body({{text("fields"), cbor::make_array({cbor::make_signed(7)})}});
   EXPECT_THROW(parse_disclosure_selection(req), std::invalid_argument);
 }
 
 TEST(FieldSelection, RejectsPathWithoutName)
 {
   using selectivedisclosure::parse_disclosure_selection;
-  const auto req = body([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArrayInMap(&ctx, "fields");
-    QCBOREncode_OpenArray(&ctx); // [0] — index without a leading name
-    QCBOREncode_AddInt64(&ctx, 0);
-    QCBOREncode_CloseArray(&ctx);
-    QCBOREncode_CloseArray(&ctx);
-  });
+  // [0] — index without a leading name
+  const auto req = body(
+    {{text("fields"),
+      cbor::make_array({cbor::make_array({cbor::make_signed(0)})})}});
   EXPECT_THROW(parse_disclosure_selection(req), std::invalid_argument);
 }

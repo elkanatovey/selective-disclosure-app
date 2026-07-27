@@ -2,14 +2,12 @@
 // Licensed under the MIT License.
 #include "token/sd_cwt.h"
 
-#include "cbor.h"
+#include "token/cbor_value.h"
 #include "token/cose.h"
 
 #include <algorithm>
 #include <cstring>
 #include <gtest/gtest.h>
-#include <qcbor/qcbor_decode.h>
-#include <qcbor/qcbor_spiffy_decode.h>
 
 namespace
 {
@@ -203,58 +201,46 @@ TEST(SdCwt, PresentAttachesSelectedDisclosures)
 // them (mirrors the Python reference's dict(arr[1]) passthrough).
 TEST(SdCwt, PresentPreservesExistingUnprotectedHeader)
 {
+  namespace cbor = ccf::cbor;
   const std::vector<uint8_t> kid = {0xAB, 0xCD};
   const std::vector<uint8_t> cert = {0x01, 0x02, 0x03};
   const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
+  const std::vector<uint8_t> empty;
 
   // Hand-build a COSE_Sign1 whose unprotected header already carries kid (4)
   // and an x5chain-like array (33). The signature/payload are placeholders;
   // present does not verify them.
-  const auto token = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddTag(&ctx, 18);
-    QCBOREncode_OpenArray(&ctx);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // phdr
-    QCBOREncode_OpenMap(&ctx);
-    QCBOREncode_AddBytesToMapN(&ctx, 4, sdcwt::to_ubc(kid));
-    QCBOREncode_OpenArrayInMapN(&ctx, 33);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(cert));
-    QCBOREncode_CloseArray(&ctx);
-    QCBOREncode_CloseMap(&ctx);
-    QCBOREncode_AddBytes(
-      &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // payload
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // sig
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto token = cbor::serialize(cbor::make_tagged(
+    cbor::tag::COSE_SIGN_1,
+    cbor::make_array(
+      {sdcwt::bytes_value(empty), // phdr
+       cbor::make_map(
+         {{cbor::make_signed(4), sdcwt::bytes_value(kid)},
+          {cbor::make_signed(33),
+           cbor::make_array({sdcwt::bytes_value(cert)})}}),
+       sdcwt::bytes_value(empty), // payload
+       sdcwt::bytes_value(empty)}))); // sig
 
   const auto presented = sdcwt::present(token, {disclosure});
 
   // The rebuilt unprotected header must still contain kid(4) and x5chain(33),
   // and now also sd_claims(17).
-  QCBORDecodeContext dc;
-  QCBORDecode_Init(
-    &dc,
-    UsefulBufC{presented.data(), presented.size()},
-    QCBOR_DECODE_MODE_NORMAL);
-  QCBORDecode_EnterArray(&dc, nullptr);
-  UsefulBufC phdr = NULLUsefulBufC;
-  QCBORDecode_GetByteString(&dc, &phdr);
-  QCBORDecode_EnterMap(&dc, nullptr);
-  UsefulBufC got_kid = NULLUsefulBufC;
-  QCBORDecode_GetByteStringInMapN(&dc, 4, &got_kid);
-  QCBORDecode_EnterArrayFromMapN(&dc, 17); // sd_claims present
-  QCBORDecode_ExitArray(&dc);
-  UsefulBufC got_cert = NULLUsefulBufC;
-  QCBORDecode_EnterArrayFromMapN(&dc, 33); // x5chain present
-  QCBORDecode_GetByteString(&dc, &got_cert);
-  QCBORDecode_ExitArray(&dc);
-  QCBORDecode_ExitMap(&dc);
-  QCBORDecode_ExitArray(&dc);
-  ASSERT_EQ(QCBORDecode_Finish(&dc), QCBOR_SUCCESS);
+  const auto out = cbor::parse(presented);
+  const auto& parts =
+    std::get<cbor::Array>(out->tag_at(cbor::tag::COSE_SIGN_1)->value).items;
+  const auto& uhdr = parts[1];
 
-  ASSERT_EQ(got_kid.len, kid.size());
-  EXPECT_EQ(0, std::memcmp(got_kid.ptr, kid.data(), kid.size()));
-  ASSERT_EQ(got_cert.len, cert.size());
-  EXPECT_EQ(0, std::memcmp(got_cert.ptr, cert.data(), cert.size()));
+  const auto got_kid = uhdr->map_at(cbor::make_signed(4))->as_bytes();
+  EXPECT_TRUE(std::equal(got_kid.begin(), got_kid.end(), kid.begin()));
+  EXPECT_EQ(got_kid.size(), kid.size());
+
+  const auto got_cert =
+    uhdr->map_at(cbor::make_signed(33))->array_at(0)->as_bytes();
+  EXPECT_TRUE(std::equal(got_cert.begin(), got_cert.end(), cert.begin()));
+  EXPECT_EQ(got_cert.size(), cert.size());
+
+  // sd_claims(17) was added.
+  EXPECT_EQ(uhdr->map_at(cbor::make_signed(17))->size(), 1u);
 }
 
 // kbt_sign requires the draft-08 s8.1 freshness claim (iat or cti).
@@ -427,11 +413,6 @@ TEST(SdCwt, NestedAncestorDisclosure)
   EXPECT_EQ(a_enc.find("SECRET_CHILD"), std::string::npos);
 }
 
-// present() must handle an indefinite-length unprotected-header map: the
-// original code iterated by uCount which equals UINT16_MAX for indefinite
-// maps, causing a spurious throw after the first real entry. The fixed code
-// loops until QCBOR_ERR_NO_MORE_ITEMS regardless of map encoding style.
-// Also verifies the output map preserves the indefinite-length encoding.
 // present() rebuilds the COSE_Sign1 through ccf::cbor, which enforces
 // definite-length encoding (draft-08 s5.1). A token whose unprotected header is
 // an indefinite-length map is therefore rejected rather than round-tripped.
@@ -454,10 +435,6 @@ TEST(SdCwt, PresentRejectsIndefiniteLengthUnprotectedHeader)
   EXPECT_THROW((void)sdcwt::present(token, {disclosure}), std::runtime_error);
 }
 
-// present() must preserve an unprotected-header entry whose label is a uint64
-// value larger than INT64_MAX. The original code cast peek.label.uint64 to
-// int64_t (silent UB for values > INT64_MAX). The fixed code tracks the label
-// type and emits large labels via a split QCBOREncode_AddUInt64 key + value.
 // ccf::cbor represents integers as int64_t, so a CBOR unsigned integer above
 // INT64_MAX cannot be held at all and is rejected at parse. A token whose
 // unprotected header uses such a label therefore cannot be presented.

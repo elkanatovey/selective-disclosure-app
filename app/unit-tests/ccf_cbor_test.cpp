@@ -3,7 +3,7 @@
 
 // Characterisation tests for CCF's evercbor-backed CBOR API (`ccf::cbor`),
 // pinned before any of the token core migrates onto it. These assert what the
-// library actually does, not what we hope it does: the QCBOR code being
+// library actually does, not what we hope it does: the hand-rolled code being
 // replaced hand-enforces several draft-08 encoding rules, and this file records
 // which of those `ccf::cbor` gives us for free and which we must keep enforcing
 // ourselves.
@@ -87,7 +87,7 @@ TEST(CcfCbor, SerializeMapKeyOrderIsCharacterised)
 
 // --- HAZARD 2: draft-08 encoding MUSTs -------------------------------------
 // draft-ietf-spice-sd-cwt s5 requires rejecting indefinite-length items and
-// duplicate map keys. Our QCBOR paths check these today.
+// duplicate map keys. Our decode paths check these today.
 
 TEST(CcfCbor, IndefiniteLengthHandlingIsCharacterised)
 {

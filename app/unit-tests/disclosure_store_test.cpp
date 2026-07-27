@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #include "disclosure_store.h"
 
-#include "cbor.h"
+#include "token/cbor_value.h"
 
 #include <functional>
 #include <gtest/gtest.h>

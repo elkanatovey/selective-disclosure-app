@@ -1,9 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#include "cbor.h"
+#include "token/cbor_value.h"
 #include "token/statement.h"
 #include "token/statement_internal.h"
 
+#include <ccf/_private/crypto/cbor.h>
 #include <ccf/crypto/ec_key_pair.h>
 #include <cstdlib>
 #include <filesystem>
@@ -13,6 +14,20 @@
 
 namespace
 {
+  // The artifact format the Python conformance tests read: a bare CBOR array of
+  // the encoded salted disclosures.
+  std::vector<uint8_t> encode_disclosures(
+    const std::vector<sdcwt::Disclosure>& disclosures)
+  {
+    std::vector<ccf::cbor::Value> items;
+    items.reserve(disclosures.size());
+    for (const auto& d : disclosures)
+    {
+      items.push_back(sdcwt::bytes_value(d.encoded));
+    }
+    return ccf::cbor::serialize(ccf::cbor::make_array(std::move(items)));
+  }
+
   // Emit a C++-produced statement (token + disclosures + signer pubkey) for the
   // given curve + redaction hash into $SDCWT_ARTIFACT_DIR/<suite>/, for the
   // Python conformance test to validate. Field values MUST stay in sync with
@@ -34,14 +49,7 @@ namespace
     const auto issued = sdcwt::statement::issue_statement(
       "https://ledger.example/tee", 1700000000, f, *key, sd_alg);
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/" + suite;
     std::filesystem::create_directories(dir);
@@ -115,14 +123,7 @@ namespace
 
     const auto issued = sdcwt::issue(claims, paths, *key);
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/array";
     std::filesystem::create_directories(dir);
@@ -160,14 +161,7 @@ namespace
 
     const auto issued = sdcwt::issue(claims, paths, *key);
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/nested";
     std::filesystem::create_directories(dir);
@@ -247,14 +241,7 @@ namespace
       /*pad_to=*/0,
       holder_pub.get());
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/cnf";
     std::filesystem::create_directories(dir);
