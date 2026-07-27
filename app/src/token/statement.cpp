@@ -47,24 +47,22 @@ namespace sdcwt::statement
     claims.reserve(2 + CONTENT_FIELD_COUNT);
 
     // Clear claims (service-set).
-    claims.push_back({ISS, value::text(iss), false});
-    claims.push_back({IAT, value::integer(iat), false});
+    claims.push_back({ISS, value::text(iss)});
+    claims.push_back({IAT, value::integer(iat)});
 
-    // Content claims, in canonical order, all redacted (strict uniformity).
-    claims.push_back({PARENT, or_pad(f.parent, enc_bytes, rng, pad_len), true});
-    claims.push_back({TITLE, or_pad(f.title, enc_text, rng, pad_len), true});
-    claims.push_back({BODY, or_pad(f.body, enc_text, rng, pad_len), true});
+    // Content claims, in canonical order. Which of these are redacted is
+    // expressed by the redaction paths in issue_statement(), not here.
+    claims.push_back({PARENT, or_pad(f.parent, enc_bytes, rng, pad_len)});
+    claims.push_back({TITLE, or_pad(f.title, enc_text, rng, pad_len)});
+    claims.push_back({BODY, or_pad(f.body, enc_text, rng, pad_len)});
+    claims.push_back({COMPONENT, or_pad(f.component, enc_text, rng, pad_len)});
+    claims.push_back({SEVERITY, or_pad(f.severity, enc_text, rng, pad_len)});
     claims.push_back(
-      {COMPONENT, or_pad(f.component, enc_text, rng, pad_len), true});
+      {FINGERPRINT, or_pad(f.fingerprint, enc_bytes, rng, pad_len)});
     claims.push_back(
-      {SEVERITY, or_pad(f.severity, enc_text, rng, pad_len), true});
-    claims.push_back(
-      {FINGERPRINT, or_pad(f.fingerprint, enc_bytes, rng, pad_len), true});
-    claims.push_back(
-      {REFERENCES, or_pad(f.references, enc_refs, rng, pad_len), true});
-    claims.push_back({PATCH, or_pad(f.patch, enc_text, rng, pad_len), true});
-    claims.push_back(
-      {PATCH_DATE, or_pad(f.patch_date, enc_int, rng, pad_len), true});
+      {REFERENCES, or_pad(f.references, enc_refs, rng, pad_len)});
+    claims.push_back({PATCH, or_pad(f.patch, enc_text, rng, pad_len)});
+    claims.push_back({PATCH_DATE, or_pad(f.patch_date, enc_int, rng, pad_len)});
 
     return claims;
   }
@@ -78,14 +76,25 @@ namespace sdcwt::statement
     const RandomSource& rng,
     size_t salt_len)
   {
-    // Redact each `references` element individually (in addition to the whole
-    // field), so the Operator can later disclose a single reference without
-    // revealing its siblings. Only when the field is actually present as an
-    // array — an absent field is a garbage sentinel with no elements. This does
-    // not change the redacted shape at rest: the whole array is still one
-    // top-level Redacted Claim Hash; the element hashes live inside it and are
-    // seen only once the array itself is disclosed.
+    const auto claims = detail::build_claims(iss, iat, fields, rng, salt_len);
+
+    // Every content claim is redacted whole (strict uniformity); only the
+    // service-set clear claims stay visible. Derived from the claim set so the
+    // content field list lives in one place (build_claims). Each `references`
+    // element is additionally redacted so a single reference can later be
+    // disclosed without revealing its siblings; those element hashes live
+    // inside the array's own disclosure (ancestor-disclosure rule), so the
+    // shape at rest is unchanged. Only when the field is really an array — an
+    // absent field is a garbage sentinel with no elements.
     std::vector<Path> redact_paths;
+    redact_paths.reserve(CONTENT_FIELD_COUNT);
+    for (const auto& c : claims)
+    {
+      if (c.key != ISS && c.key != IAT)
+      {
+        redact_paths.push_back(Path{PathElem(c.key)});
+      }
+    }
     if (fields.references.has_value())
     {
       for (size_t i = 0; i < fields.references->size(); ++i)
@@ -96,12 +105,7 @@ namespace sdcwt::statement
     }
 
     return sdcwt::detail::issue(
-      detail::build_claims(iss, iat, fields, rng, salt_len),
-      key,
-      sd_alg,
-      redact_paths,
-      rng,
-      salt_len);
+      claims, redact_paths, key, sd_alg, rng, salt_len);
   }
 
   std::vector<Claim> build_claims(

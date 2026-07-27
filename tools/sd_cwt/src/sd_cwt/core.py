@@ -463,11 +463,9 @@ def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> 
 
 def issue(
     claims: dict[ClaimKey, Any],
-    redact: set[ClaimKey],
+    redact_paths: list[tuple],
     signer: Any,
     *,
-    redact_elements: Optional[dict[ClaimKey, set[int]]] = None,
-    redact_paths: Optional[list[tuple]] = None,
     sd_alg: HashAlg = HashAlg.SHA_256,
     pad_to: Optional[int] = None,
     protected_extra: Optional[dict] = None,
@@ -475,13 +473,15 @@ def issue(
 ) -> tuple[bytes, list[Disclosure]]:
     """Build a redacted SD-CWT and sign it.
 
-    Redaction targets are expressed as paths from the root:
-      * `redact` — whole top-level map entries (shorthand for `(key,)`).
-      * `redact_elements` — `{key: {indices}}` top-level array elements
-        (shorthand for `(key, index)`).
-      * `redact_paths` — arbitrary-depth paths, e.g. `(503, "region")` or
-        `(700, "a", "b", 1)`, mixing map keys and array indices.
-    Every requested path must resolve to an existing entry or element; otherwise
+    `redact_paths` is the single, complete description of the redaction tree.
+    Each entry is a non-empty tuple of map keys / array indices from the claims
+    root:
+      * `(500,)` — a length-1 path hides that whole top-level claim.
+      * `(502, 1)`, `(503, "region")`, `(700, "a", "b", 1)` — longer paths hide
+        nested map entries / array elements at arbitrary depth.
+    The two compose: redacting both a parent and a child within it follows the
+    ancestor-disclosure rule (a disclosed parent may reveal a still-redacted
+    child). Every path must resolve to an existing entry or element; otherwise
     issuance fails with `ValueError` before any token is created.
 
     `cnf`, if given, is a public key embedded as the RFC 8747 confirmation
@@ -492,10 +492,7 @@ def issue(
     Returns (signed COSE_Sign1 token bytes with NO disclosures attached, all
     generated disclosures).
     """
-    paths: list[tuple] = [(k,) for k in redact]
-    for key, indices in (redact_elements or {}).items():
-        paths += [(key, i) for i in indices]
-    paths += list(redact_paths or [])
+    paths: list[tuple] = list(redact_paths)
 
     work: dict[ClaimKey, Any] = dict(claims)
     if cnf is not None:

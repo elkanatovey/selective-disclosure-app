@@ -63,11 +63,11 @@ TEST(SdCwt, RedactedClaimIsHiddenAndDisclosed)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("https://issuer.example"), false},
-    {1002, sdcwt::value::text("secret body"), true},
+    {1, sdcwt::value::text("https://issuer.example")},
+    {1002, sdcwt::value::text("secret body")},
   };
 
-  const auto issued = sdcwt::issue(claims, *key);
+  const auto issued = sdcwt::issue(claims, {{int64_t{1002}}}, *key);
 
   // The secret must not appear anywhere in the signed token bytes.
   const std::string needle = "secret body";
@@ -89,11 +89,12 @@ TEST(SdCwt, RedactionHashAgilitySha384)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret")},
   };
 
-  const auto issued = sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_384);
+  const auto issued =
+    sdcwt::issue(claims, {{int64_t{1002}}}, *key, sdcwt::HashAlg::SHA_384);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
   EXPECT_EQ(issued.disclosures[0].digest.size(), 48u); // SHA-384 output
@@ -124,13 +125,13 @@ TEST(SdCwt, ConfigurableSaltLength)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1002, sdcwt::value::text("secret"), true},
+    {1002, sdcwt::value::text("secret")},
   };
   const auto issued = sdcwt::issue(
     claims,
+    {{int64_t{1002}}},
     *key,
     sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
     /*salt_len=*/32);
   ASSERT_EQ(issued.disclosures.size(), 1u);
   EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
@@ -147,19 +148,19 @@ TEST(SdCwt, CnfEmbedsHolderPublicKey)
   const auto coords = holder_pub->coordinates();
 
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("https://issuer.example"), false},
-    {1002, sdcwt::value::text("secret body"), true},
+    {1, sdcwt::value::text("https://issuer.example")},
+    {1002, sdcwt::value::text("secret body")},
   };
 
   const auto with_cnf = sdcwt::issue(
     claims,
+    {{int64_t{1002}}},
     *issuer,
     sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
     sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
-  const auto without = sdcwt::issue(claims, *issuer);
+  const auto without = sdcwt::issue(claims, {{int64_t{1002}}}, *issuer);
 
   const auto contains = [](
                           const std::vector<uint8_t>& hay,
@@ -178,10 +179,10 @@ TEST(SdCwt, PresentAttachesSelectedDisclosures)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret body"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret body")},
   };
-  const auto issued = sdcwt::issue(claims, *key);
+  const auto issued = sdcwt::issue(claims, {{int64_t{1002}}}, *key);
   ASSERT_EQ(issued.disclosures.size(), 1u);
 
   const auto contains = [](
@@ -266,14 +267,14 @@ TEST(SdCwt, KbtSignRequiresIatOrCti)
   auto holder = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   auto holder_pub = ccf::crypto::make_ec_public_key(holder->public_key_pem());
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret")},
   };
   const auto issued = sdcwt::issue(
     claims,
+    {{int64_t{1002}}},
     *issuer,
     sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
     sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
@@ -293,14 +294,14 @@ TEST(SdCwt, DecoyPadding)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret")},
   };
   const auto issued = sdcwt::issue(
     claims,
+    {{int64_t{1002}}},
     *key,
     sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
     sdcwt::SALT_LEN,
     /*pad_to=*/5);
 
@@ -323,22 +324,16 @@ TEST(SdCwt, UnmatchedRedactPathRejected)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1006, sdcwt::value::text_array({"A", "B"}), false},
+    {1006, sdcwt::value::text_array({"A", "B"})},
   };
   // Wrong claim key, out-of-range index, and descending into a scalar.
   EXPECT_THROW(
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, {{int64_t{9999}}}),
+    sdcwt::issue(claims, {{int64_t{9999}}}, *key), std::invalid_argument);
+  EXPECT_THROW(
+    sdcwt::issue(claims, {{int64_t{1006}, int64_t{9}}}, *key),
     std::invalid_argument);
   EXPECT_THROW(
-    sdcwt::issue(
-      claims, *key, sdcwt::HashAlg::SHA_256, {{int64_t{1006}, int64_t{9}}}),
-    std::invalid_argument);
-  EXPECT_THROW(
-    sdcwt::issue(
-      claims,
-      *key,
-      sdcwt::HashAlg::SHA_256,
-      {{int64_t{1006}, int64_t{0}, int64_t{0}}}),
+    sdcwt::issue(claims, {{int64_t{1006}, int64_t{0}, int64_t{0}}}, *key),
     std::invalid_argument);
 }
 
@@ -349,14 +344,12 @@ TEST(SdCwt, ArrayElementRedaction)
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
     {1006,
-     sdcwt::value::text_array({"REF_KEEP_A", "REF_HIDE_B", "REF_KEEP_C"}),
-     false},
+     sdcwt::value::text_array({"REF_KEEP_A", "REF_HIDE_B", "REF_KEEP_C"})},
   };
   // Redact element 1 of claim 1006.
   const std::vector<sdcwt::Path> paths = {{int64_t{1006}, int64_t{1}}};
 
-  const auto issued =
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+  const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
   EXPECT_FALSE(issued.disclosures[0].key.has_value()); // array element
@@ -376,11 +369,10 @@ TEST(SdCwt, NestedMapRedaction)
   auto inner = sdcwt::CborValue::Map(
     {{std::string("keep"), sdcwt::value::text("INNER_KEEP")},
      {std::string("hide"), sdcwt::value::text("NESTED_HIDE")}});
-  std::vector<sdcwt::Claim> claims = {{500, std::move(inner), false}};
+  std::vector<sdcwt::Claim> claims = {{500, std::move(inner)}};
   const std::vector<sdcwt::Path> paths = {{int64_t{500}, std::string("hide")}};
 
-  const auto issued =
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+  const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
   ASSERT_TRUE(issued.disclosures[0].key.has_value());
@@ -403,14 +395,13 @@ TEST(SdCwt, NestedAncestorDisclosure)
      {std::string("c"), sdcwt::value::text("KEEP_SIBLING")}});
   auto child =
     sdcwt::CborValue::Map({{std::string("a"), std::move(grandchild)}});
-  std::vector<sdcwt::Claim> claims = {{700, std::move(child), false}};
+  std::vector<sdcwt::Claim> claims = {{700, std::move(child)}};
   // Redact the parent "a" AND the grandchild "b".
   const std::vector<sdcwt::Path> paths = {
     {int64_t{700}, std::string("a")},
     {int64_t{700}, std::string("a"), std::string("b")}};
 
-  const auto issued =
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+  const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 2u);
   EXPECT_FALSE(token_contains(issued.token, "SECRET_CHILD"));

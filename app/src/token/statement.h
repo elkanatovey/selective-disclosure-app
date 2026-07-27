@@ -51,8 +51,9 @@ namespace sdcwt::statement
   };
 
   // Build the strictly-uniform claim set: clear iss/iat + all 9 content fields
-  // (real value when set, else a random `pad_len`-byte garbage sentinel), all
-  // content redacted.
+  // (real value when set, else a random `pad_len`-byte garbage sentinel).
+  // Which claims are redacted is not encoded here — issue_statement() supplies
+  // that as redaction paths.
   std::vector<Claim> build_claims(
     const std::string& iss,
     int64_t iat,

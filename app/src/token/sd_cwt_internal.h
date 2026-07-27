@@ -27,9 +27,9 @@ namespace sdcwt
     // source. See sd_cwt.h for parameter semantics.
     IssuedToken issue(
       const std::vector<Claim>& claims,
+      const std::vector<Path>& redact_paths,
       const ccf::crypto::ECKeyPair& key,
       HashAlg sd_alg,
-      const std::vector<Path>& redact_paths,
       const RandomSource& rng,
       size_t salt_len = SALT_LEN,
       size_t pad_to = 0,

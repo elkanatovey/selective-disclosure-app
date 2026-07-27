@@ -245,7 +245,7 @@ def test_decoy_padding_byte_identical_to_python(monkeypatch):
     signer = EC2Key.generate_key(crv=P256)
     py_token, _ = sd_cwt.issue(
         {1: "https://ledger.example/tee", 1002: "secret body"},
-        {1002},
+        [(1002,)],
         signer,
         pad_to=5,
     )

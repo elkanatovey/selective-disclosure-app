@@ -178,19 +178,15 @@ def issue_statement(
         PATCH_DATE: patch_date,
     }
     claims = build_claims(iss, iat, fields)
-    # Redact each `references` element individually (in addition to the whole
-    # field) so a single reference can later be disclosed without revealing its
-    # siblings. Only when present as a list (an absent field is a garbage
-    # sentinel with no elements). Mirrors the C++ token core (statement.cpp).
-    redact_elements: Optional[dict[Any, set[int]]] = None
+    # Every content field is redacted whole (strict uniformity). Additionally
+    # redact each `references` element individually so a single reference can
+    # later be disclosed without revealing its siblings. Only when present as a
+    # list (an absent field is a garbage sentinel with no elements). Mirrors the
+    # C++ token core (statement.cpp).
+    redact_paths: list[tuple] = [(k,) for k in CONTENT_FIELDS]
     if references is not None:
-        redact_elements = {REFERENCES: set(range(len(references)))}
-    return issue(
-        claims,
-        redact=set(CONTENT_FIELDS),
-        signer=signer,
-        redact_elements=redact_elements,
-    )
+        redact_paths += [(REFERENCES, i) for i in range(len(references))]
+    return issue(claims, redact_paths, signer)
 
 
 def _nested_hashes(value: Any) -> list[bytes]:

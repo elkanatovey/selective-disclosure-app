@@ -732,8 +732,8 @@ To-Be-Redacted / To-Be-Decoy tags.
 
 **API, what tests target:**
 ```
-issue(claims, redact, signer, *, redact_elements=None, redact_paths=None,
-      sd_alg=SHA256, pad_to=None, cnf=None)             -> (token, [Disclosure])
+issue(claims, redact_paths, signer, *, sd_alg=SHA256, pad_to=None, cnf=None)
+                                                        -> (token, [Disclosure])
 present(token, selected: [Disclosure])                  -> token
 verify(token, pubkey)                                   -> VerifiedToken
 validate(token, pubkey)                                 -> ValidatedClaims{clear, disclosed}

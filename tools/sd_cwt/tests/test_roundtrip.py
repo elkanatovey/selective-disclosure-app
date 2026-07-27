@@ -21,7 +21,7 @@ def signer() -> EC2Key:
 def test_issue_present_validate_full_roundtrip(signer):
     claims = {1: "https://issuer.example", 500: "heap overflow in parser", 501: "RCE"}
 
-    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer)
+    token, discs = sd_cwt.issue(claims, [(500,), (501,)], signer)
     presented = sd_cwt.present(token, discs)  # disclose everything
     out = sd_cwt.validate(presented, signer)
 
@@ -33,7 +33,7 @@ def test_issue_present_validate_full_roundtrip(signer):
 def test_partial_disclosure_reveals_only_selected(signer):
     claims = {1: "iss", 500: "secret detail", 501: "RCE"}
 
-    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer)
+    token, discs = sd_cwt.issue(claims, [(500,), (501,)], signer)
     only_501 = [d for d in discs if d.key == 501]
     presented = sd_cwt.present(token, only_501)
     out = sd_cwt.validate(presented, signer)
@@ -45,7 +45,7 @@ def test_partial_disclosure_reveals_only_selected(signer):
 def test_redacted_token_hides_values_before_disclosure(signer):
     claims = {1: "iss", 501: "RCE"}
 
-    token, _ = sd_cwt.issue(claims, redact={501}, signer=signer)
+    token, _ = sd_cwt.issue(claims, [(501,)], signer)
     v = sd_cwt.verify(token, signer)  # signature ok, but payload is redacted
 
     # The secret value must not appear in the signed (redacted) payload bytes.
@@ -57,7 +57,7 @@ def test_decoy_padding_keeps_token_verifiable(signer):
     # padded token still verifies and discloses correctly.
     claims = {1: "iss", 501: "RCE"}
 
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, pad_to=8)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, pad_to=8)
     presented = sd_cwt.present(token, discs)
     out = sd_cwt.validate(presented, signer)
 
@@ -69,7 +69,7 @@ def test_match_disclosures_matches_validate_on_trusted_payload(signer):
     import cbor2
 
     claims = {1: "iss", 500: "detail", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer)
+    token, discs = sd_cwt.issue(claims, [(500,), (501,)], signer)
     presented = sd_cwt.present(token, discs)
 
     # Trusted path: verify once to obtain the payload, then match directly.
@@ -90,7 +90,7 @@ def test_match_disclosures_rejects_unmatched_disclosure(signer):
     """A disclosure with no matching Redacted Claim Hash is rejected."""
     import cbor2
 
-    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, redact={501}, signer=signer)
+    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, [(501,)], signer)
     presented = sd_cwt.present(token, discs)
     v = sd_cwt.verify(presented, signer)
 
@@ -103,7 +103,7 @@ def test_match_disclosures_rejects_unmatched_disclosure(signer):
 def test_validate_trusted_matches_validate(signer):
     """validate_trusted() (no signature check, no key) matches validate()."""
     claims = {1: "iss", 500: "detail", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer)
+    token, discs = sd_cwt.issue(claims, [(500,), (501,)], signer)
     presented = sd_cwt.present(token, discs)
 
     trusted = sd_cwt.validate_trusted(presented)  # note: no key passed
@@ -118,7 +118,7 @@ def test_validate_trusted_rejects_foreign_disclosure(signer):
     """A presented disclosure matching no Redacted Claim Hash is still rejected."""
     import cbor2
 
-    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, redact={501}, signer=signer)
+    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, [(501,)], signer)
     presented = sd_cwt.present(token, discs)
     arr = list(cbor2.loads(presented).value)
     arr[1] = {17: [cbor2.dumps([b"\x00" * 16, "bogus", 999])]}  # swap disclosures

@@ -126,6 +126,6 @@ def test_input_type_validation(signer):
 def test_schema_validation_rejects_unexpected_clear_claim(signer):
     # Hand-craft a token with an out-of-schema clear claim -> validation rejects.
     claims = {st.ISS: "iss", st.IAT: 1, 999: "rogue"}
-    token, _ = sd_cwt.issue(claims, redact=set(), signer=signer)
+    token, _ = sd_cwt.issue(claims, [], signer)
     with pytest.raises(ValueError):
         st.validate_statement(token, signer)

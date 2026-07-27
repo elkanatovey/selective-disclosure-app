@@ -546,9 +546,9 @@ namespace sdcwt
 
   IssuedToken detail::issue(
     const std::vector<Claim>& claims,
+    const std::vector<Path>& redact_paths,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
-    const std::vector<Path>& redact_paths,
     const RandomSource& rng,
     size_t salt_len,
     size_t pad_to,
@@ -559,17 +559,11 @@ namespace sdcwt
     const auto cose_alg = cose_es_alg_for_curve(key.get_curve_id());
 
     // Assemble the claims map (insertion order preserved; encode_value sorts to
-    // CDE order) and the full redaction path list: one length-1 path per whole
-    // redacted claim, plus the caller's deeper paths.
+    // CDE order).
     CborValue root = CborValue::Map({});
-    std::vector<Path> paths = redact_paths;
     for (const auto& claim : claims)
     {
       root.map_put(CborKey(claim.key), claim.value);
-      if (claim.redact)
-      {
-        paths.push_back(Path{PathElem(claim.key)});
-      }
     }
 
     // Embed the RFC 8747 confirmation claim (clear, never redacted) so the
@@ -579,8 +573,9 @@ namespace sdcwt
       root.map_put(CborKey(CNF_LABEL), cnf_from_holder(*holder));
     }
 
-    // Reject caller-supplied paths that resolve to nothing, so a mistyped path
-    // can't silently under-redact. (Per-claim paths above always resolve.)
+    // Every redaction path must resolve, so a mistyped path can't silently
+    // under-redact. `redact_paths` is the only description of the redaction
+    // tree, so this one check covers all of it.
     for (const auto& p : redact_paths)
     {
       if (p.empty() || !path_resolves(root, p))
@@ -592,7 +587,7 @@ namespace sdcwt
 
     std::vector<Disclosure> disclosures;
     CborValue redacted =
-      redact_node(root, paths, sd_alg, rng, salt_len, disclosures);
+      redact_node(root, redact_paths, sd_alg, rng, salt_len, disclosures);
 
     // Decoy padding: add salt-only decoy disclosures until the top-level
     // redacted-hash count reaches `pad_to`, so the count leaks nothing about
@@ -621,18 +616,18 @@ namespace sdcwt
 
   IssuedToken issue(
     const std::vector<Claim>& claims,
+    const std::vector<Path>& redact_paths,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
-    const std::vector<Path>& redact_paths,
     size_t salt_len,
     size_t pad_to,
     const ccf::crypto::ECPublicKey* holder)
   {
     return detail::issue(
       claims,
+      redact_paths,
       key,
       sd_alg,
-      redact_paths,
       default_random_source(),
       salt_len,
       pad_to,
