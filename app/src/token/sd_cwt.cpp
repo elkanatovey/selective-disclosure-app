@@ -254,8 +254,8 @@ namespace sdcwt
         const int64_t label_i64 = large_uint64 ?
           0 :
           ((peek.uLabelType == QCBOR_TYPE_UINT64) ?
-            static_cast<int64_t>(peek.label.uint64) :
-            peek.label.int64);
+             static_cast<int64_t>(peek.label.uint64) :
+             peek.label.int64);
         const bool drop = !large_uint64 && (label_i64 == SD_CLAIMS_LABEL);
 
         if (peek.uDataType == QCBOR_TYPE_ARRAY)
