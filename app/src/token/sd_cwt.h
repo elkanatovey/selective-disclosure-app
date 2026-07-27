@@ -70,12 +70,12 @@ namespace sdcwt
   // array elements (e.g. {1006, 1} redacts element 1 of the array claim 1006).
   using Path = std::vector<PathElem>;
 
-  // A generated Salted Disclosed Claim. `key` is absent for a redacted array
-  // element (whose disclosure is `[salt, value]`); present for a map entry
-  // (`[salt, value, key]`).
+  // A generated Salted Disclosed Claim. `path` locates it and is the only
+  // identity it carries; the draft-08 salted-entry *shape* is already in
+  // `encoded` (arity 3 = map entry `[salt, value, key]`, 2 = array element
+  // `[salt, value]`, 1 = decoy `[salt]`), so it is not cached separately.
   struct Disclosure
   {
-    std::optional<CborKey> key;
     // Absolute path from the claims-map root to this disclosure: map keys and
     // array indices, e.g. {1006} for a whole claim or {1006, 0} for element 0.
     // Empty for a synthetic decoy. Enables ancestor-aware selective disclosure.

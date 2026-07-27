@@ -75,8 +75,8 @@ TEST(SdCwt, RedactedClaimIsHiddenAndDisclosed)
   EXPECT_EQ(haystack.find(needle), std::string::npos);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
-  ASSERT_TRUE(issued.disclosures[0].key.has_value());
-  EXPECT_EQ(std::get<int64_t>(*issued.disclosures[0].key), 1002);
+  ASSERT_EQ(issued.disclosures[0].path.size(), 1u);
+  EXPECT_EQ(std::get<int64_t>(issued.disclosures[0].path[0]), 1002);
   EXPECT_EQ(issued.disclosures[0].salt.size(), sdcwt::SALT_LEN);
   EXPECT_EQ(
     issued.disclosures[0].digest,
@@ -305,12 +305,14 @@ TEST(SdCwt, DecoyPadding)
     sdcwt::SALT_LEN,
     /*pad_to=*/5);
 
-  // 1 real redacted claim + 4 decoys = 5 disclosures, all with no key.
+  // 1 real redacted claim + 4 decoys = 5 disclosures. A decoy is identified by
+  // its EMPTY path (it corresponds to no claim), not by the absence of a map
+  // key — a redacted array element is keyless too.
   ASSERT_EQ(issued.disclosures.size(), 5u);
   size_t decoys = 0;
   for (const auto& d : issued.disclosures)
   {
-    if (!d.key.has_value())
+    if (d.path.empty())
     {
       ++decoys;
     }
@@ -352,7 +354,9 @@ TEST(SdCwt, ArrayElementRedaction)
   const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
-  EXPECT_FALSE(issued.disclosures[0].key.has_value()); // array element
+  // An array element's disclosure is the 2-element [salt, value] form (a map
+  // entry's is [salt, value, key]); definite-length under CDE, so head = 0x82.
+  EXPECT_EQ(issued.disclosures[0].encoded.at(0), uint8_t{0x82});
   EXPECT_FALSE(token_contains(issued.token, "REF_HIDE_B"));
   EXPECT_TRUE(token_contains(issued.token, "REF_KEEP_A"));
   EXPECT_TRUE(token_contains(issued.token, "REF_KEEP_C"));
@@ -375,8 +379,8 @@ TEST(SdCwt, NestedMapRedaction)
   const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
-  ASSERT_TRUE(issued.disclosures[0].key.has_value());
-  EXPECT_EQ(std::get<std::string>(*issued.disclosures[0].key), "hide");
+  ASSERT_EQ(issued.disclosures[0].path.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(issued.disclosures[0].path[1]), "hide");
   EXPECT_FALSE(token_contains(issued.token, "NESTED_HIDE"));
   EXPECT_TRUE(token_contains(issued.token, "INNER_KEEP"));
 }
@@ -414,8 +418,8 @@ TEST(SdCwt, NestedAncestorDisclosure)
   for (const auto& d : issued.disclosures)
   {
     if (
-      d.key.has_value() && std::holds_alternative<std::string>(*d.key) &&
-      std::get<std::string>(*d.key) == "a")
+      d.path.size() == 2 && std::holds_alternative<std::string>(d.path[1]) &&
+      std::get<std::string>(d.path[1]) == "a")
     {
       a_disc = &d;
     }

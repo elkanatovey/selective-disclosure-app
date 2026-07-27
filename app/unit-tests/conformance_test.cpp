@@ -303,8 +303,8 @@ namespace
     for (const auto& d : issued.disclosures)
     {
       if (
-        d.key.has_value() && std::holds_alternative<int64_t>(*d.key) &&
-        std::get<int64_t>(*d.key) == 1002)
+        d.path.size() == 1 && std::holds_alternative<int64_t>(d.path[0]) &&
+        std::get<int64_t>(d.path[0]) == 1002)
       {
         selected.push_back(d.encoded);
       }

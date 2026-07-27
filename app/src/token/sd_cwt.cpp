@@ -463,7 +463,6 @@ namespace sdcwt
           if (direct)
           {
             Disclosure d;
-            d.key = key;
             d.path = prefix;
             d.path.push_back(key);
             d.salt = rng(salt_len);
@@ -522,7 +521,6 @@ namespace sdcwt
           if (direct)
           {
             Disclosure d;
-            d.key = std::nullopt;
             d.path = prefix;
             d.path.push_back(static_cast<int64_t>(i));
             d.salt = rng(salt_len);
@@ -596,7 +594,6 @@ namespace sdcwt
     while (redacted.redacted_hashes.size() < pad_to)
     {
       Disclosure d;
-      d.key = std::nullopt;
       d.salt = rng(salt_len);
       d.encoded = encode_decoy_disclosure(d.salt);
       d.digest = disclosure_digest(d.encoded, sd_alg);
