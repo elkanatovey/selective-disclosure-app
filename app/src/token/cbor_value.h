@@ -4,6 +4,7 @@
 
 #include <ccf/_private/crypto/cbor.h>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <variant>
@@ -50,6 +51,14 @@ namespace sdcwt
     // Append a key/value entry to a Map value.
     void map_put(CborKey key, CborValue value);
   };
+
+  // `ccf::cbor::make_bytes` for data that may be empty. CCF rejects a NULL
+  // data pointer rather than a zero length, so an empty std::vector or a
+  // default-constructed span throws even though an empty byte string is legal
+  // CBOR ({valid_ptr, 0} encodes fine). This substitutes a non-null anchor for
+  // the empty case; non-empty spans are passed straight through and, like
+  // make_bytes, are BORROWED not copied.
+  ccf::cbor::Value bytes_value(std::span<const uint8_t> data);
 
   // Build a `ccf::cbor` view of a value/key for encoding. Map entries are
   // ordered by encoded-key bytes (CDE, RFC 8949 §4.2) — `ccf::cbor::serialize`

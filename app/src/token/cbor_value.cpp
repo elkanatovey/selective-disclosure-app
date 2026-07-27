@@ -3,6 +3,7 @@
 #include "token/cbor_value.h"
 
 #include <algorithm>
+#include <array>
 
 namespace sdcwt
 {
@@ -77,6 +78,17 @@ namespace sdcwt
     }
   }
 
+  ccf::cbor::Value bytes_value(std::span<const uint8_t> data)
+  {
+    if (data.empty())
+    {
+      // Any valid address works: ccf::cbor checks the pointer, not the length.
+      static constexpr std::array<uint8_t, 1> anchor{};
+      return ccf::cbor::make_bytes(std::span<const uint8_t>{anchor.data(), 0});
+    }
+    return ccf::cbor::make_bytes(data);
+  }
+
   ccf::cbor::Value to_ccf_cbor(const CborKey& key)
   {
     if (std::holds_alternative<int64_t>(key))
@@ -93,14 +105,14 @@ namespace sdcwt
       case CborValue::Kind::Int:
         return ccf::cbor::make_signed(v.int_v);
       case CborValue::Kind::Bytes:
-        return ccf::cbor::make_bytes(v.bytes_v);
+        return bytes_value(v.bytes_v);
       case CborValue::Kind::Text:
         return ccf::cbor::make_string(v.text_v);
       case CborValue::Kind::RedactedElement:
         // An array element replaced by tag(60) wrapping its Redacted Claim
         // Hash.
         return ccf::cbor::make_tagged(
-          REDACTED_ELEMENT_TAG, ccf::cbor::make_bytes(v.bytes_v));
+          REDACTED_ELEMENT_TAG, bytes_value(v.bytes_v));
       case CborValue::Kind::Array:
       {
         std::vector<ccf::cbor::Value> items;

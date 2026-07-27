@@ -12,8 +12,11 @@
 // for it. The repo pins ccf-7.0.5, so it is stable until that pin moves; a
 // break here is a compile error, not silent misbehaviour.
 
+#include "token/cbor_value.h"
+
 #include <ccf/_private/crypto/cbor.h>
 #include <gtest/gtest.h>
+#include <span>
 #include <vector>
 
 namespace
@@ -186,7 +189,7 @@ TEST(CcfCbor, MapAtCannotFindSimpleValueKeys)
   const auto parsed = ccf::cbor::parse(encoded);
 
   EXPECT_THROW(
-    parsed->map_at(
+    (void)parsed->map_at(
       ccf::cbor::make_simple(static_cast<ccf::cbor::SimpleValue>(59))),
     std::exception);
 
@@ -232,4 +235,39 @@ TEST(CcfCbor, MakeStringDoesNotCopy)
   const std::string src = "borrowed";
   const auto v = ccf::cbor::make_string(src);
   EXPECT_EQ(v->as_string().data(), src.data());
+}
+
+// GAP in ccf::cbor: an empty byte string cannot be encoded from a NULL data
+// pointer. The check is on the pointer, not the length -- {valid_ptr, 0} emits
+// 0x40 (empty bstr) correctly, but a default-constructed span or an empty
+// std::vector (whose data() is typically nullptr) throws "Encoding bytes string
+// failed". Empty byte strings are legal CBOR and we do emit them (an empty COSE
+// external_aad, for one), so sdcwt::bytes_value() normalises the pointer.
+// Worth fixing upstream: it is a null check where a length check was meant.
+TEST(CcfCbor, CannotEncodeEmptyBytesFromNullPointer)
+{
+  EXPECT_THROW(
+    ccf::cbor::serialize(ccf::cbor::make_bytes(std::span<const uint8_t>{})),
+    std::exception);
+
+  // Same zero length, non-null pointer: fine.
+  const auto anchor = bytes({0x00});
+  EXPECT_EQ(
+    ccf::cbor::serialize(
+      ccf::cbor::make_bytes(std::span<const uint8_t>{anchor.data(), 0})),
+    bytes({0x40}));
+}
+
+TEST(CcfCbor, BytesValueHelperEncodesEmpty)
+{
+  // sdcwt::bytes_value works where make_bytes alone does not.
+  const std::vector<uint8_t> empty;
+  EXPECT_EQ(ccf::cbor::serialize(sdcwt::bytes_value(empty)), bytes({0x40}));
+  EXPECT_EQ(
+    ccf::cbor::serialize(sdcwt::bytes_value(std::span<const uint8_t>{})),
+    bytes({0x40}));
+
+  // Non-empty is unaffected, and still borrows rather than copies.
+  const auto src = bytes({0xaa, 0xbb});
+  EXPECT_EQ(sdcwt::bytes_value(src)->as_bytes().data(), src.data());
 }
