@@ -456,8 +456,7 @@ TEST(SdCwt, PresentHandlesIndefiniteLengthUnprotectedHeader)
     QCBOREncode_CloseMapIndefiniteLength(&ctx);
     QCBOREncode_AddBytes(
       &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // payload
-    QCBOREncode_AddBytes(
-      &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // sig
+    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // sig
     QCBOREncode_CloseArray(&ctx);
   });
 
@@ -546,8 +545,7 @@ TEST(SdCwt, PresentPreservesLargeUint64Label)
       item.label.uint64 == large_label &&
       item.uDataType == QCBOR_TYPE_BYTE_STRING)
     {
-      found_large =
-        item.val.string.len == payload_bytes.size() &&
+      found_large = item.val.string.len == payload_bytes.size() &&
         std::memcmp(
           item.val.string.ptr, payload_bytes.data(), payload_bytes.size()) == 0;
     }
