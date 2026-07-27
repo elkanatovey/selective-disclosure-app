@@ -190,13 +190,10 @@ service cert/endorsements as out-of-band trust anchors; salts are high-entropy.
   `ccf::crypto::get_entropy()`.
 - COSE_Sign1 _creation_ is NOT exposed by CCF. Public `cose.h` only edits
   headers. Since the service is the sole signer, we hand-assemble the
-  `COSE_Sign1` and sign the `Sig_structure` via `ccf::crypto`; no
-  `t_cose` dependency.
+  `COSE_Sign1` and sign the `Sig_structure` via `ccf::crypto`.
 - CBOR encode/decode uses CCF's own `ccf::cbor` (`ccf/_private/crypto/cbor.h`),
   a C++ wrapper over EverCBOR, the formally-verified EverParse CBOR parser CCF
-  vendors. It is reached through a `_private` header, so CCF makes no
-  API-stability promise for it; the pinned CCF release is what keeps that safe,
-  and a break would surface as a compile error. No CBOR library is vendored.
+  vendors.
 - CCF-source modification is last resort.
 
 ## 7. The disclosure artifact
@@ -681,7 +678,7 @@ governance endpoints.
   `kbt_verify` stays Python: it is the *verifier's* check, off-chain by design.
 - `make_disclosure` / `verify` off-chain tooling.
 
-**Dependency:** none vendored; CBOR comes from CCF's `ccf::cbor` (EverCBOR).
+**Dependency:** CBOR comes from CCF's `ccf::cbor` (EverCBOR).
 
 ## 14. Off-chain token tooling: `sd_cwt` (Python)
 **Decision: service signs.** Every statement is constructed and signed by the
