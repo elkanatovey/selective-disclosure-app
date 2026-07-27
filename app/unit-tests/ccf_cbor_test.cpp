@@ -1,12 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Characterisation tests for CCF's evercbor-backed CBOR API (`ccf::cbor`),
-// pinned before any of the token core migrates onto it. These assert what the
-// library actually does, not what we hope it does: the hand-rolled code being
-// replaced hand-enforces several draft-08 encoding rules, and this file records
-// which of those `ccf::cbor` gives us for free and which we must keep enforcing
-// ourselves.
+// Tests for the properties of CCF's evercbor-backed CBOR API (`ccf::cbor`)
+// that the token core depends on. Each one either pins a guarantee we removed
+// hand-written code in favour of, or documents a gap we work around — there is
+// no coverage here of the library working in general, which is CCF's business
+// rather than ours.
 //
 // The header lives under `ccf/_private/` — CCF makes no API-stability promise
 // for it. The repo pins ccf-7.0.5, so it is stable until that pin moves; a
@@ -32,97 +31,18 @@ namespace
   }
 }
 
-// --- Baseline: does it encode what we expect, byte for byte? ---------------
+// --- draft-08 encoding MUSTs we now rely on the library to enforce ---------
+// The decode paths used to check these by hand; they were deleted when
+// report_parse and disclosure_store moved to ccf::cbor, so these assert the
+// guarantees that replaced them. Indefinite-length rejection is covered where
+// it matters, in SdCwt.PresentRejectsIndefiniteLengthUnprotectedHeader.
 
-TEST(CcfCbor, SerializeProducesExpectedBytes)
+TEST(CcfCbor, RejectsDuplicateMapKeys)
 {
-  const auto fp = bytes({0xde, 0xad, 0xbe, 0xef});
-  const auto m = ccf::cbor::make_map(
-    {{ccf::cbor::make_signed(1), ccf::cbor::make_string("hi")},
-     {ccf::cbor::make_signed(2), ccf::cbor::make_bytes(fp)}});
-
-  // a2            map(2)
-  //   01 62 6869    1: "hi"
-  //   02 44 ....    2: h'DEADBEEF'
-  EXPECT_EQ(
-    ccf::cbor::serialize(m),
-    bytes({0xa2, 0x01, 0x62, 0x68, 0x69, 0x02, 0x44, 0xde, 0xad, 0xbe, 0xef}));
-}
-
-TEST(CcfCbor, ParseRoundTripsMapAndAccessors)
-{
-  const auto encoded = ccf::cbor::serialize(ccf::cbor::make_map(
-    {{ccf::cbor::make_signed(1), ccf::cbor::make_string("hi")},
-     {ccf::cbor::make_signed(-7), ccf::cbor::make_signed(42)}}));
-
-  const auto v = ccf::cbor::parse(encoded);
-  EXPECT_EQ(v->map_at(ccf::cbor::make_signed(1))->as_string(), "hi");
-  EXPECT_EQ(v->map_at(ccf::cbor::make_signed(-7))->as_signed(), 42);
-  EXPECT_EQ(v->size(), 2u);
-}
-
-// --- HAZARD 1: map key ordering -------------------------------------------
-// The token core needs CBOR Common Deterministic Encoding (RFC 8949 s4.2) key
-// order, because the Python oracle and the C++ signer must agree byte for byte.
-// cbor_value.cpp currently sorts keys itself. This pins whether `serialize`
-// does it for us or preserves insertion order (in which case we keep sorting).
-
-TEST(CcfCbor, SerializeMapKeyOrderIsCharacterised)
-{
-  // Insert deliberately out of CDE order: 10 before 1.
-  const auto m = ccf::cbor::make_map(
-    {{ccf::cbor::make_signed(10), ccf::cbor::make_signed(0)},
-     {ccf::cbor::make_signed(1), ccf::cbor::make_signed(0)}});
-  const auto out = ccf::cbor::serialize(m);
-
-  // CDE order would emit key 1 (0x01) before key 10 (0x0a).
-  const bool sorted_by_library = (out[1] == 0x01);
-  RecordProperty("sorts_map_keys", sorted_by_library ? "yes" : "no");
-  std::cout << "[characterisation] serialize() "
-            << (sorted_by_library ? "SORTS map keys into CDE order" :
-                                    "PRESERVES insertion order")
-            << std::endl;
-  SUCCEED();
-}
-
-// --- HAZARD 2: draft-08 encoding MUSTs -------------------------------------
-// draft-ietf-spice-sd-cwt s5 requires rejecting indefinite-length items and
-// duplicate map keys. Our decode paths check these today.
-
-TEST(CcfCbor, IndefiniteLengthHandlingIsCharacterised)
-{
-  // 0x9f ... 0xff = indefinite-length array [1, 2]
-  const auto indef = bytes({0x9f, 0x01, 0x02, 0xff});
-  try
-  {
-    const auto v = ccf::cbor::parse(indef);
-    std::cout << "[characterisation] indefinite-length array: ACCEPTED (size="
-              << v->size() << ")" << std::endl;
-  }
-  catch (const std::exception& e)
-  {
-    std::cout << "[characterisation] indefinite-length array: REJECTED -> "
-              << e.what() << std::endl;
-  }
-  SUCCEED();
-}
-
-TEST(CcfCbor, DuplicateMapKeyHandlingIsCharacterised)
-{
-  // a2 01 01 01 02 = {1: 1, 1: 2} -- duplicate key 1
-  const auto dup = bytes({0xa2, 0x01, 0x01, 0x01, 0x02});
-  try
-  {
-    const auto v = ccf::cbor::parse(dup);
-    std::cout << "[characterisation] duplicate map key: ACCEPTED (size="
-              << v->size() << ")" << std::endl;
-  }
-  catch (const std::exception& e)
-  {
-    std::cout << "[characterisation] duplicate map key: REJECTED -> "
-              << e.what() << std::endl;
-  }
-  SUCCEED();
+  // a2 01 01 01 02 = {1: 1, 1: 2} -- duplicate key 1 (draft-08 s5.4)
+  EXPECT_THROW(
+    (void)ccf::cbor::parse(bytes({0xa2, 0x01, 0x01, 0x01, 0x02})),
+    std::exception);
 }
 
 TEST(CcfCbor, RejectsNestingDeeperThanMaxDepth)
@@ -144,23 +64,27 @@ TEST(CcfCbor, RejectsNestingDeeperThanMaxDepth)
 // path must keep the source buffer alive for as long as the parsed Value, or
 // copy out eagerly. This pins that aliasing so the constraint is visible.
 
-TEST(CcfCbor, ParsedBytesAliasTheInputBuffer)
+TEST(CcfCbor, ValuesBorrowRatherThanCopy)
 {
-  // 0x44 = bstr(4)
+  // Parsed: the Value points into the input buffer. 0x44 = bstr(4).
   const auto raw = bytes({0x44, 0xde, 0xad, 0xbe, 0xef});
-  const auto v = ccf::cbor::parse(raw);
-  const auto view = v->as_bytes();
+  const auto parsed = ccf::cbor::parse(raw);
+  ASSERT_EQ(parsed->as_bytes().size(), 4u);
+  EXPECT_EQ(parsed->as_bytes().data(), raw.data() + 1);
 
-  ASSERT_EQ(view.size(), 4u);
-  // Same storage, not a copy: the Value borrows from `raw`.
-  EXPECT_EQ(view.data(), raw.data() + 1);
+  // Built: make_bytes/make_string store the span/view they are handed, so a
+  // built Value borrows from its arguments exactly as a parsed one does.
+  const auto src = bytes({0x01, 0x02, 0x03});
+  EXPECT_EQ(ccf::cbor::make_bytes(src)->as_bytes().data(), src.data());
+
+  const std::string text = "borrowed";
+  EXPECT_EQ(ccf::cbor::make_string(text)->as_string().data(), text.data());
 }
 
-// --- SD-CWT shapes: can ccf::cbor express what the token core needs? -------
-// Replacing sdcwt::CborValue with ccf::cbor::Value requires two encodings the
-// generic API is not obviously built for: the simple(59) redacted-claim-keys
-// map key, and the tag(60) redacted array element. Both are pinned here
-// because if either cannot round-trip, cbor_value.cpp cannot be deleted.
+// --- SD-CWT wire shapes ----------------------------------------------------
+// The token core needs two encodings the generic API is not obviously built
+// for: the simple(59) redacted-claim-keys map key, and the tag(60) redacted
+// array element.
 
 TEST(CcfCbor, EncodesSimpleValue59AsMapKey)
 {
@@ -212,29 +136,6 @@ TEST(CcfCbor, SupportsTag60RedactedArrayElement)
 
   const auto parsed = ccf::cbor::parse(encoded);
   EXPECT_EQ(parsed->tag_at(60)->as_bytes()[1], 0xad);
-}
-
-// --- HAZARD 4: builders do not take ownership either -----------------------
-// `make_bytes`/`make_string` store the span/view they are handed rather than
-// copying, so a built Value borrows from its arguments exactly as a parsed one
-// borrows from the input buffer. ccf::cbor::Value is therefore NOT a
-// self-contained value tree the way sdcwt::CborValue (which owns a vector and
-// a string) is. Anything replacing CborValue must keep the backing storage
-// alive for as long as the Value.
-
-TEST(CcfCbor, MakeBytesDoesNotCopy)
-{
-  const auto src = bytes({0x01, 0x02, 0x03});
-  const auto v = ccf::cbor::make_bytes(src);
-  // Same storage, not a copy.
-  EXPECT_EQ(v->as_bytes().data(), src.data());
-}
-
-TEST(CcfCbor, MakeStringDoesNotCopy)
-{
-  const std::string src = "borrowed";
-  const auto v = ccf::cbor::make_string(src);
-  EXPECT_EQ(v->as_string().data(), src.data());
 }
 
 // GAP in ccf::cbor: an empty byte string cannot be encoded from a NULL data
