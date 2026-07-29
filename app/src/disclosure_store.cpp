@@ -67,7 +67,6 @@ namespace selectivedisclosure
       return path;
     }
 
-    // Is `a` a prefix of (or equal to) `b`?
     bool is_prefix(const sdcwt::Path& a, const sdcwt::Path& b)
     {
       if (a.size() > b.size())
@@ -111,7 +110,6 @@ namespace selectivedisclosure
     std::vector<StoredDisclosure> out;
     for (const auto& entry : std::get<cbor::Array>(root->value).items)
     {
-      // Each entry is a [path, encoded] pair.
       if (!is<cbor::Array>(entry))
       {
         throw std::invalid_argument(

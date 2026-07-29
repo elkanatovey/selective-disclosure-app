@@ -67,7 +67,7 @@ namespace sdcwt
   std::vector<uint8_t> disclosure_digest(
     std::span<const uint8_t> encoded, HashAlg sd_alg)
   {
-    // Wrap the encoded salted array in a CBOR byte string, then hash it.
+    // draft-08: hash the disclosure wrapped in a CBOR byte string.
     const auto wrapped = ccf::cbor::serialize(bytes_value(encoded));
     return ccf::crypto::make_hash_provider()->hash(
       wrapped.data(), wrapped.size(), md_for_hash_alg(sd_alg));
@@ -76,8 +76,7 @@ namespace sdcwt
   std::vector<uint8_t> encode_sdcwt_protected_header(
     int64_t cose_alg, HashAlg sd_alg)
   {
-    // Map keys are emitted in CDE (RFC 8949 §4.2) order: 1 (alg) < 16 (typ) <
-    // 170 (sd_alg).
+    // CDE key order: 1 (alg) < 16 (typ) < 170 (sd_alg).
     return ccf::cbor::serialize(ccf::cbor::make_map(
       {{ccf::cbor::make_signed(1), ccf::cbor::make_signed(cose_alg)},
        {ccf::cbor::make_signed(TYP_LABEL), ccf::cbor::make_signed(SD_CWT_TYP)},
@@ -103,17 +102,16 @@ namespace sdcwt
         {ccf::cbor::make_bytes(salt), to_ccf_cbor(value)}));
     }
 
-    // cbor([salt]) for a salt-only decoy disclosure (pads the redacted-hash
-    // count without corresponding to any real claim).
+    // cbor([salt]): a salt-only decoy disclosure that pads the redacted-hash
+    // count.
     std::vector<uint8_t> encode_decoy_disclosure(std::span<const uint8_t> salt)
     {
       return ccf::cbor::serialize(
         ccf::cbor::make_array({ccf::cbor::make_bytes(salt)}));
     }
 
-    // Build an RFC 8747 `cnf` claim value `{1: COSE_Key}` holding only the EC2
-    // PUBLIC coordinates of `holder` (kty=EC2, crv, x, y). Mirrors the Python
-    // reference `_cnf_from_key`.
+    // RFC 8747 cnf {1: COSE_Key} with holder's EC2 public coords (kty, crv, x,
+    // y). Mirrors the Python reference `_cnf_from_key`.
     CborValue cnf_from_holder(const ccf::crypto::ECPublicKey& holder)
     {
       const auto coords = holder.coordinates();
@@ -154,10 +152,9 @@ namespace sdcwt
         static_cast<size_t>(std::get<int64_t>(e)) == index;
     }
 
-    // Walk `path` through `root` and confirm every element resolves to an
-    // existing map entry / in-range array element. A redaction path that
-    // matches nothing would otherwise silently produce no redaction, so we
-    // reject it here, matching the fail-closed Python reference behavior.
+    // True if every path element resolves to an existing map entry / in-range
+    // array element. A non-matching path would silently redact nothing, so
+    // issue() rejects it (fail-closed, like the Python reference).
     bool path_resolves(const CborValue& root, const Path& path)
     {
       const CborValue* node = &root;
@@ -201,10 +198,9 @@ namespace sdcwt
       return true;
     }
 
-    // Recursively redact `node` at the given relative `paths` (mirrors the
-    // Python reference `_redact_node`). A length-1 path redacts that whole
-    // entry/element here; longer paths recurse first (ancestor-disclosure
-    // rule).
+    // Recursively redact `node` at relative `paths` (mirrors Python
+    // `_redact_node`): a length-1 path redacts the whole entry/element, longer
+    // paths recurse first (ancestor-disclosure rule).
     CborValue redact_node(
       const CborValue& node,
       const std::vector<Path>& paths,
@@ -344,20 +340,17 @@ namespace sdcwt
     size_t pad_to,
     const ccf::crypto::ECPublicKey* holder)
   {
-    // Derive the COSE signing algorithm from the key's curve (throws early on
-    // an unsupported curve, before any redaction work).
+    // Reject an unsupported curve up front, before any redaction work.
     const auto cose_alg = cose_es_alg_for_curve(key.get_curve_id());
 
-    // Assemble the claims map (insertion order preserved; encode_value sorts to
-    // CDE order).
+    // Insertion order is irrelevant; encode_value sorts to CDE.
     CborValue root = CborValue::Map({});
     for (const auto& claim : claims)
     {
       root.map_put(CborKey(claim.key), claim.value);
     }
 
-    // Embed the RFC 8747 confirmation claim (clear, never redacted) so the
-    // token is key-binding capable.
+    // Embed the RFC 8747 cnf claim (never redacted) for key binding.
     if (holder != nullptr)
     {
       root.map_put(CborKey(CNF_LABEL), cnf_from_holder(*holder));
@@ -378,10 +371,8 @@ namespace sdcwt
     CborValue redacted =
       redact_node(root, redact_paths, sd_alg, rng, salt_len, disclosures);
 
-    // Decoy padding: add salt-only decoy disclosures until the top-level
-    // redacted-hash count reaches `pad_to`, so the count leaks nothing about
-    // how many real claims were redacted. Decoys are indistinguishable from
-    // real hashes and are re-sorted in with them.
+    // Pad with salt-only decoys up to `pad_to` hashes so the count reveals
+    // nothing about how many real claims were redacted.
     while (redacted.redacted_hashes.size() < pad_to)
     {
       Disclosure d;
@@ -428,11 +419,9 @@ namespace sdcwt
   {
     namespace cbor = ccf::cbor;
 
-    // Decode the tagged COSE_Sign1 [ protected, unprotected, payload,
-    // signature ]. Every entry of the unprotected header is carried through
-    // except sd_claims (which present() manages); the protected header,
-    // payload and signature are re-emitted unchanged so the signature stays
-    // valid.
+    // Rebuild the COSE_Sign1, dropping only the sd_claims unprotected-header
+    // entry. Protected header, payload and signature are re-emitted unchanged
+    // so the signature stays valid.
     cbor::Value root;
     const cbor::Value* envelope = nullptr;
     try

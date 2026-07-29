@@ -63,8 +63,7 @@ namespace sdcwt
     std::span<const uint8_t> payload,
     std::span<const uint8_t> external_aad)
   {
-    // Derive the digest from the key's curve; an unsupported curve throws here
-    // (before any signing) rather than emitting a malformed signature.
+    // Reject an unsupported curve up front, before any signing.
     const auto curve = key.get_curve_id();
     cose_es_alg_for_curve(curve); // validates the curve
     const auto md = ccf::crypto::get_md_for_ec(curve);

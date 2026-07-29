@@ -28,9 +28,8 @@ namespace selectivedisclosure
       return std::holds_alternative<T>(v->value);
     }
 
-    // The value stored under text key `key`, or nullptr if the map has no such
-    // key. Only text-string keys match, so an integer key that happens to share
-    // a field's numeric spelling is never mistaken for that field.
+    // Value under text key `key`, or nullptr. Only text keys match, so an int
+    // key never collides with a field's numeric spelling.
     const cbor::Value* find(const cbor::Value& map, std::string_view key)
     {
       for (const auto& [k, v] : std::get<cbor::Map>(map->value).items)
@@ -43,10 +42,8 @@ namespace selectivedisclosure
       return nullptr;
     }
 
-    // Each opt_* returns nullopt for an absent field and throws for a present
-    // one of the wrong type. Values are copied out eagerly: cbor::String and
-    // cbor::Bytes are views over the caller's buffer, so nothing returned here
-    // may alias the parsed input.
+    // Each opt_* returns nullopt when absent, throws on wrong type, and copies
+    // the value out (String/Bytes are views over the caller's buffer).
     std::optional<std::string> opt_text(const cbor::Value& map, const char* key)
     {
       const auto* v = find(map, key);
@@ -116,10 +113,9 @@ namespace selectivedisclosure
       return out;
     }
 
-    // Parse a request body as a CBOR map. `ccf::cbor::parse` also enforces the
-    // draft-08 encoding MUSTs (definite-length only, no duplicate map keys,
-    // nesting bounded by max_depth) and rejects trailing bytes, so a successful
-    // return means the body is well-formed, complete, and a map.
+    // Parse the body as a CBOR map. ccf::cbor::parse enforces the draft-08
+    // MUSTs (definite length, no duplicate keys, depth bound) and rejects
+    // trailing bytes.
     cbor::Value parse_map(std::span<const uint8_t> raw, const char* what)
     {
       cbor::Value v;

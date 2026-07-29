@@ -67,8 +67,8 @@ namespace sdcwt
 
   namespace
   {
-    // draft-08 wire labels. Kept as literals here rather than pulled from
-    // sd_cwt.h, which includes this header.
+    // draft-08 wire labels, kept as literals to avoid a circular include with
+    // sd_cwt.h.
     constexpr uint8_t REDACTED_CLAIM_KEYS = 59; // simple(59) map key
     constexpr uint64_t REDACTED_ELEMENT_TAG = 60; // tag(60) array element
 
@@ -123,9 +123,8 @@ namespace sdcwt
       }
       case CborValue::Kind::Map:
       {
-        // CDE (RFC 8949 §4.2): order entries by encoded-key bytes. int and
-        // text keys all encode with a first byte < simple(59) (0xf8), so the
-        // redacted-keys entry below always sorts last.
+        // CDE (RFC 8949 §4.2): sort entries by encoded-key bytes. int and text
+        // keys start below simple(59) (0xf8), so redacted_hashes sorts last.
         std::vector<std::vector<uint8_t>> keys;
         keys.reserve(v.map_keys.size());
         for (const auto& k : v.map_keys)

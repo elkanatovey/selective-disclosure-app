@@ -1,13 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// The three properties of CCF's evercbor-backed `ccf::cbor` that this app
-// would silently lose correctness on if they ever changed. Everything else
-// about the library is CCF's to test, and every other CBOR behaviour we depend
-// on is asserted where it is used -- the CDE map-key order and the simple(59)
-// entry in CborValue.CdeOrdersMapKeysAndPutsSimple59Last, tag(60) in
-// SdCwt.ArrayElementRedaction, indefinite-length rejection in
-// SdCwt.PresentRejectsIndefiniteLengthUnprotectedHeader.
+// Guards the three `ccf::cbor` behaviours this app would silently miscompile on
+// if they regressed; other CBOR behaviour we rely on is asserted where it is
+// used. The header is under `ccf/_private/` (no API-stability promise), pinned
+// to ccf-7.0.5, so a break there is a compile error, not silent misbehaviour.
 //
 // The header lives under `ccf/_private/` — CCF makes no API-stability promise
 // for it. The repo pins ccf-7.0.5, so it is stable until that pin moves; a
