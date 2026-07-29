@@ -22,7 +22,6 @@ namespace selectivedisclosure
     }
 
     // A path is an array of int (map key / array index) or text (map key).
-    // Borrows from `path`, which outlives the enclosing serialize().
     cbor::Value encode_path(const sdcwt::Path& path)
     {
       std::vector<cbor::Value> elems;
@@ -89,7 +88,6 @@ namespace selectivedisclosure
       entries.push_back(
         cbor::make_array({encode_path(d.path), sdcwt::bytes_value(d.encoded)}));
     }
-    // Borrows from `disclosures`, alive across this call.
     return cbor::serialize(cbor::make_array(std::move(entries)));
   }
 

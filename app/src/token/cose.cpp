@@ -71,7 +71,6 @@ namespace sdcwt
 
     // RFC 9052 Sig_structure for a COSE_Sign1:
     //   [ "Signature1", protected, external_aad, payload ]
-    // The views borrow from the caller's spans, all alive across this call.
     const auto to_be_signed = ccf::cbor::serialize(ccf::cbor::make_array(
       {ccf::cbor::make_string("Signature1"),
        bytes_value(protected_header_cbor),

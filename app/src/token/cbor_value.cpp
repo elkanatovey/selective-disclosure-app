@@ -109,8 +109,6 @@ namespace sdcwt
       case CborValue::Kind::Text:
         return ccf::cbor::make_string(v.text_v);
       case CborValue::Kind::RedactedElement:
-        // An array element replaced by tag(60) wrapping its Redacted Claim
-        // Hash.
         return ccf::cbor::make_tagged(
           REDACTED_ELEMENT_TAG, bytes_value(v.bytes_v));
       case CborValue::Kind::Array:
@@ -172,7 +170,6 @@ namespace sdcwt
 
   std::vector<uint8_t> encode_value(const CborValue& v)
   {
-    // The view is consumed here, while `v` is still alive.
     return ccf::cbor::serialize(to_ccf_cbor(v));
   }
 }

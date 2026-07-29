@@ -91,7 +91,6 @@ namespace sdcwt
     std::vector<uint8_t> encode_map_disclosure(
       std::span<const uint8_t> salt, const CborValue& value, const CborKey& key)
     {
-      // Views borrow from salt/value/key, all alive across this call.
       return ccf::cbor::serialize(ccf::cbor::make_array(
         {ccf::cbor::make_bytes(salt), to_ccf_cbor(value), to_ccf_cbor(key)}));
     }
@@ -365,8 +364,7 @@ namespace sdcwt
     }
 
     // Every redaction path must resolve, so a mistyped path can't silently
-    // under-redact. `redact_paths` is the only description of the redaction
-    // tree, so this one check covers all of it.
+    // under-redact.
     for (const auto& p : redact_paths)
     {
       if (p.empty() || !path_resolves(root, p))
@@ -435,8 +433,6 @@ namespace sdcwt
     // except sd_claims (which present() manages); the protected header,
     // payload and signature are re-emitted unchanged so the signature stays
     // valid.
-    //
-    // Every node below borrows from `token`, which outlives this call.
     cbor::Value root;
     const cbor::Value* envelope = nullptr;
     try
@@ -511,7 +507,7 @@ namespace sdcwt
 
     // KBT protected header {1: alg, 13: <embedded presented SD-CWT>, 16: typ}.
     // Keys are emitted in CDE order (1, 13, 16). The embedded token is parsed
-    // rather than spliced; the view borrows from `presented`, alive here.
+    // rather than spliced.
     const auto phdr = ccf::cbor::serialize(ccf::cbor::make_map(
       {{ccf::cbor::make_signed(1), ccf::cbor::make_signed(holder_alg)},
        {ccf::cbor::make_signed(KCWT_LABEL), ccf::cbor::parse(presented)},
@@ -549,7 +545,6 @@ namespace sdcwt
       claims.emplace_back(
         ccf::cbor::make_signed(CWT_CNONCE), bytes_value(*params.cnonce));
     }
-    // Borrows from `params`, alive across this call.
     const auto payload =
       ccf::cbor::serialize(ccf::cbor::make_map(std::move(claims)));
 

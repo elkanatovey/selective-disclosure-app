@@ -54,11 +54,8 @@ TEST(CcfCbor, RejectsNestingDeeperThanMaxDepth)
   EXPECT_THROW(ccf::cbor::parse(deep), std::exception);
 }
 
-// sdcwt::bytes_value exists because ccf::cbor::make_bytes rejects a NULL data
-// pointer rather than a zero length, so an empty std::vector (whose data() is
-// typically nullptr) cannot be encoded even though an empty byte string is
-// legal CBOR and we emit them -- an empty COSE external_aad, for one. This
-// fails if the helper is ever "simplified" back to a bare make_bytes.
+// Regression guard for sdcwt::bytes_value (see cbor_value.h): an empty byte
+// string must still encode, and non-empty input must borrow, not copy.
 TEST(CcfCbor, BytesValueEncodesEmpty)
 {
   const std::vector<uint8_t> empty;
