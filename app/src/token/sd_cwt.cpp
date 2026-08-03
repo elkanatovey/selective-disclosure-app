@@ -340,6 +340,13 @@ namespace sdcwt
     size_t pad_to,
     const ccf::crypto::ECPublicKey* holder)
   {
+    // draft-08's salted-entry CDDL pins `bstr .size 16`; a shorter salt would
+    // also let a verifier brute-force redacted values (s6.1).
+    if (salt_len != SALT_LEN)
+    {
+      throw std::invalid_argument("salt_len must be exactly 16 bytes");
+    }
+
     // Reject an unsupported curve up front, before any redaction work.
     const auto cose_alg = cose_es_alg_for_curve(key.get_curve_id());
 

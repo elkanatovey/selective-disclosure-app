@@ -114,21 +114,22 @@ namespace
   }
 }
 
-// The salt length is configurable (default 16).
-TEST(SdCwt, ConfigurableSaltLength)
+// draft-08's salted-entry CDDL pins the salt to exactly 16 bytes, so any other
+// length is refused rather than emitting a non-conformant token. (A short salt
+// would also let a verifier brute-force redacted values.)
+TEST(SdCwt, RejectsSaltLengthOtherThanSixteen)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
     {1002, sdcwt::value::text("secret")},
   };
-  const auto issued = sdcwt::issue(
-    claims,
-    {{int64_t{1002}}},
-    *key,
-    sdcwt::HashAlg::SHA_256,
-    /*salt_len=*/32);
-  ASSERT_EQ(issued.disclosures.size(), 1u);
-  EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
+  for (const size_t salt_len : {size_t{0}, size_t{15}, size_t{32}})
+  {
+    EXPECT_THROW(
+      sdcwt::issue(
+        claims, {{int64_t{1002}}}, *key, sdcwt::HashAlg::SHA_256, salt_len),
+      std::invalid_argument);
+  }
 }
 
 // A standards-compliant issuer can bind the token to a holder key: passing a

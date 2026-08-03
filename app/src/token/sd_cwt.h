@@ -110,7 +110,7 @@ namespace sdcwt
   // Hashes under simple(59); redacted array elements become tag(60) hashes.
   // Disclosures are returned separately. The COSE signing algorithm is derived
   // from the key's curve; the redaction hash is `sd_alg` (default SHA-256);
-  // `salt_len` is the per-disclosure salt length in bytes (default 16).
+  // `salt_len` is the per-disclosure salt length, which draft-08 pins to 16.
   //
   // `pad_to`, if non-zero, pads the top-level Redacted-Claim-Hash count up to
   // that many entries with indistinguishable salt-only decoy disclosures, so
@@ -122,9 +122,9 @@ namespace sdcwt
   // capable (a holder of the matching private key can later present it with a
   // Key Binding Token); the issuer never sees the private key.
   //
-  // Throws std::invalid_argument (unsupported curve, or a redact_path that does
-  // not resolve to an existing claim/element / descends into a non-container)
-  // or std::runtime_error (CBOR failure).
+  // Throws std::invalid_argument (salt_len other than 16, unsupported curve, or
+  // a redact_path that does not resolve to an existing claim/element / descends
+  // into a non-container) or std::runtime_error (CBOR failure).
   IssuedToken issue(
     const std::vector<Claim>& claims,
     const std::vector<Path>& redact_paths,
