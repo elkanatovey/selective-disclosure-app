@@ -29,8 +29,7 @@ namespace sdcwt::statement
   // Number of content fields carried by every statement (strict uniformity).
   inline constexpr size_t CONTENT_FIELD_COUNT = 9;
 
-  // Garbage sentinel length for an absent content field. Unlike the disclosure
-  // salt, this is an app-level privacy choice, not a size draft-08 fixes.
+  // Garbage sentinel length for an absent content field.
   inline constexpr size_t PAD_LEN = 16;
 
   // Schema/profile version this build implements. Bump on any change to the
