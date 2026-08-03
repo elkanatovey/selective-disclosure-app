@@ -298,12 +298,11 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             node.array_v[i] :
-            redact_node(
-              node.array_v[i], deeper, sd_alg, rng, disclosures, [&] {
-                Path p = prefix;
-                p.push_back(static_cast<int64_t>(i));
-                return p;
-              }());
+            redact_node(node.array_v[i], deeper, sd_alg, rng, disclosures, [&] {
+              Path p = prefix;
+              p.push_back(static_cast<int64_t>(i));
+              return p;
+            }());
 
           if (direct)
           {
