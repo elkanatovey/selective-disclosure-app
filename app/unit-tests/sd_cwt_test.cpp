@@ -114,24 +114,6 @@ namespace
   }
 }
 
-// draft-08's salted-entry CDDL pins the salt to exactly 16 bytes, so any other
-// length is refused rather than emitting a non-conformant token. (A short salt
-// would also let a verifier brute-force redacted values.)
-TEST(SdCwt, RejectsSaltLengthOtherThanSixteen)
-{
-  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
-  std::vector<sdcwt::Claim> claims = {
-    {1002, sdcwt::value::text("secret")},
-  };
-  for (const size_t salt_len : {size_t{0}, size_t{15}, size_t{32}})
-  {
-    EXPECT_THROW(
-      sdcwt::issue(
-        claims, {{int64_t{1002}}}, *key, sdcwt::HashAlg::SHA_256, salt_len),
-      std::invalid_argument);
-  }
-}
-
 // A standards-compliant issuer can bind the token to a holder key: passing a
 // `holder` public key embeds the RFC 8747 `cnf` claim (clear) so the token is
 // key-binding capable. The holder's public coordinates appear only when set.
@@ -152,7 +134,6 @@ TEST(SdCwt, CnfEmbedsHolderPublicKey)
     {{int64_t{1002}}},
     *issuer,
     sdcwt::HashAlg::SHA_256,
-    sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
   const auto without = sdcwt::issue(claims, {{int64_t{1002}}}, *issuer);
@@ -258,7 +239,6 @@ TEST(SdCwt, KbtSignRequiresIatOrCti)
     {{int64_t{1002}}},
     *issuer,
     sdcwt::HashAlg::SHA_256,
-    sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
 
@@ -285,7 +265,6 @@ TEST(SdCwt, DecoyPadding)
     {{int64_t{1002}}},
     *key,
     sdcwt::HashAlg::SHA_256,
-    sdcwt::SALT_LEN,
     /*pad_to=*/5);
 
   // 1 real redacted claim + 4 decoys = 5 disclosures. A decoy is identified by

@@ -31,7 +31,6 @@ namespace sdcwt
       const ccf::crypto::ECKeyPair& key,
       HashAlg sd_alg,
       const RandomSource& rng,
-      size_t salt_len = SALT_LEN,
       size_t pad_to = 0,
       const ccf::crypto::ECPublicKey* holder = nullptr);
   }

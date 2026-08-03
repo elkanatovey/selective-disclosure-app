@@ -13,14 +13,14 @@
 namespace sdcwt::statement::detail
 {
   // build_claims() / issue_statement() with an explicit randomness source (used
-  // for both the garbage padding and the disclosure salts). The public
-  // overloads in statement.h forward here with default_random_source().
+  // for the garbage padding and, inside issue(), the disclosure salts). The
+  // public overloads in statement.h forward here with default_random_source().
   std::vector<Claim> build_claims(
     const std::string& iss,
     int64_t iat,
     const Fields& fields,
     const RandomSource& rng,
-    size_t pad_len = SALT_LEN);
+    size_t pad_len = PAD_LEN);
 
   IssuedToken issue_statement(
     const std::string& iss,
@@ -29,5 +29,5 @@ namespace sdcwt::statement::detail
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
     const RandomSource& rng,
-    size_t salt_len = SALT_LEN);
+    size_t pad_len = PAD_LEN);
 }

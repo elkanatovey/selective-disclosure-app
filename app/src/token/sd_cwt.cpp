@@ -206,7 +206,6 @@ namespace sdcwt
       const std::vector<Path>& paths,
       HashAlg sd_alg,
       const RandomSource& rng,
-      size_t salt_len,
       std::vector<Disclosure>& disclosures,
       const Path& prefix = {})
     {
@@ -242,7 +241,7 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             value :
-            redact_node(value, deeper, sd_alg, rng, salt_len, disclosures, [&] {
+            redact_node(value, deeper, sd_alg, rng, disclosures, [&] {
               Path p = prefix;
               p.push_back(key);
               return p;
@@ -253,7 +252,7 @@ namespace sdcwt
             Disclosure d;
             d.path = prefix;
             d.path.push_back(key);
-            d.salt = rng(salt_len);
+            d.salt = rng(SALT_LEN);
             d.encoded = encode_map_disclosure(d.salt, child, key);
             d.digest = disclosure_digest(d.encoded, sd_alg);
             digests.push_back(d.digest);
@@ -300,7 +299,7 @@ namespace sdcwt
           const CborValue child = deeper.empty() ?
             node.array_v[i] :
             redact_node(
-              node.array_v[i], deeper, sd_alg, rng, salt_len, disclosures, [&] {
+              node.array_v[i], deeper, sd_alg, rng, disclosures, [&] {
                 Path p = prefix;
                 p.push_back(static_cast<int64_t>(i));
                 return p;
@@ -311,7 +310,7 @@ namespace sdcwt
             Disclosure d;
             d.path = prefix;
             d.path.push_back(static_cast<int64_t>(i));
-            d.salt = rng(salt_len);
+            d.salt = rng(SALT_LEN);
             d.encoded = encode_elem_disclosure(d.salt, child);
             d.digest = disclosure_digest(d.encoded, sd_alg);
             out.array_v.push_back(CborValue::RedactedElem(d.digest));
@@ -336,17 +335,9 @@ namespace sdcwt
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
     const RandomSource& rng,
-    size_t salt_len,
     size_t pad_to,
     const ccf::crypto::ECPublicKey* holder)
   {
-    // draft-08's salted-entry CDDL pins `bstr .size 16`; a shorter salt would
-    // also let a verifier brute-force redacted values (s6.1).
-    if (salt_len != SALT_LEN)
-    {
-      throw std::invalid_argument("salt_len must be exactly 16 bytes");
-    }
-
     // Reject an unsupported curve up front, before any redaction work.
     const auto cose_alg = cose_es_alg_for_curve(key.get_curve_id());
 
@@ -376,14 +367,14 @@ namespace sdcwt
 
     std::vector<Disclosure> disclosures;
     CborValue redacted =
-      redact_node(root, redact_paths, sd_alg, rng, salt_len, disclosures);
+      redact_node(root, redact_paths, sd_alg, rng, disclosures);
 
     // Pad with salt-only decoys up to `pad_to` hashes so the count reveals
     // nothing about how many real claims were redacted.
     while (redacted.redacted_hashes.size() < pad_to)
     {
       Disclosure d;
-      d.salt = rng(salt_len);
+      d.salt = rng(SALT_LEN);
       d.encoded = encode_decoy_disclosure(d.salt);
       d.digest = disclosure_digest(d.encoded, sd_alg);
       redacted.redacted_hashes.push_back(d.digest);
@@ -405,7 +396,6 @@ namespace sdcwt
     const std::vector<Path>& redact_paths,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
-    size_t salt_len,
     size_t pad_to,
     const ccf::crypto::ECPublicKey* holder)
   {
@@ -415,7 +405,6 @@ namespace sdcwt
       key,
       sd_alg,
       default_random_source(),
-      salt_len,
       pad_to,
       holder);
   }

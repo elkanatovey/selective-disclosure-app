@@ -74,9 +74,9 @@ namespace sdcwt::statement
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
     const RandomSource& rng,
-    size_t salt_len)
+    size_t pad_len)
   {
-    const auto claims = detail::build_claims(iss, iat, fields, rng, salt_len);
+    const auto claims = detail::build_claims(iss, iat, fields, rng, pad_len);
 
     // Every content claim is redacted whole (strict uniformity); only the
     // service-set clear claims stay visible. Derived from the claim set so the
@@ -104,8 +104,7 @@ namespace sdcwt::statement
       }
     }
 
-    return sdcwt::detail::issue(
-      claims, redact_paths, key, sd_alg, rng, salt_len);
+    return sdcwt::detail::issue(claims, redact_paths, key, sd_alg, rng);
   }
 
   std::vector<Claim> build_claims(
@@ -121,9 +120,9 @@ namespace sdcwt::statement
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
-    size_t salt_len)
+    size_t pad_len)
   {
     return detail::issue_statement(
-      iss, iat, fields, key, sd_alg, default_random_source(), salt_len);
+      iss, iat, fields, key, sd_alg, default_random_source(), pad_len);
   }
 }

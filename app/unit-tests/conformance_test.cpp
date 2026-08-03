@@ -203,7 +203,6 @@ namespace
       *key,
       sdcwt::HashAlg::SHA_256,
       det_rng,
-      sdcwt::SALT_LEN,
       /*pad_to=*/5);
 
     const std::string dir = base + "/decoy";
@@ -237,7 +236,6 @@ namespace
       {{int64_t{1002}}},
       *issuer,
       sdcwt::HashAlg::SHA_256,
-      sdcwt::SALT_LEN,
       /*pad_to=*/0,
       holder_pub.get());
 
@@ -281,7 +279,6 @@ namespace
       {{int64_t{1002}}, {int64_t{1003}}},
       *issuer,
       sdcwt::HashAlg::SHA_256,
-      sdcwt::SALT_LEN,
       /*pad_to=*/0,
       holder_pub.get());
 
