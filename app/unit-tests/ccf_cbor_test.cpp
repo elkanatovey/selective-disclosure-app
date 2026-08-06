@@ -5,10 +5,6 @@
 // if they regressed; other CBOR behaviour we rely on is asserted where it is
 // used. The header is under `ccf/_private/` (no API-stability promise), pinned
 // to ccf-7.0.5, so a break there is a compile error, not silent misbehaviour.
-//
-// The header lives under `ccf/_private/` — CCF makes no API-stability promise
-// for it. The repo pins ccf-7.0.5, so it is stable until that pin moves; a
-// break here is a compile error, not silent misbehaviour.
 
 #include "token/cbor_value.h"
 
