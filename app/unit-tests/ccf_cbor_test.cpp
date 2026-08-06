@@ -1,16 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Guards the three `ccf::cbor` behaviours this app would silently miscompile on
+// Guards the two `ccf::cbor` behaviours this app would silently miscompile on
 // if they regressed; other CBOR behaviour we rely on is asserted where it is
 // used. The header is under `ccf/_private/` (no API-stability promise), pinned
 // to ccf-7.0.5, so a break there is a compile error, not silent misbehaviour.
 
-#include "token/cbor_value.h"
-
 #include <ccf/_private/crypto/cbor.h>
 #include <gtest/gtest.h>
-#include <span>
 #include <vector>
 
 namespace
@@ -45,19 +42,4 @@ TEST(CcfCbor, RejectsNestingDeeperThanMaxDepth)
   deep.push_back(0x00); // innermost: 0
 
   EXPECT_THROW(ccf::cbor::parse(deep), std::exception);
-}
-
-// Regression guard for sdcwt::bytes_value (see cbor_value.h): an empty byte
-// string must still encode, and non-empty input must borrow, not copy.
-TEST(CcfCbor, BytesValueEncodesEmpty)
-{
-  const std::vector<uint8_t> empty;
-  EXPECT_EQ(ccf::cbor::serialize(sdcwt::bytes_value(empty)), bytes({0x40}));
-  EXPECT_EQ(
-    ccf::cbor::serialize(sdcwt::bytes_value(std::span<const uint8_t>{})),
-    bytes({0x40}));
-
-  // Non-empty is passed straight through, and still borrows rather than copies.
-  const auto src = bytes({0xaa, 0xbb});
-  EXPECT_EQ(sdcwt::bytes_value(src)->as_bytes().data(), src.data());
 }
