@@ -2,9 +2,9 @@
 // Licensed under the MIT License.
 #pragma once
 
-#include "cbor.h"
-
+#include <ccf/_private/crypto/cbor.h>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <variant>
@@ -12,11 +12,10 @@
 
 namespace sdcwt
 {
-  // A CBOR map key: an integer or text-string label.
   using CborKey = std::variant<int64_t, std::string>;
 
-  // A minimal CBOR value tree covering the types the token layer needs. Unlike
-  // opaque pre-encoded bytes, this can be walked for nested/array redaction.
+  // A walkable CBOR tree so redaction can descend
+  // into nested maps and arrays.
   struct CborValue
   {
     enum class Kind : uint8_t
@@ -34,8 +33,8 @@ namespace sdcwt
     std::vector<uint8_t> bytes_v; // Bytes value, or RedactedElement digest
     std::string text_v;
     std::vector<CborValue> array_v;
-    // Map entries as parallel vectors (std::pair<.., CborValue> would require a
-    // complete type here; a vector of an incomplete type is allowed).
+    // Parallel vectors: a vector of incomplete CborValue is legal here, a
+    // vector of std::pair is not.
     std::vector<CborKey> map_keys;
     std::vector<CborValue> map_vals;
     // Map only: sorted Redacted Claim Hashes emitted under simple(59).
@@ -48,15 +47,21 @@ namespace sdcwt
     static CborValue Map(std::vector<std::pair<CborKey, CborValue>> entries);
     static CborValue RedactedElem(std::vector<uint8_t> digest);
 
-    // Append a key/value entry to a Map value.
     void map_put(CborKey key, CborValue value);
   };
 
-  // Encode a value into an open QCBOR context. Map entries are emitted in CDE
-  // (RFC 8949 §4.2) key order; a map's redacted_hashes, if any, are emitted
-  // last under the simple(59) label.
-  void encode_value(QCBOREncodeContext& ctx, const CborValue& v);
+  // make_bytes for possibly-empty data: make_bytes rejects a NULL data pointer,
+  // so an empty vector/span (data() == nullptr) throws even though an empty
+  // byte string is legal CBOR. Passes a non-null zero-length anchor instead.
+  ccf::cbor::Value bytes_value(std::span<const uint8_t> data);
 
-  // Encode a value to standalone CBOR bytes.
+  // Build a `ccf::cbor` view of a value/key, sorting map entries into CDE order
+  // (RFC 8949 §4.2); `ccf::cbor::serialize` itself does not sort.
+  //
+  // LIFETIME: the result BORROWS from `v` (Bytes is a span, String a view).
+  // Serialize it in the same expression; never let it outlive `v`.
+  ccf::cbor::Value to_ccf_cbor(const CborValue& v);
+  ccf::cbor::Value to_ccf_cbor(const CborKey& k);
+
   std::vector<uint8_t> encode_value(const CborValue& v);
 }

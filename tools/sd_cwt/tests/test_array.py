@@ -20,9 +20,7 @@ def signer() -> EC2Key:
 
 def test_array_full_disclosure_roundtrip(signer):
     claims = {1: "iss", 502: ["2019", "2021", "2023"]}
-    token, discs = sd_cwt.issue(
-        claims, redact=set(), signer=signer, redact_elements={502: {0, 1}}
-    )
+    token, discs = sd_cwt.issue(claims, [(502, 0), (502, 1)], signer)
     # Array-element disclosures have no claim key.
     assert sum(1 for d in discs if d.key is None) == 2
 
@@ -33,9 +31,7 @@ def test_array_full_disclosure_roundtrip(signer):
 
 def test_array_partial_disclosure_omits_undisclosed(signer):
     claims = {502: ["a", "b", "c"]}
-    token, discs = sd_cwt.issue(
-        claims, redact=set(), signer=signer, redact_elements={502: {0, 2}}
-    )
+    token, discs = sd_cwt.issue(claims, [(502, 0), (502, 2)], signer)
     only_a = [d for d in discs if d.value == "a"]
     presented = sd_cwt.present(token, only_a)
     out = sd_cwt.validate(presented, signer)
@@ -45,9 +41,7 @@ def test_array_partial_disclosure_omits_undisclosed(signer):
 
 def test_redacted_array_hides_values_and_uses_tag60(signer):
     claims = {502: ["secret0", "keep1"]}
-    token, _ = sd_cwt.issue(
-        claims, redact=set(), signer=signer, redact_elements={502: {0}}
-    )
+    token, _ = sd_cwt.issue(claims, [(502, 0)], signer)
     assert b"secret0" not in token
 
     arr = sd_cwt.verify(token, signer).payload[502]
@@ -57,9 +51,7 @@ def test_redacted_array_hides_values_and_uses_tag60(signer):
 
 def test_tampered_array_disclosure_rejected(signer):
     claims = {502: ["x", "y"]}
-    token, discs = sd_cwt.issue(
-        claims, redact=set(), signer=signer, redact_elements={502: {0}}
-    )
+    token, discs = sd_cwt.issue(claims, [(502, 0)], signer)
     d = discs[0]
     forged = sd_cwt.Disclosure(
         salt=d.salt, value="forged", key=None, encoded=cbor2.dumps([d.salt, "forged"])
@@ -71,9 +63,7 @@ def test_tampered_array_disclosure_rejected(signer):
 
 def test_mixed_map_and_array_redaction(signer):
     claims = {1: "iss", 500: "secret-map", 502: ["e0", "e1"]}
-    token, discs = sd_cwt.issue(
-        claims, redact={500}, signer=signer, redact_elements={502: {1}}
-    )
+    token, discs = sd_cwt.issue(claims, [(500,), (502, 1)], signer)
     presented = sd_cwt.present(token, discs)
     out = sd_cwt.validate(presented, signer)
     assert out.clear[1] == "iss"

@@ -29,6 +29,9 @@ namespace sdcwt::statement
   // Number of content fields carried by every statement (strict uniformity).
   inline constexpr size_t CONTENT_FIELD_COUNT = 9;
 
+  // Garbage sentinel length for an absent content field.
+  inline constexpr size_t PAD_LEN = 16;
+
   // Schema/profile version this build implements. Bump on any change to the
   // content field set, their IDs, or the redaction/uniformity rules (DESIGN
   // §12.1). Surfaced by GET /version so a client knows which schema a live
@@ -51,18 +54,18 @@ namespace sdcwt::statement
   };
 
   // Build the strictly-uniform claim set: clear iss/iat + all 9 content fields
-  // (real value when set, else a random `pad_len`-byte garbage sentinel), all
-  // content redacted.
+  // (real value when set, else a random `pad_len`-byte garbage sentinel).
+  // Which claims are redacted is not encoded here — issue_statement() supplies
+  // that as redaction paths.
   std::vector<Claim> build_claims(
     const std::string& iss,
     int64_t iat,
     const Fields& fields,
-    size_t pad_len = SALT_LEN);
+    size_t pad_len = PAD_LEN);
 
   // Build + sign a strictly-uniform statement token. The COSE signing algorithm
   // is derived from the key's curve; the redaction hash is `sd_alg` (default
-  // SHA-256); `salt_len` is the per-disclosure salt / padding length (default
-  // 16).
+  // SHA-256); `pad_len` is the garbage sentinel length for absent fields.
   //
   // Throws std::invalid_argument (unsupported curve) or std::runtime_error
   // (CBOR failure).
@@ -72,5 +75,5 @@ namespace sdcwt::statement
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
-    size_t salt_len = SALT_LEN);
+    size_t pad_len = PAD_LEN);
 }

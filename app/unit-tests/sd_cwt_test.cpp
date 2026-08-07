@@ -2,14 +2,11 @@
 // Licensed under the MIT License.
 #include "token/sd_cwt.h"
 
-#include "cbor.h"
+#include "token/cbor_value.h"
 #include "token/cose.h"
 
 #include <algorithm>
-#include <cstring>
 #include <gtest/gtest.h>
-#include <qcbor/qcbor_decode.h>
-#include <qcbor/qcbor_spiffy_decode.h>
 
 namespace
 {
@@ -39,13 +36,10 @@ TEST(SdCwt, DisclosureDigestMatchesPythonReference)
   }
 
   const auto value = sdcwt::value::text("heap overflow");
-  const auto encoded = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_OpenArray(&ctx);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(salt));
-    sdcwt::encode_value(ctx, value);
-    QCBOREncode_AddInt64(&ctx, 1002);
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto encoded = ccf::cbor::serialize(ccf::cbor::make_array(
+    {ccf::cbor::make_bytes(salt),
+     sdcwt::to_ccf_cbor(value),
+     ccf::cbor::make_signed(1002)}));
 
   EXPECT_EQ(
     to_hex(encoded),
@@ -63,11 +57,11 @@ TEST(SdCwt, RedactedClaimIsHiddenAndDisclosed)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("https://issuer.example"), false},
-    {1002, sdcwt::value::text("secret body"), true},
+    {1, sdcwt::value::text("https://issuer.example")},
+    {1002, sdcwt::value::text("secret body")},
   };
 
-  const auto issued = sdcwt::issue(claims, *key);
+  const auto issued = sdcwt::issue(claims, {{int64_t{1002}}}, *key);
 
   // The secret must not appear anywhere in the signed token bytes.
   const std::string needle = "secret body";
@@ -75,8 +69,8 @@ TEST(SdCwt, RedactedClaimIsHiddenAndDisclosed)
   EXPECT_EQ(haystack.find(needle), std::string::npos);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
-  ASSERT_TRUE(issued.disclosures[0].key.has_value());
-  EXPECT_EQ(std::get<int64_t>(*issued.disclosures[0].key), 1002);
+  ASSERT_EQ(issued.disclosures[0].path.size(), 1u);
+  EXPECT_EQ(std::get<int64_t>(issued.disclosures[0].path[0]), 1002);
   EXPECT_EQ(issued.disclosures[0].salt.size(), sdcwt::SALT_LEN);
   EXPECT_EQ(
     issued.disclosures[0].digest,
@@ -89,11 +83,12 @@ TEST(SdCwt, RedactionHashAgilitySha384)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret")},
   };
 
-  const auto issued = sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_384);
+  const auto issued =
+    sdcwt::issue(claims, {{int64_t{1002}}}, *key, sdcwt::HashAlg::SHA_384);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
   EXPECT_EQ(issued.disclosures[0].digest.size(), 48u); // SHA-384 output
@@ -119,23 +114,6 @@ namespace
   }
 }
 
-// The salt length is configurable (default 16).
-TEST(SdCwt, ConfigurableSaltLength)
-{
-  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
-  std::vector<sdcwt::Claim> claims = {
-    {1002, sdcwt::value::text("secret"), true},
-  };
-  const auto issued = sdcwt::issue(
-    claims,
-    *key,
-    sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
-    /*salt_len=*/32);
-  ASSERT_EQ(issued.disclosures.size(), 1u);
-  EXPECT_EQ(issued.disclosures[0].salt.size(), 32u);
-}
-
 // A standards-compliant issuer can bind the token to a holder key: passing a
 // `holder` public key embeds the RFC 8747 `cnf` claim (clear) so the token is
 // key-binding capable. The holder's public coordinates appear only when set.
@@ -147,19 +125,18 @@ TEST(SdCwt, CnfEmbedsHolderPublicKey)
   const auto coords = holder_pub->coordinates();
 
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("https://issuer.example"), false},
-    {1002, sdcwt::value::text("secret body"), true},
+    {1, sdcwt::value::text("https://issuer.example")},
+    {1002, sdcwt::value::text("secret body")},
   };
 
   const auto with_cnf = sdcwt::issue(
     claims,
+    {{int64_t{1002}}},
     *issuer,
     sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
-    sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
-  const auto without = sdcwt::issue(claims, *issuer);
+  const auto without = sdcwt::issue(claims, {{int64_t{1002}}}, *issuer);
 
   const auto contains = [](
                           const std::vector<uint8_t>& hay,
@@ -178,10 +155,10 @@ TEST(SdCwt, PresentAttachesSelectedDisclosures)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret body"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret body")},
   };
-  const auto issued = sdcwt::issue(claims, *key);
+  const auto issued = sdcwt::issue(claims, {{int64_t{1002}}}, *key);
   ASSERT_EQ(issued.disclosures.size(), 1u);
 
   const auto contains = [](
@@ -205,58 +182,46 @@ TEST(SdCwt, PresentAttachesSelectedDisclosures)
 // them (mirrors the Python reference's dict(arr[1]) passthrough).
 TEST(SdCwt, PresentPreservesExistingUnprotectedHeader)
 {
+  namespace cbor = ccf::cbor;
   const std::vector<uint8_t> kid = {0xAB, 0xCD};
   const std::vector<uint8_t> cert = {0x01, 0x02, 0x03};
   const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
+  const std::vector<uint8_t> empty;
 
   // Hand-build a COSE_Sign1 whose unprotected header already carries kid (4)
   // and an x5chain-like array (33). The signature/payload are placeholders;
   // present does not verify them.
-  const auto token = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddTag(&ctx, 18);
-    QCBOREncode_OpenArray(&ctx);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // phdr
-    QCBOREncode_OpenMap(&ctx);
-    QCBOREncode_AddBytesToMapN(&ctx, 4, sdcwt::to_ubc(kid));
-    QCBOREncode_OpenArrayInMapN(&ctx, 33);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(cert));
-    QCBOREncode_CloseArray(&ctx);
-    QCBOREncode_CloseMap(&ctx);
-    QCBOREncode_AddBytes(
-      &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // payload
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // sig
-    QCBOREncode_CloseArray(&ctx);
-  });
+  const auto token = cbor::serialize(cbor::make_tagged(
+    cbor::tag::COSE_SIGN_1,
+    cbor::make_array(
+      {sdcwt::bytes_value(empty), // phdr
+       cbor::make_map(
+         {{cbor::make_signed(4), sdcwt::bytes_value(kid)},
+          {cbor::make_signed(33),
+           cbor::make_array({sdcwt::bytes_value(cert)})}}),
+       sdcwt::bytes_value(empty), // payload
+       sdcwt::bytes_value(empty)}))); // sig
 
   const auto presented = sdcwt::present(token, {disclosure});
 
   // The rebuilt unprotected header must still contain kid(4) and x5chain(33),
   // and now also sd_claims(17).
-  QCBORDecodeContext dc;
-  QCBORDecode_Init(
-    &dc,
-    UsefulBufC{presented.data(), presented.size()},
-    QCBOR_DECODE_MODE_NORMAL);
-  QCBORDecode_EnterArray(&dc, nullptr);
-  UsefulBufC phdr = NULLUsefulBufC;
-  QCBORDecode_GetByteString(&dc, &phdr);
-  QCBORDecode_EnterMap(&dc, nullptr);
-  UsefulBufC got_kid = NULLUsefulBufC;
-  QCBORDecode_GetByteStringInMapN(&dc, 4, &got_kid);
-  QCBORDecode_EnterArrayFromMapN(&dc, 17); // sd_claims present
-  QCBORDecode_ExitArray(&dc);
-  UsefulBufC got_cert = NULLUsefulBufC;
-  QCBORDecode_EnterArrayFromMapN(&dc, 33); // x5chain present
-  QCBORDecode_GetByteString(&dc, &got_cert);
-  QCBORDecode_ExitArray(&dc);
-  QCBORDecode_ExitMap(&dc);
-  QCBORDecode_ExitArray(&dc);
-  ASSERT_EQ(QCBORDecode_Finish(&dc), QCBOR_SUCCESS);
+  const auto out = cbor::parse(presented);
+  const auto& parts =
+    std::get<cbor::Array>(out->tag_at(cbor::tag::COSE_SIGN_1)->value).items;
+  const auto& uhdr = parts[1];
 
-  ASSERT_EQ(got_kid.len, kid.size());
-  EXPECT_EQ(0, std::memcmp(got_kid.ptr, kid.data(), kid.size()));
-  ASSERT_EQ(got_cert.len, cert.size());
-  EXPECT_EQ(0, std::memcmp(got_cert.ptr, cert.data(), cert.size()));
+  const auto got_kid = uhdr->map_at(cbor::make_signed(4))->as_bytes();
+  EXPECT_TRUE(std::equal(got_kid.begin(), got_kid.end(), kid.begin()));
+  EXPECT_EQ(got_kid.size(), kid.size());
+
+  const auto got_cert =
+    uhdr->map_at(cbor::make_signed(33))->array_at(0)->as_bytes();
+  EXPECT_TRUE(std::equal(got_cert.begin(), got_cert.end(), cert.begin()));
+  EXPECT_EQ(got_cert.size(), cert.size());
+
+  // sd_claims(17) was added.
+  EXPECT_EQ(uhdr->map_at(cbor::make_signed(17))->size(), 1u);
 }
 
 // kbt_sign requires the draft-08 s8.1 freshness claim (iat or cti).
@@ -266,15 +231,14 @@ TEST(SdCwt, KbtSignRequiresIatOrCti)
   auto holder = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   auto holder_pub = ccf::crypto::make_ec_public_key(holder->public_key_pem());
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret")},
   };
   const auto issued = sdcwt::issue(
     claims,
+    {{int64_t{1002}}},
     *issuer,
     sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
-    sdcwt::SALT_LEN,
     /*pad_to=*/0,
     holder_pub.get());
 
@@ -293,23 +257,24 @@ TEST(SdCwt, DecoyPadding)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1, sdcwt::value::text("iss"), false},
-    {1002, sdcwt::value::text("secret"), true},
+    {1, sdcwt::value::text("iss")},
+    {1002, sdcwt::value::text("secret")},
   };
   const auto issued = sdcwt::issue(
     claims,
+    {{int64_t{1002}}},
     *key,
     sdcwt::HashAlg::SHA_256,
-    /*redact_paths=*/{},
-    sdcwt::SALT_LEN,
     /*pad_to=*/5);
 
-  // 1 real redacted claim + 4 decoys = 5 disclosures, all with no key.
+  // 1 real redacted claim + 4 decoys = 5 disclosures. A decoy is identified by
+  // its EMPTY path (it corresponds to no claim), not by the absence of a map
+  // key — a redacted array element is keyless too.
   ASSERT_EQ(issued.disclosures.size(), 5u);
   size_t decoys = 0;
   for (const auto& d : issued.disclosures)
   {
-    if (!d.key.has_value())
+    if (d.path.empty())
     {
       ++decoys;
     }
@@ -323,22 +288,16 @@ TEST(SdCwt, UnmatchedRedactPathRejected)
 {
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
-    {1006, sdcwt::value::text_array({"A", "B"}), false},
+    {1006, sdcwt::value::text_array({"A", "B"})},
   };
   // Wrong claim key, out-of-range index, and descending into a scalar.
   EXPECT_THROW(
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, {{int64_t{9999}}}),
+    sdcwt::issue(claims, {{int64_t{9999}}}, *key), std::invalid_argument);
+  EXPECT_THROW(
+    sdcwt::issue(claims, {{int64_t{1006}, int64_t{9}}}, *key),
     std::invalid_argument);
   EXPECT_THROW(
-    sdcwt::issue(
-      claims, *key, sdcwt::HashAlg::SHA_256, {{int64_t{1006}, int64_t{9}}}),
-    std::invalid_argument);
-  EXPECT_THROW(
-    sdcwt::issue(
-      claims,
-      *key,
-      sdcwt::HashAlg::SHA_256,
-      {{int64_t{1006}, int64_t{0}, int64_t{0}}}),
+    sdcwt::issue(claims, {{int64_t{1006}, int64_t{0}, int64_t{0}}}, *key),
     std::invalid_argument);
 }
 
@@ -349,17 +308,17 @@ TEST(SdCwt, ArrayElementRedaction)
   auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
   std::vector<sdcwt::Claim> claims = {
     {1006,
-     sdcwt::value::text_array({"REF_KEEP_A", "REF_HIDE_B", "REF_KEEP_C"}),
-     false},
+     sdcwt::value::text_array({"REF_KEEP_A", "REF_HIDE_B", "REF_KEEP_C"})},
   };
   // Redact element 1 of claim 1006.
   const std::vector<sdcwt::Path> paths = {{int64_t{1006}, int64_t{1}}};
 
-  const auto issued =
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+  const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
-  EXPECT_FALSE(issued.disclosures[0].key.has_value()); // array element
+  // An array element's disclosure is the 2-element [salt, value] form (a map
+  // entry's is [salt, value, key]); definite-length under CDE, so head = 0x82.
+  EXPECT_EQ(issued.disclosures[0].encoded.at(0), uint8_t{0x82});
   EXPECT_FALSE(token_contains(issued.token, "REF_HIDE_B"));
   EXPECT_TRUE(token_contains(issued.token, "REF_KEEP_A"));
   EXPECT_TRUE(token_contains(issued.token, "REF_KEEP_C"));
@@ -376,15 +335,14 @@ TEST(SdCwt, NestedMapRedaction)
   auto inner = sdcwt::CborValue::Map(
     {{std::string("keep"), sdcwt::value::text("INNER_KEEP")},
      {std::string("hide"), sdcwt::value::text("NESTED_HIDE")}});
-  std::vector<sdcwt::Claim> claims = {{500, std::move(inner), false}};
+  std::vector<sdcwt::Claim> claims = {{500, std::move(inner)}};
   const std::vector<sdcwt::Path> paths = {{int64_t{500}, std::string("hide")}};
 
-  const auto issued =
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+  const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 1u);
-  ASSERT_TRUE(issued.disclosures[0].key.has_value());
-  EXPECT_EQ(std::get<std::string>(*issued.disclosures[0].key), "hide");
+  ASSERT_EQ(issued.disclosures[0].path.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(issued.disclosures[0].path[1]), "hide");
   EXPECT_FALSE(token_contains(issued.token, "NESTED_HIDE"));
   EXPECT_TRUE(token_contains(issued.token, "INNER_KEEP"));
 }
@@ -403,14 +361,13 @@ TEST(SdCwt, NestedAncestorDisclosure)
      {std::string("c"), sdcwt::value::text("KEEP_SIBLING")}});
   auto child =
     sdcwt::CborValue::Map({{std::string("a"), std::move(grandchild)}});
-  std::vector<sdcwt::Claim> claims = {{700, std::move(child), false}};
+  std::vector<sdcwt::Claim> claims = {{700, std::move(child)}};
   // Redact the parent "a" AND the grandchild "b".
   const std::vector<sdcwt::Path> paths = {
     {int64_t{700}, std::string("a")},
     {int64_t{700}, std::string("a"), std::string("b")}};
 
-  const auto issued =
-    sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+  const auto issued = sdcwt::issue(claims, paths, *key);
 
   ASSERT_EQ(issued.disclosures.size(), 2u);
   EXPECT_FALSE(token_contains(issued.token, "SECRET_CHILD"));
@@ -423,8 +380,8 @@ TEST(SdCwt, NestedAncestorDisclosure)
   for (const auto& d : issued.disclosures)
   {
     if (
-      d.key.has_value() && std::holds_alternative<std::string>(*d.key) &&
-      std::get<std::string>(*d.key) == "a")
+      d.path.size() == 2 && std::holds_alternative<std::string>(d.path[1]) &&
+      std::get<std::string>(d.path[1]) == "a")
     {
       a_disc = &d;
     }
@@ -435,132 +392,125 @@ TEST(SdCwt, NestedAncestorDisclosure)
   EXPECT_EQ(a_enc.find("SECRET_CHILD"), std::string::npos);
 }
 
-// present() must handle an indefinite-length unprotected-header map: the
-// original code iterated by uCount which equals UINT16_MAX for indefinite
-// maps, causing a spurious throw after the first real entry. The fixed code
-// loops until QCBOR_ERR_NO_MORE_ITEMS regardless of map encoding style.
-// Also verifies the output map preserves the indefinite-length encoding.
-TEST(SdCwt, PresentHandlesIndefiniteLengthUnprotectedHeader)
+// present() rebuilds the COSE_Sign1 through ccf::cbor, which enforces
+// definite-length encoding (draft-08 s5.1). A token whose unprotected header is
+// an indefinite-length map is therefore rejected rather than round-tripped.
+//
+// This is a deliberate narrowing. The service is the sole signer and only ever
+// presents tokens it issued itself, all definite-length, so the rejected form
+// cannot arise in this ledger; and draft-08 forbids it regardless.
+TEST(SdCwt, PresentRejectsIndefiniteLengthUnprotectedHeader)
 {
-  const std::vector<uint8_t> kid = {0xDE, 0xAD};
+  // d2                      tag(18) COSE_Sign1
+  //   84                    array(4)
+  //     40                  phdr: bstr(0)
+  //     bf 04 42 dead ff    uhdr: indefinite-length map {4: h'DEAD'}
+  //     40                  payload: bstr(0)
+  //     40                  signature: bstr(0)
+  const std::vector<uint8_t> token = {
+    0xd2, 0x84, 0x40, 0xbf, 0x04, 0x42, 0xde, 0xad, 0xff, 0x40, 0x40};
   const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
 
-  // Build a COSE_Sign1 whose unprotected header is an INDEFINITE-length map
-  // containing kid (4). Signature/payload are placeholders.
-  const auto token = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddTag(&ctx, 18);
-    QCBOREncode_OpenArray(&ctx);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // phdr
-    QCBOREncode_OpenMapIndefiniteLength(&ctx);
-    QCBOREncode_AddBytesToMapN(&ctx, 4, sdcwt::to_ubc(kid));
-    QCBOREncode_CloseMapIndefiniteLength(&ctx);
-    QCBOREncode_AddBytes(
-      &ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // payload
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{})); // sig
-    QCBOREncode_CloseArray(&ctx);
-  });
-
-  // Must not throw even though the source map is indefinite-length.
-  std::vector<uint8_t> presented;
-  ASSERT_NO_THROW(presented = sdcwt::present(token, {disclosure}));
-
-  // The rebuilt unprotected header must still contain kid(4) and sd_claims(17),
-  // and the output map itself must be indefinite-length (uCount == UINT16_MAX).
-  QCBORDecodeContext dc;
-  QCBORDecode_Init(
-    &dc,
-    UsefulBufC{presented.data(), presented.size()},
-    QCBOR_DECODE_MODE_NORMAL);
-  QCBORDecode_EnterArray(&dc, nullptr);
-  UsefulBufC phdr = NULLUsefulBufC;
-  QCBORDecode_GetByteString(&dc, &phdr);
-  QCBORItem uhdr_item;
-  QCBORDecode_EnterMap(&dc, &uhdr_item);
-  UsefulBufC got_kid = NULLUsefulBufC;
-  QCBORDecode_GetByteStringInMapN(&dc, 4, &got_kid);
-  QCBORDecode_EnterArrayFromMapN(&dc, 17); // sd_claims must be present
-  QCBORDecode_ExitArray(&dc);
-  QCBORDecode_ExitMap(&dc);
-  QCBORDecode_ExitArray(&dc);
-  ASSERT_EQ(QCBORDecode_Finish(&dc), QCBOR_SUCCESS);
-
-  // Output map must preserve indefinite-length encoding.
-  EXPECT_EQ(uhdr_item.val.uCount, QCBOR_COUNT_INDICATES_INDEFINITE_LENGTH);
-
-  ASSERT_EQ(got_kid.len, kid.size());
-  EXPECT_EQ(0, std::memcmp(got_kid.ptr, kid.data(), kid.size()));
+  EXPECT_THROW((void)sdcwt::present(token, {disclosure}), std::runtime_error);
 }
 
-// present() must preserve an unprotected-header entry whose label is a uint64
-// value larger than INT64_MAX. The original code cast peek.label.uint64 to
-// int64_t (silent UB for values > INT64_MAX). The fixed code tracks the label
-// type and emits large labels via a split QCBOREncode_AddUInt64 key + value.
-TEST(SdCwt, PresentPreservesLargeUint64Label)
+// ccf::cbor represents integers as int64_t, so a CBOR unsigned integer above
+// INT64_MAX cannot be held at all and is rejected at parse. A token whose
+// unprotected header uses such a label therefore cannot be presented.
+//
+// Same rationale as the indefinite-length case: the service is the sole signer
+// and never emits a label outside the standard COSE range, so this form cannot
+// reach present() in this ledger. Recorded here so the limit is explicit rather
+// than discovered.
+TEST(SdCwt, PresentRejectsLabelAboveInt64Max)
 {
-  // 2^63 = 9223372036854775808 — the smallest uint64 > INT64_MAX.
-  constexpr uint64_t large_label = static_cast<uint64_t>(INT64_MAX) + 1;
-  const std::vector<uint8_t> payload_bytes = {0x42};
+  // d2                            tag(18) COSE_Sign1
+  //   84                          array(4)
+  //     40                        phdr: bstr(0)
+  //     a1 1b 8000000000000000    uhdr: {2^63: h'42'}
+  //        41 42
+  //     40                        payload: bstr(0)
+  //     40                        signature: bstr(0)
+  const std::vector<uint8_t> token = {
+    0xd2,
+    0x84,
+    0x40,
+    0xa1,
+    0x1b,
+    0x80,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x41,
+    0x42,
+    0x40,
+    0x40};
   const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
 
-  // Build a token whose unprotected header has {large_label: h'\x42'}.
-  const auto token = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-    QCBOREncode_AddTag(&ctx, 18);
-    QCBOREncode_OpenArray(&ctx);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{}));
-    QCBOREncode_OpenMap(&ctx);
-    // Emit uint64 key > INT64_MAX via split add (no *ToMapN variant exists).
-    QCBOREncode_AddUInt64(&ctx, large_label);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(payload_bytes));
-    QCBOREncode_CloseMap(&ctx);
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{}));
-    QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(std::vector<uint8_t>{}));
-    QCBOREncode_CloseArray(&ctx);
-  });
+  EXPECT_THROW((void)sdcwt::present(token, {disclosure}), std::runtime_error);
+}
+// present() manages sd_claims(17) rather than appending to it: presenting an
+// already-presented token must REPLACE the previous selection, not accumulate.
+// The disclosures a recipient sees are exactly the ones the Operator chose, so
+// a stale entry surviving here would over-disclose.
+TEST(SdCwt, PresentReplacesExistingSdClaims)
+{
+  namespace cbor = ccf::cbor;
+  const std::vector<uint8_t> empty;
+  const std::vector<uint8_t> first = {0x81, 0x41, 0xAA}; // [h'AA']
+  const std::vector<uint8_t> second = {0x81, 0x41, 0xBB}; // [h'BB']
 
-  // present() must not throw.
-  std::vector<uint8_t> presented;
-  ASSERT_NO_THROW(presented = sdcwt::present(token, {disclosure}));
+  const auto token = cbor::serialize(cbor::make_tagged(
+    cbor::tag::COSE_SIGN_1,
+    cbor::make_array(
+      {sdcwt::bytes_value(empty), // phdr
+       cbor::make_map({}), // uhdr
+       sdcwt::bytes_value(empty), // payload
+       sdcwt::bytes_value(empty)}))); // sig
 
-  // Parse the rebuilt unprotected header and verify the large label survived.
-  QCBORDecodeContext dc;
-  QCBORDecode_Init(
-    &dc,
-    UsefulBufC{presented.data(), presented.size()},
-    QCBOR_DECODE_MODE_NORMAL);
-  QCBORDecode_EnterArray(&dc, nullptr);
-  UsefulBufC phdr_out = NULLUsefulBufC;
-  QCBORDecode_GetByteString(&dc, &phdr_out);
-  QCBORItem uhdr_map_item;
-  QCBORDecode_EnterMap(&dc, &uhdr_map_item);
-  // Iterate items to find the large_label entry.
-  bool found_large = false;
-  bool found_sdclaims = false;
-  for (;;)
-  {
-    QCBORItem item;
-    if (QCBORDecode_GetNext(&dc, &item) != QCBOR_SUCCESS)
-      break;
-    if (
-      item.uLabelType == QCBOR_TYPE_UINT64 &&
-      item.label.uint64 == large_label &&
-      item.uDataType == QCBOR_TYPE_BYTE_STRING)
-    {
-      found_large = item.val.string.len == payload_bytes.size() &&
-        std::memcmp(
-          item.val.string.ptr, payload_bytes.data(), payload_bytes.size()) == 0;
-    }
-    if (
-      item.uLabelType == QCBOR_TYPE_INT64 &&
-      item.label.int64 == 17 && // SD_CLAIMS_LABEL
-      item.uDataType == QCBOR_TYPE_ARRAY)
-    {
-      found_sdclaims = true;
-    }
-  }
-  QCBORDecode_ExitMap(&dc);
-  QCBORDecode_ExitArray(&dc);
-  ASSERT_EQ(QCBORDecode_Finish(&dc), QCBOR_SUCCESS);
+  const auto once = sdcwt::present(token, {first});
+  const auto twice = sdcwt::present(once, {second});
 
-  EXPECT_TRUE(found_large) << "large uint64 label not found in rebuilt uhdr";
-  EXPECT_TRUE(found_sdclaims) << "sd_claims(17) not found in rebuilt uhdr";
+  const auto out = cbor::parse(twice);
+  const auto& parts =
+    std::get<cbor::Array>(out->tag_at(cbor::tag::COSE_SIGN_1)->value).items;
+  const auto& sd_claims = parts[1]->map_at(cbor::make_signed(17));
+
+  ASSERT_EQ(sd_claims->size(), 1u);
+  const auto only = sd_claims->array_at(0)->as_bytes();
+  EXPECT_TRUE(std::equal(only.begin(), only.end(), second.begin()));
+}
+
+// The CDE (RFC 8949 §4.2) map-key order applied in cbor_value.cpp is
+// load-bearing: the C++ signer and the Python oracle must agree byte for byte,
+// and ccf::cbor::serialize preserves insertion order rather than sorting, so
+// the ordering is ours to get right. Conformance covers it only indirectly.
+//
+// This also pins the invariant the sort relies on — that every int and text key
+// encodes with a first byte below simple(59) (0xf8), so the redacted-claim-keys
+// entry always lands last.
+TEST(CborValue, CdeOrdersMapKeysAndPutsSimple59Last)
+{
+  sdcwt::CborValue m = sdcwt::CborValue::Map({});
+  // Inserted deliberately out of order, mixing text, positive and negative int.
+  m.map_put(sdcwt::CborKey(std::string("b")), sdcwt::value::integer(4));
+  m.map_put(sdcwt::CborKey(int64_t{10}), sdcwt::value::integer(2));
+  m.map_put(sdcwt::CborKey(std::string("a")), sdcwt::value::integer(3));
+  m.map_put(sdcwt::CborKey(int64_t{-1}), sdcwt::value::integer(1));
+  m.map_put(sdcwt::CborKey(int64_t{1}), sdcwt::value::integer(0));
+  m.redacted_hashes.push_back({0xAA});
+
+  // a6                map(6), in CDE order by encoded key bytes:
+  //   01 00             1   (0x01)
+  //   0a 02             10  (0x0a)
+  //   20 01             -1  (0x20)
+  //   61 61 03          "a" (0x61...)
+  //   61 62 04          "b"
+  //   f8 3b 81 41 aa    simple(59) (0xf8) -> [h'AA'], necessarily last
+  EXPECT_EQ(
+    to_hex(sdcwt::encode_value(m)), "a601000a022001616103616204f83b8141aa");
 }

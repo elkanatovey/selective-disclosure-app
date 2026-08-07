@@ -23,7 +23,7 @@ def _retag(token: bytes, arr: list) -> bytes:
 
 
 def test_tampered_payload_rejected(signer):
-    token, _ = sd_cwt.issue({1: "iss", 9: "honest"}, set(), signer)
+    token, _ = sd_cwt.issue({1: "iss", 9: "honest"}, [], signer)
     arr = list(cbor2.loads(token).value)
     arr[2] = cbor2.dumps({1: "iss", 9: "forged"})  # swap the signed payload
     forged = _retag(token, arr)
@@ -32,7 +32,7 @@ def test_tampered_payload_rejected(signer):
 
 
 def test_tampered_protected_header_rejected(signer):
-    token, _ = sd_cwt.issue({1: "iss"}, set(), signer)
+    token, _ = sd_cwt.issue({1: "iss"}, [], signer)
     arr = list(cbor2.loads(token).value)
     protected = cbor2.loads(arr[0])
     protected[99] = "injected"  # mutate the signed protected header
@@ -43,7 +43,7 @@ def test_tampered_protected_header_rejected(signer):
 
 
 def test_zeroed_signature_rejected(signer):
-    token, _ = sd_cwt.issue({1: "iss"}, set(), signer)
+    token, _ = sd_cwt.issue({1: "iss"}, [], signer)
     arr = list(cbor2.loads(token).value)
     arr[3] = bytes(len(arr[3]))  # all-zero signature of the right length
     forged = _retag(token, arr)
@@ -57,13 +57,13 @@ def test_garbage_bytes_rejected(signer):
 
 
 def test_truncated_token_rejected(signer):
-    token, _ = sd_cwt.issue({1: "iss"}, set(), signer)
+    token, _ = sd_cwt.issue({1: "iss"}, [], signer)
     with pytest.raises(Exception):
         sd_cwt.verify(token[: len(token) // 2], signer)
 
 
 def test_validate_rejects_tampered_payload(signer):
-    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, {501}, signer)
+    token, discs = sd_cwt.issue({1: "iss", 501: "RCE"}, [(501,)], signer)
     presented = sd_cwt.present(token, discs)
     arr = list(cbor2.loads(presented).value)
     payload = cbor2.loads(arr[2])

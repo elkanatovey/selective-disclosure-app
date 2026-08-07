@@ -12,20 +12,7 @@ if(NOT TARGET "ccf")
 endif()
 
 # --- Vendored dependencies -------------------------------------------------
-# QCBOR is vendored for CBOR encode/decode in the token core: CCF's own
-# CBOR/COSE is internal (Rust) and exposes no general-purpose CBOR encoder to
-# app code, so we bring our own to construct the SD-CWT/COSE token bytes.
-# Declared before add_ccf_app so the app can link + include it.
 include(FetchContent)
-
-set(BUILD_QCBOR_TEST OFF CACHE STRING "" FORCE)
-FetchContent_Declare(
-  qcbor
-  GIT_REPOSITORY https://github.com/laurencelundblade/QCBOR.git
-  GIT_TAG        v1.6.1
-)
-FetchContent_MakeAvailable(qcbor)
-set_property(TARGET qcbor PROPERTY SYSTEM TRUE)
 
 # The token core (CBOR/COSE/SD-CWT construction), shared by the enclave app and
 # the host unit tests.
@@ -44,6 +31,11 @@ set(APP_LOGIC_SRCS
 )
 
 # --- The CCF application ----------------------------------------------------
+# CBOR encode/decode uses CCF's own evercbor-backed `ccf::cbor` (header
+# ccf/_private/crypto/cbor.h, symbols in ccfcrypto), so no CBOR library is
+# vendored here. The header is under `_private`, so CCF makes no API-stability
+# promise for it; the pinned CCF release in third_party/CCF is what keeps that
+# safe, and a break would be a compile error rather than silent misbehaviour.
 add_ccf_app(
   selective_disclosure
   SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
@@ -51,7 +43,6 @@ add_ccf_app(
        ${TOKEN_SRCS}
        ${APP_LOGIC_SRCS}
   INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src
-  LINK_LIBS qcbor
 )
 
 # --- Host unit tests (no enclave, no chain) --------------------------------
@@ -79,7 +70,7 @@ if(BUILD_TESTS)
     ${CCF_DIR}/include/3rdparty
   )
   target_link_libraries(
-    unit_tests PRIVATE ccfcrypto ccf qcbor GTest::gtest GTest::gmock
+    unit_tests PRIVATE ccfcrypto ccf GTest::gtest GTest::gmock
   )
   add_test(NAME unit_tests COMMAND unit_tests)
 endif()

@@ -9,7 +9,7 @@
 #include <span>
 
 // A hand-assembled COSE_Sign1 must verify under CCF's own COSE verifier, and
-// the recovered payload must match what we signed. This nails the QCBOR + COSE
+// the recovered payload must match what we signed. This nails the CBOR + COSE
 // + ccf::crypto signing pipeline before any redaction is layered on top.
 TEST(Cose, Sign1RoundTripVerifiesUnderCcf)
 {

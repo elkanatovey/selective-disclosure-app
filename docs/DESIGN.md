@@ -190,10 +190,10 @@ service cert/endorsements as out-of-band trust anchors; salts are high-entropy.
   `ccf::crypto::get_entropy()`.
 - COSE_Sign1 _creation_ is NOT exposed by CCF. Public `cose.h` only edits
   headers. Since the service is the sole signer, we hand-assemble the
-  `COSE_Sign1` with QCBOR and sign the `Sig_structure` via `ccf::crypto`; no
-  `t_cose` dependency.
-- CBOR encode/decode is NOT exposed by CCF for general use, so we vendor
-  QCBOR via CMake `FetchContent` to build/parse token bytes.
+  `COSE_Sign1` and sign the `Sig_structure` via `ccf::crypto`.
+- CBOR encode/decode uses CCF's own `ccf::cbor` (`ccf/_private/crypto/cbor.h`),
+  a C++ wrapper over EverCBOR, the formally-verified EverParse CBOR parser CCF
+  vendors.
 - CCF-source modification is last resort.
 
 ## 7. The disclosure artifact
@@ -436,7 +436,7 @@ are chain logic that *consumes* those tokens.
    sign in-enclave: build the CBOR claims set, garbage-pad to strict uniformity,
    CSPRNG salts, `sd_alg` redaction (`redacted_claim_keys`), and hand-assemble a
    `COSE_Sign1` signed via `ccf::crypto`. No `t_cose`: encode the
-   `Sig_structure` with QCBOR, hash, `ECKeyPair::sign_hash`, assemble the
+   `Sig_structure` with `ccf::cbor`, hash, `ECKeyPair::sign_hash`, assemble the
    array. Algorithm-agile like the Python lib: the COSE signing algorithm
    ES256/384/512 is derived from the key's curve, and the redaction hash
    SHA-256/384/512, default SHA-256, is a parameter written to `sd_alg`. Maps
@@ -451,7 +451,7 @@ are chain logic that *consumes* those tokens.
    `validate`s C++ tokens across both ES256/SHA-256 and ES384/SHA-384 suites, and
    with injected fixed salts the C++ protected header and payload are
    byte-identical to Python `issue()`. The ECDSA signature is randomised, so it
-   is validated, not byte-compared. Vendor QCBOR via `FetchContent`.
+   is validated, not byte-compared.
 3. On-chain: submit + receipt. `submit_report` constructs+signs via the
    C++ token core, stores the redacted blob, binds the claims digest, returns
    seqno + receipt. Receipt/seqno are chain logic layered on top of 1–2.
@@ -619,13 +619,11 @@ The egress gate, §4/§9, is the one authorization we must pin. Two options:
 
 Patterns we reimplemented as original MIT code: studied for approach, not
 copied. The `app/` sources are our own, MIT.
-- QCBOR helpers (`app/src/cbor.h`, an app-wide shared util) and COSE_Sign1
-  decode / header + COSE_Key parse (`app/src/token/cose.h`), with the TSS/DID
-  bits omitted
+- COSE_Sign1 decode / header + COSE_Key parse (`app/src/token/cose.h`), with
+  the TSS/DID bits omitted
 - CCF-receipt → COSE-receipt conversion (`make_cose_receipt`)
 - the register / local-commit flow → template for `submit_report`
 - `historical_queries_adapter.h` + CCF `SeqnosForValue` indexing → seqno lookup
-- the QCBOR `FetchContent` block in `app/CMakeLists.txt`
 
 **Deliberately not adopted:** did:x509 / JWKS verification, replaced by a
 ~50-line self-contained verifier; a registration policy engine; data-plane
@@ -640,8 +638,16 @@ governance endpoints.
   verifier. See §14.
 - C++ token core (`app/src/token/`: `cbor_value`, `cose`, `sd_cwt`,
   `statement`): the in-enclave authoritative construction. Hand-assembles a
-  `COSE_Sign1` with QCBOR and signs the `Sig_structure` via `ccf::crypto`; no
-  `t_cose`. Built as a host `unit_tests` target with `BUILD_TESTS=ON`, no
+  `COSE_Sign1` and signs the `Sig_structure` via `ccf::crypto`; no
+  `t_cose`. `cbor_value`'s `CborValue` is an *owning* value tree, kept
+  deliberately: `ccf::cbor::Value` is a view type (its `Bytes` is a `span` and
+  `String` a `string_view`, and the `make_*` builders borrow rather than copy),
+  so building with it needs owning storage underneath. `CborValue` is that
+  storage; the borrowed `ccf::cbor` view is built and serialised in a single
+  expression, mirroring CCF's own usage in `ccf::cose::edit`. It also carries
+  the CDE (RFC 8949 §4.2) map-key ordering, which `ccf::cbor::serialize` does
+  not do.
+  Built as a host `unit_tests` target with `BUILD_TESTS=ON`, no
   enclave/chain, and gated by conformance against the Python oracle
   (`tools/sd_cwt/tests/test_cpp_conformance.py`): a pinned Redacted-Claim-Hash
   vector, Python `validate`ing C++ tokens for signature + disclosures, a
@@ -672,7 +678,7 @@ governance endpoints.
   `kbt_verify` stays Python: it is the *verifier's* check, off-chain by design.
 - `make_disclosure` / `verify` off-chain tooling.
 
-**Dependency:** vendor QCBOR via CMake `FetchContent`.
+**Dependency:** CBOR comes from CCF's `ccf::cbor` (EverCBOR).
 
 ## 14. Off-chain token tooling: `sd_cwt` (Python)
 **Decision: service signs.** Every statement is constructed and signed by the
@@ -732,8 +738,8 @@ To-Be-Redacted / To-Be-Decoy tags.
 
 **API, what tests target:**
 ```
-issue(claims, redact, signer, *, redact_elements=None, redact_paths=None,
-      sd_alg=SHA256, pad_to=None, cnf=None)             -> (token, [Disclosure])
+issue(claims, redact_paths, signer, *, sd_alg=SHA256, pad_to=None, cnf=None)
+                                                        -> (token, [Disclosure])
 present(token, selected: [Disclosure])                  -> token
 verify(token, pubkey)                                   -> VerifiedToken
 validate(token, pubkey)                                 -> ValidatedClaims{clear, disclosed}

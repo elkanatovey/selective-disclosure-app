@@ -14,9 +14,9 @@ namespace
     std::vector<int64_t> keys;
     for (const auto& d : t.disclosures)
     {
-      if (d.key.has_value() && std::holds_alternative<int64_t>(*d.key))
+      if (d.path.size() == 1 && std::holds_alternative<int64_t>(d.path[0]))
       {
-        keys.push_back(std::get<int64_t>(*d.key));
+        keys.push_back(std::get<int64_t>(d.path[0]));
       }
     }
     std::sort(keys.begin(), keys.end());

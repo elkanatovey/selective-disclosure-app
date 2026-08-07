@@ -35,9 +35,8 @@ pip install -e .[lint]      # pycose + cbor2 (pinned) + pytest + black/isort/myp
 
 ## API
 ```python
-issue(claims, redact, signer, *,
-      redact_elements=None,    # {key: {indices}}  top-level array elements
-      redact_paths=None,       # [(503, "region"), (700, "a", "b", 1), ...]
+issue(claims, redact_paths, signer, *,
+      # redact_paths: [(500,), (502, 1), (503, "region"), (700, "a", "b", 1)]
       sd_alg=SHA256, pad_to=None,
       cnf=None) -> (token, [Disclosure])          # cnf: holder pubkey, enables KBT
 present(token, selected) -> token
@@ -51,11 +50,12 @@ kbt_sign(token, selected, holder, *, aud, iat=None, cti=None, cnonce=None) -> kb
 kbt_verify(kbt, issuer_pub, *, expected_aud, expected_cnonce=None) -> KBTResult
 ```
 
-Redaction targets are paths from the root: `redact` covers whole top-level map
-entries, `redact_elements` covers top-level array indices, and `redact_paths`
-covers arbitrary depth (mixing map keys and array indices). Disclosing a redacted
-parent reveals a still-redacted child (ancestor-disclosure rule). Every requested
-path must resolve to an existing entry or element; otherwise `issue` raises
+`redact_paths` is the single description of the redaction tree: each entry is a
+non-empty tuple of map keys / array indices from the claims root. A length-1
+path hides a whole top-level claim; longer paths hide nested map entries and
+array elements at arbitrary depth, and the two compose. Disclosing a redacted
+parent reveals a still-redacted child (ancestor-disclosure rule). Every path
+must resolve to an existing entry or element; otherwise `issue` raises
 `ValueError` rather than risk leaving intended data unredacted.
 
 `sd_cwt` is domain-agnostic (arbitrary CBOR claims); the report/note schema and

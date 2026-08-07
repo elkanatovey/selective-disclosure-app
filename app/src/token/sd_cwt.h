@@ -54,29 +54,28 @@ namespace sdcwt
     CborValue text_array(const std::vector<std::string>& items);
   }
 
-  // A single top-level claim: its integer key, its value, and whether it is
-  // selectively-disclosable (redacted) or clear.
+  // A single top-level claim: its integer key and its value. Whether a claim is
+  // selectively-disclosable is deliberately NOT recorded here — the redaction
+  // tree has exactly one representation, `issue`'s `redact_paths`.
   struct Claim
   {
     int64_t key;
     CborValue value;
-    bool redact;
   };
 
   // A path element: a map key (int or text) or an array index (int).
   using PathElem = std::variant<int64_t, std::string>;
-  // A redaction path from the claims-map root, e.g. {1006, 1} redacts element 1
-  // of the array claim 1006. A length-1 path redacts a whole top-level claim
-  // (equivalent to Claim::redact); longer paths redact nested map/array
-  // members.
+  // A redaction path from the claims-map root. A length-1 path redacts a whole
+  // top-level claim (e.g. {1002}); longer paths redact nested map entries /
+  // array elements (e.g. {1006, 1} redacts element 1 of the array claim 1006).
   using Path = std::vector<PathElem>;
 
-  // A generated Salted Disclosed Claim. `key` is absent for a redacted array
-  // element (whose disclosure is `[salt, value]`); present for a map entry
-  // (`[salt, value, key]`).
+  // A generated Salted Disclosed Claim. `path` locates it and is the only
+  // identity it carries; the draft-08 salted-entry *shape* is already in
+  // `encoded` (arity 3 = map entry `[salt, value, key]`, 2 = array element
+  // `[salt, value]`, 1 = decoy `[salt]`), so it is not cached separately.
   struct Disclosure
   {
-    std::optional<CborKey> key;
     // Absolute path from the claims-map root to this disclosure: map keys and
     // array indices, e.g. {1006} for a whole claim or {1006, 0} for element 0.
     // Empty for a synthetic decoy. Enables ancestor-aware selective disclosure.
@@ -102,15 +101,15 @@ namespace sdcwt
   std::vector<uint8_t> encode_sdcwt_protected_header(
     int64_t cose_alg, HashAlg sd_alg);
 
-  // Build and sign a redacted SD-CWT over the given top-level claims. Each
-  // `Claim` with `redact == true` is redacted whole; `redact_paths`
-  // additionally redacts nested map entries / array elements at arbitrary depth
-  // (the ancestor-disclosure rule applies: a disclosed parent may reveal a
+  // Build and sign a redacted SD-CWT over the given top-level claims.
+  // `redact_paths` is the single, complete description of what is redacted: a
+  // length-1 path hides a whole top-level claim, longer paths hide nested map
+  // entries / array elements at arbitrary depth, and the two compose (the
+  // ancestor-disclosure rule applies — a disclosed parent may reveal a
   // still-redacted child). Redacted map entries become sorted Redacted Claim
   // Hashes under simple(59); redacted array elements become tag(60) hashes.
   // Disclosures are returned separately. The COSE signing algorithm is derived
-  // from the key's curve; the redaction hash is `sd_alg` (default SHA-256);
-  // `salt_len` is the per-disclosure salt length in bytes (default 16).
+  // from the key's curve; the redaction hash is `sd_alg` (default SHA-256).
   //
   // `pad_to`, if non-zero, pads the top-level Redacted-Claim-Hash count up to
   // that many entries with indistinguishable salt-only decoy disclosures, so
@@ -127,10 +126,9 @@ namespace sdcwt
   // or std::runtime_error (CBOR failure).
   IssuedToken issue(
     const std::vector<Claim>& claims,
+    const std::vector<Path>& redact_paths,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
-    const std::vector<Path>& redact_paths = {},
-    size_t salt_len = SALT_LEN,
     size_t pad_to = 0,
     const ccf::crypto::ECPublicKey* holder = nullptr);
 

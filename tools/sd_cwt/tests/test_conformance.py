@@ -29,7 +29,7 @@ def holder() -> EC2Key:
 
 def test_cnf_embeds_holder_public_key(signer, holder):
     claims = {1: "https://issuer.example", 2: "https://holder.example", 500: "x"}
-    token, _ = sd_cwt.issue(claims, redact={500}, signer=signer, cnf=holder)
+    token, _ = sd_cwt.issue(claims, [(500,)], signer, cnf=holder)
 
     v = sd_cwt.verify(token, signer)
     assert 8 in v.payload  # cnf claim present (RFC 8747)
@@ -42,7 +42,7 @@ def test_cnf_embeds_holder_public_key(signer, holder):
 
 def test_cnf_public_key_only_not_in_token_bytes(signer, holder):
     claims = {1: "iss", 2: "sub"}
-    token, _ = sd_cwt.issue(claims, redact=set(), signer=signer, cnf=holder)
+    token, _ = sd_cwt.issue(claims, [], signer, cnf=holder)
     assert holder.d not in token  # private key material never serialised
 
 
@@ -53,7 +53,7 @@ AUD = "https://verifier.example/app"
 
 def test_kbt_roundtrip_discloses_selected(signer, holder):
     claims = {1: "iss", 2: "sub", 500: "secret detail", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(500,), (501,)], signer, cnf=holder)
     only_501 = [d for d in discs if d.key == 501]
 
     kbt = sd_cwt.kbt_sign(token, only_501, holder, aud=AUD, iat=1725244237)
@@ -67,7 +67,7 @@ def test_kbt_roundtrip_discloses_selected(signer, holder):
 def test_kbt_rejects_wrong_holder_key(signer, holder):
     """A KBT signed by a key other than the cnf key MUST fail."""
     claims = {1: "iss", 2: "sub", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
 
     attacker = EC2Key.generate_key(crv=P256)
     kbt = sd_cwt.kbt_sign(token, discs, attacker, aud=AUD, iat=1725244237)
@@ -77,7 +77,7 @@ def test_kbt_rejects_wrong_holder_key(signer, holder):
 
 def test_kbt_rejects_wrong_audience(signer, holder):
     claims = {1: "iss", 2: "sub", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
     with pytest.raises(ValueError):
         sd_cwt.kbt_verify(kbt, signer, expected_aud="https://evil.example")
@@ -85,7 +85,7 @@ def test_kbt_rejects_wrong_audience(signer, holder):
 
 def test_kbt_requires_iat_or_cti(signer, holder):
     claims = {1: "iss", 2: "sub", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     with pytest.raises(ValueError):
         sd_cwt.kbt_sign(token, discs, holder, aud=AUD)  # neither iat nor cti
 
@@ -93,7 +93,7 @@ def test_kbt_requires_iat_or_cti(signer, holder):
 def test_kbt_forbids_iss_sub(signer, holder):
     """draft-08 s8.1: iss/sub MUST NOT be present in the KBT payload."""
     claims = {1: "iss", 2: "sub", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
 
     import cbor2
@@ -106,7 +106,7 @@ def test_kbt_forbids_iss_sub(signer, holder):
 
 def test_kbt_cnonce_roundtrip(signer, holder):
     claims = {1: "iss", 2: "sub", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     nonce = b"\x8c\x0f_R;\x95\xbe\xa4"
     kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237, cnonce=nonce)
 
@@ -158,7 +158,7 @@ def test_verify_rejects_excessive_nesting_depth(signer):
 
 def test_validate_rejects_empty_sd_claims(signer, holder):
     claims = {1: "iss", 2: "sub", 501: "RCE"}
-    token, _ = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, _ = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
 
     tag = cbor2.loads(token)
     arr = list(tag.value)
@@ -174,7 +174,7 @@ def test_validate_rejects_empty_sd_claims(signer, holder):
 def test_conformant_token_still_validates(signer, holder):
     """The scanner must not reject well-formed definite-length tokens."""
     claims = {1: "iss", 2: "sub", 500: "a", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={500, 501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(500,), (501,)], signer, cnf=holder)
     presented = sd_cwt.present(token, discs)
     out = sd_cwt.validate(presented, signer)
     assert out.disclosed[501] == "RCE"
@@ -187,7 +187,7 @@ def test_kbt_rejects_sd_cwt_aud_mismatch(signer, holder):
     """An Issuer-set SD-CWT audience that isn't the recipient MUST be rejected,
     even when the KBT audience matches."""
     claims = {1: "iss", 2: "sub", 3: "https://other.example", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
     with pytest.raises(ValueError):
         sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
@@ -196,7 +196,7 @@ def test_kbt_rejects_sd_cwt_aud_mismatch(signer, holder):
 def test_kbt_allows_matching_sd_cwt_aud(signer, holder):
     """An SD-CWT audience equal to the intended verifier is accepted."""
     claims = {1: "iss", 2: "sub", 3: AUD, 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
     result = sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
     assert result.aud == AUD
@@ -205,7 +205,7 @@ def test_kbt_allows_matching_sd_cwt_aud(signer, holder):
 def test_kbt_allows_absent_sd_cwt_aud(signer, holder):
     """Omitting the SD-CWT audience means 'any verifier' -- no restriction."""
     claims = {1: "iss", 2: "sub", 501: "RCE"}  # no aud (3) in the payload
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     kbt = sd_cwt.kbt_sign(token, discs, holder, aud=AUD, iat=1725244237)
     result = sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
     assert result.aud == AUD
@@ -219,7 +219,7 @@ def test_kbt_result_exposes_time_claims(signer, holder):
     temporal checks (the library validates s5.2 encoding but does not compare
     against a clock)."""
     claims = {1: "iss", 2: "sub", 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer, cnf=holder)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer, cnf=holder)
     kbt = sd_cwt.kbt_sign(
         token, discs, holder, aud=AUD, iat=1725244237, nbf=1725243900, exp=1725330600
     )
@@ -235,7 +235,7 @@ def test_kbt_result_exposes_time_claims(signer, holder):
 def test_validate_surfaces_sd_cwt_time_claims(signer):
     """Unredacted SD-CWT exp/nbf/iat appear in `clear` for the caller to check."""
     claims = {1: "iss", 4: 1725330600, 5: 1725243900, 6: 1725244200, 501: "RCE"}
-    token, discs = sd_cwt.issue(claims, redact={501}, signer=signer)
+    token, discs = sd_cwt.issue(claims, [(501,)], signer)
     out = sd_cwt.validate(sd_cwt.present(token, discs), signer)
     assert out.clear[6] == 1725244200  # iat
     assert out.clear[5] == 1725243900  # nbf

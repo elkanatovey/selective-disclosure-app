@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 #include "token/sd_cwt.h"
 
-#include "cbor.h"
 #include "token/cose.h"
 #include "token/sd_cwt_internal.h"
 
@@ -10,8 +9,6 @@
 #include <ccf/crypto/entropy.h>
 #include <ccf/crypto/hash_provider.h>
 #include <ccf/crypto/md_type.h>
-#include <qcbor/qcbor_decode.h>
-#include <qcbor/qcbor_spiffy_decode.h>
 
 namespace sdcwt
 {
@@ -70,10 +67,8 @@ namespace sdcwt
   std::vector<uint8_t> disclosure_digest(
     std::span<const uint8_t> encoded, HashAlg sd_alg)
   {
-    // Wrap the encoded salted array in a CBOR byte string, then hash it.
-    const auto wrapped = cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_AddBytes(&ctx, to_ubc(encoded));
-    });
+    // draft-08: hash the disclosure wrapped in a CBOR byte string.
+    const auto wrapped = ccf::cbor::serialize(bytes_value(encoded));
     return ccf::crypto::make_hash_provider()->hash(
       wrapped.data(), wrapped.size(), md_for_hash_alg(sd_alg));
   }
@@ -81,16 +76,12 @@ namespace sdcwt
   std::vector<uint8_t> encode_sdcwt_protected_header(
     int64_t cose_alg, HashAlg sd_alg)
   {
-    // Map keys are emitted in CDE (RFC 8949 §4.2) order: 1 (alg) < 16 (typ) <
-    // 170 (sd_alg).
-    return cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenMap(&ctx);
-      QCBOREncode_AddInt64ToMapN(&ctx, 1, cose_alg); // alg
-      QCBOREncode_AddInt64ToMapN(&ctx, TYP_LABEL, SD_CWT_TYP); // typ (16)
-      QCBOREncode_AddInt64ToMapN(
-        &ctx, SD_ALG_LABEL, static_cast<int64_t>(sd_alg)); // sd_alg (170)
-      QCBOREncode_CloseMap(&ctx);
-    });
+    // CDE key order: 1 (alg) < 16 (typ) < 170 (sd_alg).
+    return ccf::cbor::serialize(ccf::cbor::make_map(
+      {{ccf::cbor::make_signed(1), ccf::cbor::make_signed(cose_alg)},
+       {ccf::cbor::make_signed(TYP_LABEL), ccf::cbor::make_signed(SD_CWT_TYP)},
+       {ccf::cbor::make_signed(SD_ALG_LABEL),
+        ccf::cbor::make_signed(static_cast<int64_t>(sd_alg))}}));
   }
 
   namespace
@@ -99,229 +90,28 @@ namespace sdcwt
     std::vector<uint8_t> encode_map_disclosure(
       std::span<const uint8_t> salt, const CborValue& value, const CborKey& key)
     {
-      return cbor_encode([&](QCBOREncodeContext& ctx) {
-        QCBOREncode_OpenArray(&ctx);
-        QCBOREncode_AddBytes(&ctx, to_ubc(salt));
-        encode_value(ctx, value);
-        if (std::holds_alternative<int64_t>(key))
-        {
-          QCBOREncode_AddInt64(&ctx, std::get<int64_t>(key));
-        }
-        else
-        {
-          const auto& s = std::get<std::string>(key);
-          QCBOREncode_AddText(&ctx, UsefulBufC{s.data(), s.size()});
-        }
-        QCBOREncode_CloseArray(&ctx);
-      });
+      return ccf::cbor::serialize(ccf::cbor::make_array(
+        {ccf::cbor::make_bytes(salt), to_ccf_cbor(value), to_ccf_cbor(key)}));
     }
 
     // cbor([salt, <value>]) for a redacted array element.
     std::vector<uint8_t> encode_elem_disclosure(
       std::span<const uint8_t> salt, const CborValue& value)
     {
-      return cbor_encode([&](QCBOREncodeContext& ctx) {
-        QCBOREncode_OpenArray(&ctx);
-        QCBOREncode_AddBytes(&ctx, to_ubc(salt));
-        encode_value(ctx, value);
-        QCBOREncode_CloseArray(&ctx);
-      });
+      return ccf::cbor::serialize(ccf::cbor::make_array(
+        {ccf::cbor::make_bytes(salt), to_ccf_cbor(value)}));
     }
 
-    // cbor([salt]) for a salt-only decoy disclosure (pads the redacted-hash
-    // count without corresponding to any real claim).
+    // cbor([salt]): a salt-only decoy disclosure that pads the redacted-hash
+    // count.
     std::vector<uint8_t> encode_decoy_disclosure(std::span<const uint8_t> salt)
     {
-      return cbor_encode([&](QCBOREncodeContext& ctx) {
-        QCBOREncode_OpenArray(&ctx);
-        QCBOREncode_AddBytes(&ctx, to_ubc(salt));
-        QCBOREncode_CloseArray(&ctx);
-      });
+      return ccf::cbor::serialize(
+        ccf::cbor::make_array({ccf::cbor::make_bytes(salt)}));
     }
 
-    // Re-emit a decoded scalar value without a preceding label, for the split
-    // key+value path used when the map label is a uint64 > INT64_MAX.
-    void emit_scalar_without_key(QCBOREncodeContext& ctx, const QCBORItem& v)
-    {
-      switch (v.uDataType)
-      {
-        case QCBOR_TYPE_INT64:
-          QCBOREncode_AddInt64(&ctx, v.val.int64);
-          break;
-        case QCBOR_TYPE_UINT64:
-          QCBOREncode_AddUInt64(&ctx, v.val.uint64);
-          break;
-        case QCBOR_TYPE_BYTE_STRING:
-          QCBOREncode_AddBytes(&ctx, v.val.string);
-          break;
-        case QCBOR_TYPE_TEXT_STRING:
-          QCBOREncode_AddText(&ctx, v.val.string);
-          break;
-        case QCBOR_TYPE_TRUE:
-        case QCBOR_TYPE_FALSE:
-          QCBOREncode_AddBool(&ctx, v.uDataType == QCBOR_TYPE_TRUE);
-          break;
-        case QCBOR_TYPE_NULL:
-          QCBOREncode_AddNULL(&ctx);
-          break;
-        default:
-          throw std::runtime_error(
-            "present: unsupported unprotected-header value type");
-      }
-    }
-
-    // Re-emit a decoded unprotected-header scalar value under integer `label`.
-    void emit_scalar_to_map(
-      QCBOREncodeContext& ctx, int64_t label, const QCBORItem& v)
-    {
-      switch (v.uDataType)
-      {
-        case QCBOR_TYPE_INT64:
-          QCBOREncode_AddInt64ToMapN(&ctx, label, v.val.int64);
-          break;
-        case QCBOR_TYPE_UINT64:
-          QCBOREncode_AddUInt64ToMapN(&ctx, label, v.val.uint64);
-          break;
-        case QCBOR_TYPE_BYTE_STRING:
-          QCBOREncode_AddBytesToMapN(&ctx, label, v.val.string);
-          break;
-        case QCBOR_TYPE_TEXT_STRING:
-          QCBOREncode_AddTextToMapN(&ctx, label, v.val.string);
-          break;
-        case QCBOR_TYPE_TRUE:
-        case QCBOR_TYPE_FALSE:
-          QCBOREncode_AddBoolToMapN(
-            &ctx, label, v.uDataType == QCBOR_TYPE_TRUE);
-          break;
-        case QCBOR_TYPE_NULL:
-          QCBOREncode_AddNULLToMapN(&ctx, label);
-          break;
-        default:
-          throw std::runtime_error(
-            "present: unsupported unprotected-header value type");
-      }
-    }
-
-    // Copy an issued token's unprotected-header map into `ctx`, preserving
-    // every entry except sd_claims (17), which present() manages itself.
-    // Mirrors the Python reference (dict(arr[1]) then override sd_claims), so
-    // entries such as kid / x5chain survive a present(). Both definite-length
-    // and indefinite-length source maps are supported: the loop terminates on
-    // QCBOR_ERR_NO_MORE_ITEMS rather than on a pre-read count, so neither
-    // encoding causes a spurious throw. Integer labels in the full uint64 range
-    // are supported: labels that fit in int64 use the standard *ToMapN helpers;
-    // labels > INT64_MAX use a split QCBOREncode_AddUInt64 key + value emit.
-    // Container values (arrays/maps, e.g. an x5chain certificate list) are
-    // copied verbatim as raw CBOR. A non-integer label throws.
-    void copy_uhdr_except_sd_claims(
-      std::span<const uint8_t> uhdr_cbor, QCBOREncodeContext& ctx)
-    {
-      QCBORDecodeContext dc;
-      QCBORDecode_Init(
-        &dc,
-        UsefulBufC{uhdr_cbor.data(), uhdr_cbor.size()},
-        QCBOR_DECODE_MODE_NORMAL);
-
-      QCBORItem map_item;
-      QCBORDecode_EnterMap(&dc, &map_item);
-      (void)map_item; // uCount not used; loop terminates on NO_MORE_ITEMS
-
-      for (;;)
-      {
-        QCBORItem peek;
-        const QCBORError peek_err = QCBORDecode_PeekNext(&dc, &peek);
-        if (peek_err == QCBOR_ERR_NO_MORE_ITEMS)
-        {
-          break;
-        }
-        if (peek_err != QCBOR_SUCCESS)
-        {
-          throw std::runtime_error("present: malformed unprotected header");
-        }
-
-        if (
-          peek.uLabelType != QCBOR_TYPE_INT64 &&
-          peek.uLabelType != QCBOR_TYPE_UINT64)
-        {
-          throw std::runtime_error(
-            "present: unsupported non-integer unprotected-header label");
-        }
-
-        // Determine whether the label fits in int64 (all standard COSE labels
-        // do). SD_CLAIMS_LABEL (17) is always within int64 range.
-        const bool large_uint64 = (peek.uLabelType == QCBOR_TYPE_UINT64) &&
-          (peek.label.uint64 > static_cast<uint64_t>(INT64_MAX));
-        const int64_t label_i64 = large_uint64 ?
-          0 :
-          ((peek.uLabelType == QCBOR_TYPE_UINT64) ?
-             static_cast<int64_t>(peek.label.uint64) :
-             peek.label.int64);
-        const bool drop = !large_uint64 && (label_i64 == SD_CLAIMS_LABEL);
-
-        if (peek.uDataType == QCBOR_TYPE_ARRAY)
-        {
-          QCBORItem it;
-          UsefulBufC raw = NULLUsefulBufC;
-          QCBORDecode_GetArray(&dc, &it, &raw);
-          if (!drop)
-          {
-            if (!large_uint64)
-            {
-              QCBOREncode_AddEncodedToMapN(&ctx, label_i64, raw);
-            }
-            else
-            {
-              QCBOREncode_AddUInt64(&ctx, peek.label.uint64);
-              QCBOREncode_AddEncoded(&ctx, raw);
-            }
-          }
-        }
-        else if (peek.uDataType == QCBOR_TYPE_MAP)
-        {
-          QCBORItem it;
-          UsefulBufC raw = NULLUsefulBufC;
-          QCBORDecode_GetMap(&dc, &it, &raw);
-          if (!drop)
-          {
-            if (!large_uint64)
-            {
-              QCBOREncode_AddEncodedToMapN(&ctx, label_i64, raw);
-            }
-            else
-            {
-              QCBOREncode_AddUInt64(&ctx, peek.label.uint64);
-              QCBOREncode_AddEncoded(&ctx, raw);
-            }
-          }
-        }
-        else
-        {
-          QCBORItem v;
-          QCBORDecode_VGetNext(&dc, &v);
-          if (!drop)
-          {
-            if (!large_uint64)
-            {
-              emit_scalar_to_map(ctx, label_i64, v);
-            }
-            else
-            {
-              QCBOREncode_AddUInt64(&ctx, peek.label.uint64);
-              emit_scalar_without_key(ctx, v);
-            }
-          }
-        }
-      }
-      QCBORDecode_ExitMap(&dc);
-      if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
-      {
-        throw std::runtime_error("present: malformed unprotected header");
-      }
-    }
-
-    // Build an RFC 8747 `cnf` claim value `{1: COSE_Key}` holding only the EC2
-    // PUBLIC coordinates of `holder` (kty=EC2, crv, x, y). Mirrors the Python
-    // reference `_cnf_from_key`.
+    // RFC 8747 cnf {1: COSE_Key} with holder's EC2 public coords (kty, crv, x,
+    // y). Mirrors the Python reference `_cnf_from_key`.
     CborValue cnf_from_holder(const ccf::crypto::ECPublicKey& holder)
     {
       const auto coords = holder.coordinates();
@@ -362,10 +152,9 @@ namespace sdcwt
         static_cast<size_t>(std::get<int64_t>(e)) == index;
     }
 
-    // Walk `path` through `root` and confirm every element resolves to an
-    // existing map entry / in-range array element. A redaction path that
-    // matches nothing would otherwise silently produce no redaction, so we
-    // reject it here, matching the fail-closed Python reference behavior.
+    // True if every path element resolves to an existing map entry / in-range
+    // array element. A non-matching path would silently redact nothing, so
+    // issue() rejects it (fail-closed, like the Python reference).
     bool path_resolves(const CborValue& root, const Path& path)
     {
       const CborValue* node = &root;
@@ -409,16 +198,14 @@ namespace sdcwt
       return true;
     }
 
-    // Recursively redact `node` at the given relative `paths` (mirrors the
-    // Python reference `_redact_node`). A length-1 path redacts that whole
-    // entry/element here; longer paths recurse first (ancestor-disclosure
-    // rule).
+    // Recursively redact `node` at relative `paths` (mirrors Python
+    // `_redact_node`): a length-1 path redacts the whole entry/element, longer
+    // paths recurse first (ancestor-disclosure rule).
     CborValue redact_node(
       const CborValue& node,
       const std::vector<Path>& paths,
       HashAlg sd_alg,
       const RandomSource& rng,
-      size_t salt_len,
       std::vector<Disclosure>& disclosures,
       const Path& prefix = {})
     {
@@ -454,7 +241,7 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             value :
-            redact_node(value, deeper, sd_alg, rng, salt_len, disclosures, [&] {
+            redact_node(value, deeper, sd_alg, rng, disclosures, [&] {
               Path p = prefix;
               p.push_back(key);
               return p;
@@ -463,10 +250,9 @@ namespace sdcwt
           if (direct)
           {
             Disclosure d;
-            d.key = key;
             d.path = prefix;
             d.path.push_back(key);
-            d.salt = rng(salt_len);
+            d.salt = rng(SALT_LEN);
             d.encoded = encode_map_disclosure(d.salt, child, key);
             d.digest = disclosure_digest(d.encoded, sd_alg);
             digests.push_back(d.digest);
@@ -512,20 +298,18 @@ namespace sdcwt
 
           const CborValue child = deeper.empty() ?
             node.array_v[i] :
-            redact_node(
-              node.array_v[i], deeper, sd_alg, rng, salt_len, disclosures, [&] {
-                Path p = prefix;
-                p.push_back(static_cast<int64_t>(i));
-                return p;
-              }());
+            redact_node(node.array_v[i], deeper, sd_alg, rng, disclosures, [&] {
+              Path p = prefix;
+              p.push_back(static_cast<int64_t>(i));
+              return p;
+            }());
 
           if (direct)
           {
             Disclosure d;
-            d.key = std::nullopt;
             d.path = prefix;
             d.path.push_back(static_cast<int64_t>(i));
-            d.salt = rng(salt_len);
+            d.salt = rng(SALT_LEN);
             d.encoded = encode_elem_disclosure(d.salt, child);
             d.digest = disclosure_digest(d.encoded, sd_alg);
             out.array_v.push_back(CborValue::RedactedElem(d.digest));
@@ -546,41 +330,31 @@ namespace sdcwt
 
   IssuedToken detail::issue(
     const std::vector<Claim>& claims,
+    const std::vector<Path>& redact_paths,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
-    const std::vector<Path>& redact_paths,
     const RandomSource& rng,
-    size_t salt_len,
     size_t pad_to,
     const ccf::crypto::ECPublicKey* holder)
   {
-    // Derive the COSE signing algorithm from the key's curve (throws early on
-    // an unsupported curve, before any redaction work).
+    // Reject an unsupported curve up front, before any redaction work.
     const auto cose_alg = cose_es_alg_for_curve(key.get_curve_id());
 
-    // Assemble the claims map (insertion order preserved; encode_value sorts to
-    // CDE order) and the full redaction path list: one length-1 path per whole
-    // redacted claim, plus the caller's deeper paths.
+    // Insertion order is irrelevant; encode_value sorts to CDE.
     CborValue root = CborValue::Map({});
-    std::vector<Path> paths = redact_paths;
     for (const auto& claim : claims)
     {
       root.map_put(CborKey(claim.key), claim.value);
-      if (claim.redact)
-      {
-        paths.push_back(Path{PathElem(claim.key)});
-      }
     }
 
-    // Embed the RFC 8747 confirmation claim (clear, never redacted) so the
-    // token is key-binding capable.
+    // Embed the RFC 8747 cnf claim (never redacted) for key binding.
     if (holder != nullptr)
     {
       root.map_put(CborKey(CNF_LABEL), cnf_from_holder(*holder));
     }
 
-    // Reject caller-supplied paths that resolve to nothing, so a mistyped path
-    // can't silently under-redact. (Per-claim paths above always resolve.)
+    // Every redaction path must resolve, so a mistyped path can't silently
+    // under-redact.
     for (const auto& p : redact_paths)
     {
       if (p.empty() || !path_resolves(root, p))
@@ -592,17 +366,14 @@ namespace sdcwt
 
     std::vector<Disclosure> disclosures;
     CborValue redacted =
-      redact_node(root, paths, sd_alg, rng, salt_len, disclosures);
+      redact_node(root, redact_paths, sd_alg, rng, disclosures);
 
-    // Decoy padding: add salt-only decoy disclosures until the top-level
-    // redacted-hash count reaches `pad_to`, so the count leaks nothing about
-    // how many real claims were redacted. Decoys are indistinguishable from
-    // real hashes and are re-sorted in with them.
+    // Pad with salt-only decoys up to `pad_to` hashes so the count reveals
+    // nothing about how many real claims were redacted.
     while (redacted.redacted_hashes.size() < pad_to)
     {
       Disclosure d;
-      d.key = std::nullopt;
-      d.salt = rng(salt_len);
+      d.salt = rng(SALT_LEN);
       d.encoded = encode_decoy_disclosure(d.salt);
       d.digest = disclosure_digest(d.encoded, sd_alg);
       redacted.redacted_hashes.push_back(d.digest);
@@ -621,20 +392,18 @@ namespace sdcwt
 
   IssuedToken issue(
     const std::vector<Claim>& claims,
+    const std::vector<Path>& redact_paths,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
-    const std::vector<Path>& redact_paths,
-    size_t salt_len,
     size_t pad_to,
     const ccf::crypto::ECPublicKey* holder)
   {
     return detail::issue(
       claims,
+      redact_paths,
       key,
       sd_alg,
-      redact_paths,
       default_random_source(),
-      salt_len,
       pad_to,
       holder);
   }
@@ -643,67 +412,66 @@ namespace sdcwt
     std::span<const uint8_t> token,
     const std::vector<std::vector<uint8_t>>& selected)
   {
-    // Decode the tagged COSE_Sign1 [ protected, unprotected, payload, signature
-    // ] into its opaque parts. The unprotected header is captured as raw bytes
-    // and re-emitted preserving every entry except sd_claims (which present()
-    // manages); the protected header, payload and signature are copied verbatim
-    // so the signature stays valid.
-    QCBORDecodeContext dc;
-    QCBORDecode_Init(
-      &dc, UsefulBufC{token.data(), token.size()}, QCBOR_DECODE_MODE_NORMAL);
+    namespace cbor = ccf::cbor;
 
-    UsefulBufC phdr = NULLUsefulBufC;
-    UsefulBufC uhdr = NULLUsefulBufC;
-    UsefulBufC payload = NULLUsefulBufC;
-    UsefulBufC sig = NULLUsefulBufC;
-    QCBORItem uhdr_item;
-    QCBORDecode_EnterArray(&dc, nullptr);
-    QCBORDecode_GetByteString(&dc, &phdr);
-    QCBORDecode_GetMap(&dc, &uhdr_item, &uhdr); // capture uhdr raw bytes
-    QCBORDecode_GetByteString(&dc, &payload);
-    QCBORDecode_GetByteString(&dc, &sig);
-    QCBORDecode_ExitArray(&dc);
-    if (QCBORDecode_Finish(&dc) != QCBOR_SUCCESS)
+    // Rebuild the COSE_Sign1, dropping only the sd_claims unprotected-header
+    // entry. Protected header, payload and signature are re-emitted unchanged
+    // so the signature stays valid.
+    cbor::Value root;
+    const cbor::Value* envelope = nullptr;
+    try
+    {
+      root = cbor::parse(token);
+      envelope = &root->tag_at(cbor::tag::COSE_SIGN_1);
+    }
+    catch (const std::exception&)
     {
       throw std::runtime_error("present: malformed COSE_Sign1 token");
     }
 
-    const std::span<const uint8_t> uhdr_span{
-      static_cast<const uint8_t*>(uhdr.ptr), uhdr.len};
-    // Preserve the original map's definite/indefinite-length encoding in the
-    // rebuilt unprotected header so round-tripping does not alter the wire
-    // format unnecessarily.
-    const bool uhdr_indefinite =
-      (uhdr_item.val.uCount == QCBOR_COUNT_INDICATES_INDEFINITE_LENGTH);
+    if (!std::holds_alternative<cbor::Array>((*envelope)->value))
+    {
+      throw std::runtime_error("present: malformed COSE_Sign1 token");
+    }
+    const auto& parts = std::get<cbor::Array>((*envelope)->value).items;
+    if (parts.size() != 4)
+    {
+      throw std::runtime_error("present: malformed COSE_Sign1 token");
+    }
+    if (!std::holds_alternative<cbor::Map>(parts[1]->value))
+    {
+      throw std::runtime_error("present: malformed unprotected header");
+    }
 
-    return cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_AddTag(&ctx, 18); // COSE_Sign1
-      QCBOREncode_OpenArray(&ctx);
-      QCBOREncode_AddBytes(&ctx, phdr);
-      // Carry through any pre-existing unprotected-header entries (e.g. kid,
-      // x5chain) so present() never silently drops them.
-      if (uhdr_indefinite)
-        QCBOREncode_OpenMapIndefiniteLength(&ctx);
-      else
-        QCBOREncode_OpenMap(&ctx);
-      copy_uhdr_except_sd_claims(uhdr_span, ctx);
-      if (!selected.empty())
+    std::vector<cbor::MapItem> uhdr;
+    for (const auto& [label, value] :
+         std::get<cbor::Map>(parts[1]->value).items)
+    {
+      const bool is_sd_claims =
+        std::holds_alternative<cbor::Signed>(label->value) &&
+        label->as_signed() == SD_CLAIMS_LABEL;
+      if (!is_sd_claims)
       {
-        QCBOREncode_OpenArrayInMapN(&ctx, SD_CLAIMS_LABEL);
-        for (const auto& d : selected)
-        {
-          QCBOREncode_AddBytes(&ctx, to_ubc(d));
-        }
-        QCBOREncode_CloseArray(&ctx);
+        uhdr.emplace_back(label, value);
       }
-      if (uhdr_indefinite)
-        QCBOREncode_CloseMapIndefiniteLength(&ctx);
-      else
-        QCBOREncode_CloseMap(&ctx);
-      QCBOREncode_AddBytes(&ctx, payload);
-      QCBOREncode_AddBytes(&ctx, sig);
-      QCBOREncode_CloseArray(&ctx);
-    });
+    }
+    if (!selected.empty())
+    {
+      std::vector<cbor::Value> disclosures;
+      disclosures.reserve(selected.size());
+      for (const auto& d : selected)
+      {
+        disclosures.push_back(bytes_value(d));
+      }
+      uhdr.emplace_back(
+        cbor::make_signed(SD_CLAIMS_LABEL),
+        cbor::make_array(std::move(disclosures)));
+    }
+
+    return cbor::serialize(cbor::make_tagged(
+      cbor::tag::COSE_SIGN_1,
+      cbor::make_array(
+        {parts[0], cbor::make_map(std::move(uhdr)), parts[2], parts[3]})));
   }
 
   std::vector<uint8_t> kbt_sign(
@@ -722,44 +490,47 @@ namespace sdcwt
     const auto presented = present(token, selected);
 
     // KBT protected header {1: alg, 13: <embedded presented SD-CWT>, 16: typ}.
-    // Keys are emitted in CDE order (1, 13, 16).
-    const auto phdr = cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenMap(&ctx);
-      QCBOREncode_AddInt64ToMapN(&ctx, 1, holder_alg);
-      QCBOREncode_AddEncodedToMapN(&ctx, KCWT_LABEL, to_ubc(presented));
-      QCBOREncode_AddInt64ToMapN(&ctx, TYP_LABEL, KB_CWT_TYP);
-      QCBOREncode_CloseMap(&ctx);
-    });
+    // Keys are emitted in CDE order (1, 13, 16). The embedded token is parsed
+    // rather than spliced.
+    const auto phdr = ccf::cbor::serialize(ccf::cbor::make_map(
+      {{ccf::cbor::make_signed(1), ccf::cbor::make_signed(holder_alg)},
+       {ccf::cbor::make_signed(KCWT_LABEL), ccf::cbor::parse(presented)},
+       {ccf::cbor::make_signed(TYP_LABEL),
+        ccf::cbor::make_signed(KB_CWT_TYP)}}));
 
     // KBT payload: aud plus whichever of exp/nbf/iat/cti/cnonce are set,
     // emitted in ascending (CDE) key order. iss/sub are forbidden and never
     // added.
-    const auto payload = cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenMap(&ctx);
-      QCBOREncode_AddTextToMapN(
-        &ctx, CWT_AUD, UsefulBufC{params.aud.data(), params.aud.size()});
-      if (params.exp.has_value())
-      {
-        QCBOREncode_AddInt64ToMapN(&ctx, CWT_EXP, *params.exp);
-      }
-      if (params.nbf.has_value())
-      {
-        QCBOREncode_AddInt64ToMapN(&ctx, CWT_NBF, *params.nbf);
-      }
-      if (params.iat.has_value())
-      {
-        QCBOREncode_AddInt64ToMapN(&ctx, CWT_IAT, *params.iat);
-      }
-      if (params.cti.has_value())
-      {
-        QCBOREncode_AddBytesToMapN(&ctx, CWT_CTI, to_ubc(*params.cti));
-      }
-      if (params.cnonce.has_value())
-      {
-        QCBOREncode_AddBytesToMapN(&ctx, CWT_CNONCE, to_ubc(*params.cnonce));
-      }
-      QCBOREncode_CloseMap(&ctx);
-    });
+    std::vector<ccf::cbor::MapItem> claims;
+    claims.emplace_back(
+      ccf::cbor::make_signed(CWT_AUD), ccf::cbor::make_string(params.aud));
+    if (params.exp.has_value())
+    {
+      claims.emplace_back(
+        ccf::cbor::make_signed(CWT_EXP), ccf::cbor::make_signed(*params.exp));
+    }
+    if (params.nbf.has_value())
+    {
+      claims.emplace_back(
+        ccf::cbor::make_signed(CWT_NBF), ccf::cbor::make_signed(*params.nbf));
+    }
+    if (params.iat.has_value())
+    {
+      claims.emplace_back(
+        ccf::cbor::make_signed(CWT_IAT), ccf::cbor::make_signed(*params.iat));
+    }
+    if (params.cti.has_value())
+    {
+      claims.emplace_back(
+        ccf::cbor::make_signed(CWT_CTI), bytes_value(*params.cti));
+    }
+    if (params.cnonce.has_value())
+    {
+      claims.emplace_back(
+        ccf::cbor::make_signed(CWT_CNONCE), bytes_value(*params.cnonce));
+    }
+    const auto payload =
+      ccf::cbor::serialize(ccf::cbor::make_map(std::move(claims)));
 
     return sign_cose_sign1(holder, phdr, payload);
   }

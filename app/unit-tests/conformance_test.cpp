@@ -1,9 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#include "cbor.h"
+#include "token/cbor_value.h"
 #include "token/statement.h"
 #include "token/statement_internal.h"
 
+#include <ccf/_private/crypto/cbor.h>
 #include <ccf/crypto/ec_key_pair.h>
 #include <cstdlib>
 #include <filesystem>
@@ -13,6 +14,20 @@
 
 namespace
 {
+  // The artifact format the Python conformance tests read: a bare CBOR array of
+  // the encoded salted disclosures.
+  std::vector<uint8_t> encode_disclosures(
+    const std::vector<sdcwt::Disclosure>& disclosures)
+  {
+    std::vector<ccf::cbor::Value> items;
+    items.reserve(disclosures.size());
+    for (const auto& d : disclosures)
+    {
+      items.push_back(sdcwt::bytes_value(d.encoded));
+    }
+    return ccf::cbor::serialize(ccf::cbor::make_array(std::move(items)));
+  }
+
   // Emit a C++-produced statement (token + disclosures + signer pubkey) for the
   // given curve + redaction hash into $SDCWT_ARTIFACT_DIR/<suite>/, for the
   // Python conformance test to validate. Field values MUST stay in sync with
@@ -34,14 +49,7 @@ namespace
     const auto issued = sdcwt::statement::issue_statement(
       "https://ledger.example/tee", 1700000000, f, *key, sd_alg);
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/" + suite;
     std::filesystem::create_directories(dir);
@@ -107,23 +115,15 @@ namespace
     auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
 
     std::vector<sdcwt::Claim> claims = {
-      {1, sdcwt::value::text("https://ledger.example/tee"), false},
-      {1006, sdcwt::value::text_array({"REF_A", "REF_B", "REF_C"}), false},
+      {1, sdcwt::value::text("https://ledger.example/tee")},
+      {1006, sdcwt::value::text_array({"REF_A", "REF_B", "REF_C"})},
     };
     // Redact element 1 of the array claim 1006.
     const std::vector<sdcwt::Path> paths = {{int64_t{1006}, int64_t{1}}};
 
-    const auto issued =
-      sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+    const auto issued = sdcwt::issue(claims, paths, *key);
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/array";
     std::filesystem::create_directories(dir);
@@ -152,24 +152,16 @@ namespace
     auto child =
       sdcwt::CborValue::Map({{std::string("a"), std::move(grandchild)}});
     std::vector<sdcwt::Claim> claims = {
-      {1, sdcwt::value::text("https://ledger.example/tee"), false},
-      {700, std::move(child), false},
+      {1, sdcwt::value::text("https://ledger.example/tee")},
+      {700, std::move(child)},
     };
     const std::vector<sdcwt::Path> paths = {
       {int64_t{700}, std::string("a")},
       {int64_t{700}, std::string("a"), std::string("b")}};
 
-    const auto issued =
-      sdcwt::issue(claims, *key, sdcwt::HashAlg::SHA_256, paths);
+    const auto issued = sdcwt::issue(claims, paths, *key);
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/nested";
     std::filesystem::create_directories(dir);
@@ -193,8 +185,8 @@ namespace
     auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
 
     std::vector<sdcwt::Claim> claims = {
-      {1, sdcwt::value::text("https://ledger.example/tee"), false},
-      {1002, sdcwt::value::text("secret body"), true},
+      {1, sdcwt::value::text("https://ledger.example/tee")},
+      {1002, sdcwt::value::text("secret body")},
     };
 
     // Counter-based salt source: call i returns n bytes all equal to i.
@@ -207,11 +199,10 @@ namespace
 
     const auto issued = sdcwt::detail::issue(
       claims,
+      {{int64_t{1002}}},
       *key,
       sdcwt::HashAlg::SHA_256,
-      /*redact_paths=*/{},
       det_rng,
-      sdcwt::SALT_LEN,
       /*pad_to=*/5);
 
     const std::string dir = base + "/decoy";
@@ -236,27 +227,19 @@ namespace
     auto holder_pub = ccf::crypto::make_ec_public_key(holder->public_key_pem());
 
     std::vector<sdcwt::Claim> claims = {
-      {1, sdcwt::value::text("https://ledger.example/tee"), false},
-      {1002, sdcwt::value::text("secret body"), true},
+      {1, sdcwt::value::text("https://ledger.example/tee")},
+      {1002, sdcwt::value::text("secret body")},
     };
 
     const auto issued = sdcwt::issue(
       claims,
+      {{int64_t{1002}}},
       *issuer,
       sdcwt::HashAlg::SHA_256,
-      /*redact_paths=*/{},
-      sdcwt::SALT_LEN,
       /*pad_to=*/0,
       holder_pub.get());
 
-    const auto disclosures = sdcwt::cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      for (const auto& d : issued.disclosures)
-      {
-        QCBOREncode_AddBytes(&ctx, sdcwt::to_ubc(d.encoded));
-      }
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto disclosures = encode_disclosures(issued.disclosures);
 
     const std::string dir = base + "/cnf";
     std::filesystem::create_directories(dir);
@@ -287,16 +270,15 @@ namespace
     auto holder_pub = ccf::crypto::make_ec_public_key(holder->public_key_pem());
 
     std::vector<sdcwt::Claim> claims = {
-      {1, sdcwt::value::text("https://ledger.example/tee"), false},
-      {1002, sdcwt::value::text("secret body"), true},
-      {1003, sdcwt::value::text("other secret"), true},
+      {1, sdcwt::value::text("https://ledger.example/tee")},
+      {1002, sdcwt::value::text("secret body")},
+      {1003, sdcwt::value::text("other secret")},
     };
     const auto issued = sdcwt::issue(
       claims,
+      {{int64_t{1002}}, {int64_t{1003}}},
       *issuer,
       sdcwt::HashAlg::SHA_256,
-      /*redact_paths=*/{},
-      sdcwt::SALT_LEN,
       /*pad_to=*/0,
       holder_pub.get());
 
@@ -305,8 +287,8 @@ namespace
     for (const auto& d : issued.disclosures)
     {
       if (
-        d.key.has_value() && std::holds_alternative<int64_t>(*d.key) &&
-        std::get<int64_t>(*d.key) == 1002)
+        d.path.size() == 1 && std::holds_alternative<int64_t>(d.path[0]) &&
+        std::get<int64_t>(d.path[0]) == 1002)
       {
         selected.push_back(d.encoded);
       }

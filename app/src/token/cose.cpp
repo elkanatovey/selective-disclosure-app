@@ -2,8 +2,9 @@
 // Licensed under the MIT License.
 #include "token/cose.h"
 
-#include "cbor.h"
+#include "token/cbor_value.h"
 
+#include <ccf/_private/crypto/cbor.h>
 #include <ccf/crypto/curve.h>
 #include <ccf/crypto/ecdsa.h>
 #include <ccf/crypto/hash_provider.h>
@@ -51,11 +52,9 @@ namespace sdcwt
 
   std::vector<uint8_t> encode_protected_header(int64_t alg)
   {
-    return cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenMap(&ctx);
-      QCBOREncode_AddInt64ToMapN(&ctx, 1, alg); // COSE header label 1 = alg
-      QCBOREncode_CloseMap(&ctx);
-    });
+    return ccf::cbor::serialize(ccf::cbor::make_map(
+      // COSE header label 1 = alg
+      {{ccf::cbor::make_signed(1), ccf::cbor::make_signed(alg)}}));
   }
 
   std::vector<uint8_t> sign_cose_sign1(
@@ -64,22 +63,18 @@ namespace sdcwt
     std::span<const uint8_t> payload,
     std::span<const uint8_t> external_aad)
   {
-    // Derive the digest from the key's curve; an unsupported curve throws here
-    // (before any signing) rather than emitting a malformed signature.
+    // Reject an unsupported curve up front, before any signing.
     const auto curve = key.get_curve_id();
     cose_es_alg_for_curve(curve); // validates the curve
     const auto md = ccf::crypto::get_md_for_ec(curve);
 
     // RFC 9052 Sig_structure for a COSE_Sign1:
     //   [ "Signature1", protected, external_aad, payload ]
-    const auto to_be_signed = cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_OpenArray(&ctx);
-      QCBOREncode_AddSZString(&ctx, "Signature1");
-      QCBOREncode_AddBytes(&ctx, to_ubc(protected_header_cbor));
-      QCBOREncode_AddBytes(&ctx, to_ubc(external_aad));
-      QCBOREncode_AddBytes(&ctx, to_ubc(payload));
-      QCBOREncode_CloseArray(&ctx);
-    });
+    const auto to_be_signed = ccf::cbor::serialize(ccf::cbor::make_array(
+      {ccf::cbor::make_string("Signature1"),
+       bytes_value(protected_header_cbor),
+       bytes_value(external_aad),
+       bytes_value(payload)}));
 
     const auto digest = ccf::crypto::make_hash_provider()->hash(
       to_be_signed.data(), to_be_signed.size(), md);
@@ -88,15 +83,12 @@ namespace sdcwt
     const auto raw_sig = ccf::crypto::ecdsa_sig_der_to_p1363(der_sig, curve);
 
     // COSE_Sign1 = 18([ protected, unprotected {}, payload, signature ]).
-    return cbor_encode([&](QCBOREncodeContext& ctx) {
-      QCBOREncode_AddTag(&ctx, 18);
-      QCBOREncode_OpenArray(&ctx);
-      QCBOREncode_AddBytes(&ctx, to_ubc(protected_header_cbor));
-      QCBOREncode_OpenMap(&ctx); // empty unprotected header
-      QCBOREncode_CloseMap(&ctx);
-      QCBOREncode_AddBytes(&ctx, to_ubc(payload));
-      QCBOREncode_AddBytes(&ctx, to_ubc(raw_sig));
-      QCBOREncode_CloseArray(&ctx);
-    });
+    return ccf::cbor::serialize(ccf::cbor::make_tagged(
+      ccf::cbor::tag::COSE_SIGN_1,
+      ccf::cbor::make_array(
+        {bytes_value(protected_header_cbor),
+         ccf::cbor::make_map({}), // empty unprotected header
+         bytes_value(payload),
+         bytes_value(raw_sig)})));
   }
 }
