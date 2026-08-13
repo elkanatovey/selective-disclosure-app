@@ -886,10 +886,8 @@ def test_version_endpoint(anon):
 
 
 def test_large_body_chunk_disclosure(anon, operator, issuer_key, service_cert_pem):
-    """A 120k-character body is tens of thousands of chunk disclosures, written
-    in one transaction and returned in one unredacted response. Withholding is
-    done client-side by dropping openings, which is the Operator tooling's
-    workflow: payload and signature are untouched, so no re-issue."""
+    """A 120k-character body is tens of thousands of chunk disclosures in one
+    transaction. Withholding is done client-side by dropping openings."""
     text = "".join(f"finding {i:05d}: overflow in the parser.\n" for i in range(3200))
     text = text[:120_000]
     txid = submit_report(anon, {"body": text})
@@ -910,8 +908,6 @@ def test_large_body_chunk_disclosure(anon, operator, issuer_key, service_cert_pe
     assert len(shown) == len(chunks) - 1
     assert shown[hidden - 1] == chunks[hidden - 1]
     assert shown[hidden + 1] == chunks[hidden + 1]
-    # Only the opening is gone. At this granularity a chunk's text usually recurs
-    # elsewhere in the document, so its bytes are NOT absent from the artifact.
     assert len(_sd_claims(stripped)) == len(_sd_claims(full.body)) - 1
 
     verify_receipt(stripped, service_cert_pem)

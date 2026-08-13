@@ -3,10 +3,8 @@
 
 """End-to-end: the Operator redaction tool against a live statement.
 
-Covers the path the tool is actually used on and its unit tests cannot reach,
-since only the service can issue a receipt: load a real transparent statement,
-withhold chunks client-side, and confirm the receipt still verifies against the
-service identity afterwards.
+Covers what the tool's unit tests cannot, since only the service issues a
+receipt.
 """
 
 import sys
@@ -35,11 +33,7 @@ BODY = (
 
 @pytest.fixture(scope="module")
 def transparent(network):
-    """The Operator's unredacted statement: every opening plus the receipt.
-
-    Built from `network` rather than the function-scoped role fixtures so the
-    statement is submitted once for the module.
-    """
+    # Built from `network`, not the function-scoped role fixtures, to submit once.
     txid = submit_report(network.client(), {"body": BODY, "title": "heap overflow"})
     resp = network.client(user="user0").get_historical(f"/operator/statements/{txid}")
     assert resp.status == 200, resp.body
@@ -66,15 +60,12 @@ def test_receipt_verifies_before_and_after_redaction(transparent, service_cert_p
         assert out.chunk_count == total
 
     assert load(redacted).revealed < total
-    # The receipt survives because the signed bytes never move.
     assert bare_statement(redacted) == bare_statement(transparent)
 
 
 def test_redaction_only_narrows(transparent):
     total = load(transparent).total
     once = restrict(transparent, [i for i in range(total) if i % 2 == 0])
-    # Asking for the withheld chunks back cannot restore them: their openings
-    # are gone, and only the service holds another copy.
     twice = restrict(once, list(range(total)))
     assert load(twice).chunks == load(once).chunks
 
@@ -105,9 +96,6 @@ def _foreign_cert() -> bytes:
 
 
 def test_receipt_is_checked_against_the_service_identity(transparent):
-    """Trust is anchored in the service key, not the issuer key. A cert that
-    parses but is not the service identity must fail the receipt, while the
-    openings still hash-match — the two checks are independent."""
     out = verify(transparent, _foreign_cert())
     assert out.has_receipt
     assert not out.receipt_ok
@@ -116,14 +104,11 @@ def test_receipt_is_checked_against_the_service_identity(transparent):
 
 
 def test_withheld_span_is_not_in_the_artifact(transparent, service_cert_pem):
-    """A secret rarely aligns to a chunk boundary: "Northwind Traders" is longer
-    than a chunk and starts mid-chunk, so hiding it means hiding every chunk it
-    overlaps — and with them some surrounding text."""
     secret = "Northwind Traders"
     start = BODY.index(secret)
     size = st.BODY_CHUNK_CHARS
     hidden = set(range(start // size, -(-(start + len(secret)) // size)))
-    assert len(hidden) > len(secret) // size  # over-redaction is unavoidable
+    assert len(hidden) > len(secret) // size
 
     total = load(transparent).total
     redacted = restrict(transparent, [i for i in range(total) if i not in hidden])
