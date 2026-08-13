@@ -21,6 +21,7 @@ set(TOKEN_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cose.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/sd_cwt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/statement.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/token/text_chunks.cpp
 )
 
 # App-level pure logic (CBOR submission parsing, ...), unit-testable without CCF

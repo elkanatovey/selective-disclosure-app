@@ -159,6 +159,65 @@ TEST(Statement, ContentValuesAreHiddenInToken)
   EXPECT_FALSE(token_contains(issued, "SENSITIVE_BODY"));
 }
 
+namespace
+{
+  std::vector<int64_t> nested_indices(
+    const sdcwt::IssuedToken& t, int64_t claim)
+  {
+    std::vector<int64_t> out;
+    for (const auto& d : t.disclosures)
+    {
+      if (d.path.size() == 2 && std::get<int64_t>(d.path[0]) == claim)
+      {
+        out.push_back(std::get<int64_t>(d.path[1]));
+      }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+  }
+}
+
+// `body` is carried as a map of chunk index => text so a single chunk can be
+// withheld. Nested (path length 2), so the at-rest shape is still 9 hashes.
+TEST(Statement, BodyChunksAreIndividuallyRedactable)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  sdcwt::statement::Fields f;
+  f.body = "abcdefghijkl"; // 12 codepoints
+
+  const auto issued = sdcwt::statement::issue_statement(
+    "iss", 1, f, *key, sdcwt::HashAlg::SHA_256, sdcwt::statement::PAD_LEN, 6);
+
+  EXPECT_EQ(
+    top_level_disclosure_count(issued), sdcwt::statement::CONTENT_FIELD_COUNT);
+  EXPECT_EQ(
+    nested_indices(issued, sdcwt::statement::BODY),
+    (std::vector<int64_t>{0, 1}));
+  EXPECT_FALSE(token_contains(issued, "abcdef"));
+}
+
+TEST(Statement, BodyChunkCountFollowsGranularity)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  sdcwt::statement::Fields f;
+  f.body = std::string(120, 'x');
+
+  const auto issued = sdcwt::statement::issue_statement("iss", 1, f, *key);
+  EXPECT_EQ(
+    nested_indices(issued, sdcwt::statement::BODY).size(),
+    120 / sdcwt::statement::BODY_CHUNK_CHARS);
+}
+
+TEST(Statement, AbsentBodyHasNoChunkDisclosures)
+{
+  auto key = ccf::crypto::make_ec_key_pair(ccf::crypto::CurveID::SECP256R1);
+  sdcwt::statement::Fields f;
+  f.title = "no body";
+
+  const auto issued = sdcwt::statement::issue_statement("iss", 1, f, *key);
+  EXPECT_TRUE(nested_indices(issued, sdcwt::statement::BODY).empty());
+}
+
 // A root (no parent) still carries a redacted parent slot -> strict uniformity.
 TEST(Statement, RootStillHasParentDisclosure)
 {

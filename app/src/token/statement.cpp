@@ -3,6 +3,7 @@
 #include "token/statement.h"
 
 #include "token/statement_internal.h"
+#include "token/text_chunks.h"
 
 namespace sdcwt::statement
 {
@@ -23,6 +24,18 @@ namespace sdcwt::statement
       }
       return value::bytes(rng(pad_len)); // garbage sentinel (never disclosed)
     }
+
+    CborValue chunk_map(const std::string& text, size_t chunk_chars)
+    {
+      const auto chunks = text::chunk(text, chunk_chars);
+      std::vector<std::pair<CborKey, CborValue>> entries;
+      entries.reserve(chunks.size());
+      for (size_t i = 0; i < chunks.size(); ++i)
+      {
+        entries.emplace_back(static_cast<int64_t>(i), value::text(chunks[i]));
+      }
+      return CborValue::Map(std::move(entries));
+    }
   }
 
   std::vector<Claim> detail::build_claims(
@@ -30,10 +43,13 @@ namespace sdcwt::statement
     int64_t iat,
     const Fields& f,
     const RandomSource& rng,
-    size_t pad_len)
+    size_t pad_len,
+    size_t chunk_chars)
   {
     const auto enc_text = std::function<CborValue(const std::string&)>(
       [](const std::string& s) { return value::text(s); });
+    const auto enc_body = std::function<CborValue(const std::string&)>(
+      [chunk_chars](const std::string& s) { return chunk_map(s, chunk_chars); });
     const auto enc_bytes =
       std::function<CborValue(const std::vector<uint8_t>&)>(
         [](const std::vector<uint8_t>& b) { return value::bytes(b); });
@@ -54,7 +70,7 @@ namespace sdcwt::statement
     // expressed by the redaction paths in issue_statement(), not here.
     claims.push_back({PARENT, or_pad(f.parent, enc_bytes, rng, pad_len)});
     claims.push_back({TITLE, or_pad(f.title, enc_text, rng, pad_len)});
-    claims.push_back({BODY, or_pad(f.body, enc_text, rng, pad_len)});
+    claims.push_back({BODY, or_pad(f.body, enc_body, rng, pad_len)});
     claims.push_back({COMPONENT, or_pad(f.component, enc_text, rng, pad_len)});
     claims.push_back({SEVERITY, or_pad(f.severity, enc_text, rng, pad_len)});
     claims.push_back(
@@ -74,25 +90,37 @@ namespace sdcwt::statement
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
     const RandomSource& rng,
-    size_t pad_len)
+    size_t pad_len,
+    size_t chunk_chars)
   {
-    const auto claims = detail::build_claims(iss, iat, fields, rng, pad_len);
+    const auto claims =
+      detail::build_claims(iss, iat, fields, rng, pad_len, chunk_chars);
 
     // Every content claim is redacted whole (strict uniformity); only the
     // service-set clear claims stay visible. Derived from the claim set so the
-    // content field list lives in one place (build_claims). Each `references`
-    // element is additionally redacted so a single reference can later be
-    // disclosed without revealing its siblings; those element hashes live
-    // inside the array's own disclosure (ancestor-disclosure rule), so the
-    // shape at rest is unchanged. Only when the field is really an array — an
-    // absent field is a garbage sentinel with no elements.
+    // content field list lives in one place (build_claims). `body` chunks and
+    // `references` elements are additionally redacted one by one, so a single
+    // chunk or reference can later be disclosed without revealing its
+    // siblings; those hashes live inside the container's own disclosure
+    // (ancestor-disclosure rule), so the shape at rest is unchanged. Only when
+    // the field is really set — an absent one is a garbage sentinel with no
+    // entries.
     std::vector<Path> redact_paths;
     redact_paths.reserve(CONTENT_FIELD_COUNT);
     for (const auto& c : claims)
     {
-      if (c.key != ISS && c.key != IAT)
+      if (c.key == ISS || c.key == IAT)
       {
-        redact_paths.push_back(Path{PathElem(c.key)});
+        continue;
+      }
+      redact_paths.push_back(Path{PathElem(c.key)});
+      if (c.key == BODY && c.value.kind == CborValue::Kind::Map)
+      {
+        for (size_t i = 0; i < c.value.map_keys.size(); ++i)
+        {
+          redact_paths.push_back(
+            Path{PathElem(BODY), PathElem(static_cast<int64_t>(i))});
+        }
       }
     }
     if (fields.references.has_value())
@@ -108,10 +136,14 @@ namespace sdcwt::statement
   }
 
   std::vector<Claim> build_claims(
-    const std::string& iss, int64_t iat, const Fields& fields, size_t pad_len)
+    const std::string& iss,
+    int64_t iat,
+    const Fields& fields,
+    size_t pad_len,
+    size_t chunk_chars)
   {
     return detail::build_claims(
-      iss, iat, fields, default_random_source(), pad_len);
+      iss, iat, fields, default_random_source(), pad_len, chunk_chars);
   }
 
   IssuedToken issue_statement(
@@ -120,9 +152,17 @@ namespace sdcwt::statement
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
-    size_t pad_len)
+    size_t pad_len,
+    size_t chunk_chars)
   {
     return detail::issue_statement(
-      iss, iat, fields, key, sd_alg, default_random_source(), pad_len);
+      iss,
+      iat,
+      fields,
+      key,
+      sd_alg,
+      default_random_source(),
+      pad_len,
+      chunk_chars);
   }
 }
