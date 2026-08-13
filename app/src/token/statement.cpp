@@ -99,12 +99,10 @@ namespace sdcwt::statement
     // Every content claim is redacted whole (strict uniformity); only the
     // service-set clear claims stay visible. Derived from the claim set so the
     // content field list lives in one place (build_claims). `body` chunks and
-    // `references` elements are additionally redacted one by one, so a single
-    // chunk or reference can later be disclosed without revealing its
-    // siblings; those hashes live inside the container's own disclosure
-    // (ancestor-disclosure rule), so the shape at rest is unchanged. Only when
-    // the field is really set — an absent one is a garbage sentinel with no
-    // entries.
+    // `references` elements are redacted individually too, so one can later be
+    // disclosed without its siblings; those hashes live inside the container's
+    // own disclosure, leaving the shape at rest unchanged. Only when the field
+    // is really set — an absent one is a sentinel with no entries.
     std::vector<Path> redact_paths;
     redact_paths.reserve(CONTENT_FIELD_COUNT);
     for (const auto& c : claims)

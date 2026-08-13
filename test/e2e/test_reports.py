@@ -19,6 +19,7 @@ from helpers import (
     RECEIPTS_LABEL,
     SERVICE_ISS,
     bare_statement,
+    body_text,
     disclose,
     ec2_key_from_pem,
     follow_up,
@@ -445,7 +446,7 @@ def test_operator_gets_unredacted_statement(
 
     # Every submitted field comes back in the clear, with its exact value/type.
     assert out.disclosed[st.TITLE] == "heap overflow"
-    assert out.disclosed[st.BODY] == "full body text"
+    assert body_text(out.disclosed[st.BODY]) == "full body text"
     assert out.disclosed[st.COMPONENT] == "parser"
     assert out.disclosed[st.SEVERITY] == "high"
     assert out.disclosed[st.FINGERPRINT] == b"\xde\xad\xbe\xef"
@@ -882,3 +883,35 @@ def test_version_endpoint(anon):
     assert re.match(r"^\d+\.\d+\.\d+", v["app_version"]), v
     assert isinstance(v["schema_version"], int) and v["schema_version"] >= 1
     assert v["ccf_version"].startswith("ccf-"), v
+
+
+def test_large_body_chunk_disclosure(anon, operator, issuer_key, service_cert_pem):
+    """A 120k-character body is tens of thousands of chunk disclosures, written
+    in one transaction and returned in one unredacted response. Withholding is
+    done client-side by dropping openings, which is the Operator tooling's
+    workflow: payload and signature are untouched, so no re-issue."""
+    text = "".join(f"finding {i:05d}: overflow in the parser.\n" for i in range(3200))
+    text = text[:120_000]
+    txid = submit_report(anon, {"body": text})
+
+    full = _req_operator_statement(operator, txid)
+    assert full.status == 200, full.status
+
+    chunks = st.validate_statement(full.body, issuer_key).disclosed[st.BODY]
+    assert len(chunks) == -(-len(text) // st.BODY_CHUNK_CHARS)
+    assert body_text(chunks) == text
+
+    # Drop one chunk's opening; every other chunk must survive unchanged.
+    hidden = 7
+    stripped = _drop_sd_claim(full.body, lambda d: len(d) == 3 and d[2] == hidden)
+    shown = st.validate_statement(stripped, issuer_key).disclosed[st.BODY]
+
+    assert hidden not in shown
+    assert len(shown) == len(chunks) - 1
+    assert shown[hidden - 1] == chunks[hidden - 1]
+    assert shown[hidden + 1] == chunks[hidden + 1]
+    # Only the opening is gone. At this granularity a chunk's text usually recurs
+    # elsewhere in the document, so its bytes are NOT absent from the artifact.
+    assert len(_sd_claims(stripped)) == len(_sd_claims(full.body)) - 1
+
+    verify_receipt(stripped, service_cert_pem)

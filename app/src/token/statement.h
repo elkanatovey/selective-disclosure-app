@@ -32,10 +32,9 @@ namespace sdcwt::statement
   // Garbage sentinel length for an absent content field.
   inline constexpr size_t PAD_LEN = 16;
 
-  // Redaction granularity of `body`: how many codepoints share one Redacted
-  // Claim Hash, and so the smallest span that can be withheld on its own.
-  // Smaller is finer but costs a 34-byte digest per chunk in the disclosed
-  // artifact; this is the service-wide setting to tune.
+  // Redaction granularity of `body`: codepoints per Redacted Claim Hash, so the
+  // smallest span that can be withheld. Must match the Python oracle's
+  // BODY_CHUNK_CHARS or the two emit different payloads.
   inline constexpr size_t BODY_CHUNK_CHARS = 6;
 
   // Schema/profile version this build implements. Bump on any change to the
@@ -62,12 +61,7 @@ namespace sdcwt::statement
   // Build the strictly-uniform claim set: clear iss/iat + all 9 content fields
   // (real value when set, else a random `pad_len`-byte garbage sentinel).
   // Which claims are redacted is not encoded here — issue_statement() supplies
-  // that as redaction paths.
-  //
-  // `body` becomes a map of chunk index => `chunk_chars` codepoints of text, so
-  // each chunk can later be withheld on its own. Map entries rather than array
-  // elements: undisclosed elements are dropped during validation and reindex
-  // the survivors (draft-08 §9 step 10), erasing where each hole was.
+  // that as redaction paths. `body` becomes a chunk map; see spec/statement.cddl.
   std::vector<Claim> build_claims(
     const std::string& iss,
     int64_t iat,

@@ -50,7 +50,7 @@ submitter.
 | `6` | `iat` | **clear** | service sign-time (pre-consensus wall-clock) |
 | `1000` | `parent` | **SD, always present** | parent-statement hash; garbage sentinel when root |
 | `1001` | `title` | SD | short summary |
-| `1002` | `body` | SD | full report text |
+| `1002` | `body` | SD | full report text, carried as fixed-size chunks (below) |
 | `1003` | `component` | SD | affected component/product |
 | `1004` | `severity` | SD | severity rating |
 | `1005` | `fingerprint` | SD | normalized dedup key — the field disclosed to prove duplicates |
@@ -263,9 +263,17 @@ child's redacted, salted `parent` field, and follow-ups surface via
   contents. This is `select_disclosures`. Statements redact each `references`
   element individually with path `{1006, i}`, so the Operator can disclose a single
   reference (`["references", i]`) revealing only its value, not its siblings'
-  values. The top-level redacted shape is unchanged: the whole array is still one
-  Redacted Claim Hash at rest; element hashes live inside it and appear only
-  once the array itself is disclosed.
+  values. `body` is chunked the same way: it is a map of chunk index =>
+  `BODY_CHUNK_CHARS` codepoints with path `{1002, i}`, so a single span of text
+  can be withheld instead of the whole field. Chunks are map entries rather
+  than array elements because undisclosed array elements are removed during
+  validation and reindex the survivors (draft-08 §9 step 10), which would erase
+  where each redaction was. The granularity is a compile-time constant and is
+  deliberately not recorded in the token — indices are explicit, so joining the
+  disclosed chunks in index order reproduces the text without it. The
+  top-level redacted shape is unchanged: each container is still one Redacted
+  Claim Hash at rest; the inner hashes live inside it and appear only
+  once the container itself is disclosed.
 - **Known limitation: array disclosure leaks length/position.** This is accepted.
   Disclosing an array element necessarily discloses its container, by the
   ancestor rule, and the container carries one `tag(60)` placeholder per element, so

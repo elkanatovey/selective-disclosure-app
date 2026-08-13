@@ -115,10 +115,9 @@ _TYPES: dict[int, tuple[type, ...]] = {
 #: Length (bytes) of the random garbage sentinel padding absent content fields.
 PAD_LEN = 16
 
-#: Redaction granularity of ``body``: codepoints per Redacted Claim Hash, and so
-#: the smallest span that can be withheld on its own. Mirrors BODY_CHUNK_CHARS
-#: in the C++ token core (statement.h); the two must agree or the conformance
-#: payloads diverge.
+#: Redaction granularity of ``body``: codepoints per Redacted Claim Hash. Must
+#: match BODY_CHUNK_CHARS in the C++ token core or the two emit different
+#: payloads.
 BODY_CHUNK_CHARS = 6
 
 
@@ -126,7 +125,7 @@ def chunk_text(text: str, chars: int = BODY_CHUNK_CHARS) -> dict[int, str]:
     """Split ``text`` into a map of chunk index -> ``chars`` codepoints.
 
     Slicing a ``str`` cuts on codepoints, so each chunk is a valid CBOR text
-    string and joining them in index order reproduces ``text`` exactly.
+    string and joining them in index order reproduces ``text``.
     """
     if chars < 1:
         raise ValueError("chunk size must be positive")
@@ -143,11 +142,7 @@ def build_claims(
 
     ``iss``/``iat`` go in the clear; every content field is included, real value
     when provided else a random garbage sentinel. Inputs are type-checked.
-
-    ``body`` becomes a map of chunk index -> text so each chunk can later be
-    withheld on its own. Map entries rather than array elements: undisclosed
-    elements are dropped during validation and reindex the survivors (draft-08
-    s9 step 10), erasing where each hole was.
+    ``body`` becomes a chunk map; see spec/statement.cddl.
     """
     if not isinstance(iss, str):
         raise TypeError("iss must be a str")
@@ -206,11 +201,9 @@ def issue_statement(
         PATCH_DATE: patch_date,
     }
     claims = build_claims(iss, iat, fields, chunk_chars)
-    # Every content field is redacted whole (strict uniformity). Additionally
-    # redact each `body` chunk and each `references` element individually so a
-    # single one can later be disclosed without revealing its siblings. Only
-    # when present (an absent field is a garbage sentinel with no entries).
-    # Mirrors the C++ token core (statement.cpp).
+    # Every content field is redacted whole (strict uniformity), plus each
+    # `body` chunk and `references` element individually so one can later be
+    # disclosed without its siblings. Only when present. Mirrors statement.cpp.
     redact_paths: list[tuple] = [(k,) for k in CONTENT_FIELDS]
     if body is not None:
         redact_paths += [(BODY, i) for i in claims[BODY]]
