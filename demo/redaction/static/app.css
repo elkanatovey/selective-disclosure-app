@@ -116,9 +116,17 @@ button:disabled { opacity: .5; cursor: default; }
 .out .stat { color: var(--ink); font-variant-numeric: tabular-nums; }
 .out .ok { color: var(--ok); }
 .out .bad { color: var(--bad); }
+.out .warn { color: #d29922; }
 .out dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 8px 0 0; }
 .out dt { color: var(--muted); }
 .out dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.sample { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.sample summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+.sample textarea { margin-top: 10px; height: 120px; }
+.sample .hint { margin: 8px 0 0; }
+
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
 /* A monospace document means every full chunk renders the same width, so a
    black bar leaks nothing about the text underneath it. */
@@ -140,3 +148,5 @@ button:disabled { opacity: .5; cursor: default; }
 .chunk { border-radius: 2px; }
 .chunk.redacted { background: #000; color: transparent; box-shadow: inset 0 0 0 1px #000; }
 .chunk.redacted::selection { background: var(--accent); }
+/* Withheld before this tool saw it: no opening exists, so it cannot be restored. */
+.chunk.locked { background: repeating-linear-gradient(45deg, #000, #000 3px, #1c1c1c 3px, #1c1c1c 6px); }

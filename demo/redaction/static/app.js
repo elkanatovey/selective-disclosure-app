@@ -5,21 +5,32 @@ const $ = (sel) => document.querySelector(sel);
 const docEl = $("#doc");
 const verifyDocEl = $("#verify-doc");
 
+// null text = withheld in the loaded statement: no opening exists, so it can
+// never be revealed here, only rendered as locked.
 let chunks = [];
-let revealed = new Set();
+let chunkChars = 6;
+let kept = new Set();
 
 // --- rendering --------------------------------------------------------------
-// Document text is untrusted input, so it only ever reaches the DOM through
-// textContent. Redaction is a CSS class, not a substitution, so the holder can
-// flip a chunk back without re-fetching anything.
+// Statement text is untrusted input and only ever reaches the DOM through
+// textContent. Redaction is a CSS class, so toggling never re-fetches.
 
-function renderHolder() {
+function bar(n) {
+  return "\u00a0".repeat(n);
+}
+
+function renderDoc() {
   const frag = document.createDocumentFragment();
   chunks.forEach((text, i) => {
     const span = document.createElement("span");
-    span.className = revealed.has(i) ? "chunk" : "chunk redacted";
+    const locked = text === null;
+    span.className = locked
+      ? "chunk redacted locked"
+      : kept.has(i)
+        ? "chunk"
+        : "chunk redacted";
     span.dataset.i = String(i);
-    span.textContent = text;
+    span.textContent = locked ? bar(chunkChars) : text;
     frag.appendChild(span);
   });
   docEl.replaceChildren(frag);
@@ -27,23 +38,24 @@ function renderHolder() {
 }
 
 function renderVerified(spans) {
-  // A withheld chunk's length is unknown to the verifier; every full chunk is
-  // the same width, so the widest revealed one gives the bar its size.
-  const size = spans.reduce((m, s) => (s === null ? m : Math.max(m, s.length)), 0);
-  const bar = "\u00a0".repeat(size || 30);
   const frag = document.createDocumentFragment();
-  spans.forEach((text, i) => {
+  spans.forEach((text) => {
     const span = document.createElement("span");
     span.className = text === null ? "chunk redacted" : "chunk";
-    span.dataset.i = String(i);
-    span.textContent = text === null ? bar : text;
+    span.textContent = text === null ? bar(chunkChars) : text;
     frag.appendChild(span);
   });
   verifyDocEl.replaceChildren(frag);
 }
 
+function openable() {
+  return chunks.reduce((n, t) => (t === null ? n : n + 1), 0);
+}
+
 function updateCounter() {
-  $("#counter").textContent = `${revealed.size} / ${chunks.length} chunks revealed`;
+  const locked = chunks.length - openable();
+  const note = locked ? ` (${locked} locked)` : "";
+  $("#counter").textContent = `${kept.size} / ${openable()} chunks kept${note}`;
 }
 
 function setOut(sel, html) {
@@ -52,36 +64,32 @@ function setOut(sel, html) {
 
 // --- selection --------------------------------------------------------------
 
-function selectedIndices(container) {
+function applyToSelection(keep) {
   const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return [];
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
   const range = sel.getRangeAt(0);
-  const out = [];
-  for (const span of container.children) {
-    if (range.intersectsNode(span)) out.push(Number(span.dataset.i));
-  }
-  return out;
-}
-
-function applyToSelection(makeRevealed) {
-  const picked = selectedIndices(docEl);
-  if (!picked.length) return;
-  for (const i of picked) {
-    makeRevealed ? revealed.add(i) : revealed.delete(i);
-    docEl.children[i].classList.toggle("redacted", !revealed.has(i));
+  for (const span of docEl.children) {
+    if (!range.intersectsNode(span)) continue;
+    const i = Number(span.dataset.i);
+    if (chunks[i] === null) continue; // locked: no opening to restore
+    keep ? kept.add(i) : kept.delete(i);
+    span.classList.toggle("redacted", !kept.has(i));
   }
   updateCounter();
-  window.getSelection().removeAllRanges();
+  sel.removeAllRanges();
 }
 
-function setAll(makeRevealed) {
-  revealed = makeRevealed ? new Set(chunks.keys()) : new Set();
-  renderHolder();
+function setAll(keep) {
+  kept = new Set();
+  if (keep) chunks.forEach((t, i) => t !== null && kept.add(i));
+  renderDoc();
 }
 
 function invert() {
-  revealed = new Set([...chunks.keys()].filter((i) => !revealed.has(i)));
-  renderHolder();
+  const next = new Set();
+  chunks.forEach((t, i) => t !== null && !kept.has(i) && next.add(i));
+  kept = next;
+  renderDoc();
 }
 
 // --- api --------------------------------------------------------------------
@@ -94,75 +102,103 @@ async function detail(res) {
   }
 }
 
-async function issue() {
-  const text = $("#text").value;
-  const size = Number($("#size").value) || 30;
-  const res = await fetch("/api/issue", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text, size }),
-  });
-  if (!res.ok) return setOut("#issue-out", `<span class="bad">${await detail(res)}</span>`);
-
-  const data = await res.json();
+function adopt(data) {
   chunks = data.chunks;
-  revealed = new Set(chunks.keys());
-  $("#panel-holder").classList.remove("is-hidden");
-  renderHolder();
+  chunkChars = data.chunk_chars;
+  kept = new Set();
+  chunks.forEach((t, i) => t !== null && kept.add(i));
+  $("#panel-redact").classList.remove("is-hidden");
+  renderDoc();
+
+  const receipt = !data.has_receipt
+    ? '<span class="warn">absent</span>'
+    : data.receipt_ok
+      ? '<span class="ok">verified</span>'
+      : '<span class="bad">FAILED</span>';
+  const fields = Object.entries(data.fields)
+    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+    .join("");
   setOut(
-    "#issue-out",
+    "#load-out",
     `<dl>
-       <dt>chunks</dt><dd>${data.chunk_count}</dd>
-       <dt>chunk size</dt><dd>${data.size} characters</dd>
-       <dt>signed token</dt><dd>${data.token_bytes.toLocaleString()} bytes, fully redacted</dd>
+       <dt>chunks</dt><dd>${data.chunk_count} of ${data.chunk_chars} characters</dd>
+       <dt>statement</dt><dd>${data.token_bytes.toLocaleString()} bytes</dd>
+       <dt>receipt</dt><dd>${receipt}</dd>
+       ${fields}
      </dl>`
   );
 }
 
-async function presentBlob() {
-  const res = await fetch("/api/present", {
+async function loadStatement() {
+  const body = new FormData();
+  const tok = $("#token").files[0];
+  if (!tok) return setOut("#load-out", '<span class="bad">choose a .cose file</span>');
+  body.append("token", tok);
+  if ($("#cert").files[0]) body.append("service_cert", $("#cert").files[0]);
+
+  const res = await fetch("/api/load", { method: "POST", body });
+  if (!res.ok) return setOut("#load-out", `<span class="bad">${await detail(res)}</span>`);
+  adopt(await res.json());
+}
+
+async function issueSample() {
+  const res = await fetch("/api/sample", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reveal: [...revealed] }),
+    body: JSON.stringify({ text: $("#sample-text").value }),
+  });
+  if (!res.ok) return setOut("#load-out", `<span class="bad">${await detail(res)}</span>`);
+  adopt(await res.json());
+}
+
+async function restrictedBlob() {
+  const res = await fetch("/api/restrict", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ keep: [...kept] }),
   });
   if (!res.ok) throw new Error(await detail(res));
   return res.blob();
 }
 
-async function exportPresentation() {
+async function exportStatement() {
   try {
-    const url = URL.createObjectURL(await presentBlob());
+    const url = URL.createObjectURL(await restrictedBlob());
     const a = document.createElement("a");
     a.href = url;
-    a.download = "presentation.cose";
+    a.download = "redacted.cose";
     a.click();
     URL.revokeObjectURL(url);
   } catch (err) {
-    setOut("#issue-out", `<span class="bad">${err.message}</span>`);
+    setOut("#load-out", `<span class="bad">${err.message}</span>`);
   }
 }
 
-async function verifyBlob(blob) {
+async function verifyBlob(blob, cert) {
   const body = new FormData();
-  body.append("token", blob, "presentation.cose");
+  body.append("token", blob, "statement.cose");
+  if (cert) body.append("service_cert", cert);
+
   const res = await fetch("/api/verify", { method: "POST", body });
   if (!res.ok) return setOut("#verify-out", `<span class="bad">${await detail(res)}</span>`);
 
-  const data = await res.json();
+  const d = await res.json();
   const mark = (ok) => (ok ? '<span class="ok">pass</span>' : '<span class="bad">fail</span>');
+  const receipt = !d.has_receipt
+    ? '<span class="warn">absent</span>'
+    : mark(d.receipt_ok);
   setOut(
     "#verify-out",
     `<dl>
-       <dt>issuer signature</dt><dd>${mark(data.signature_ok)}</dd>
-       <dt>disclosure hashes</dt><dd>${mark(data.disclosures_ok)}</dd>
-       <dt>field</dt><dd>${data.field_revealed ? "revealed" : "withheld"}</dd>
-       <dt>chunks committed</dt><dd>${data.chunk_count}</dd>
-       <dt>revealed</dt><dd>${data.revealed_count}</dd>
-       <dt>withheld</dt><dd>${data.withheld_count}</dd>
-       ${data.error ? `<dt>error</dt><dd class="bad">${data.error}</dd>` : ""}
+       <dt>receipt</dt><dd>${receipt}</dd>
+       <dt>disclosure hashes</dt><dd>${mark(d.disclosures_ok)}</dd>
+       <dt>chunks committed</dt><dd>${d.chunk_count}</dd>
+       <dt>revealed</dt><dd>${d.revealed_count}</dd>
+       <dt>withheld</dt><dd>${d.chunk_count - d.revealed_count}</dd>
+       ${d.error ? `<dt>error</dt><dd class="bad">${d.error}</dd>` : ""}
      </dl>`
   );
-  renderVerified(data.spans || []);
+  renderVerified(d.chunks || []);
 }
 
 // --- wiring -----------------------------------------------------------------
@@ -173,27 +209,23 @@ for (const id of ["#btn-reveal-sel", "#btn-hide-sel"]) {
   $(id).addEventListener("mousedown", (ev) => ev.preventDefault());
 }
 
-$("#btn-issue").addEventListener("click", issue);
+$("#btn-load").addEventListener("click", loadStatement);
+$("#btn-sample").addEventListener("click", issueSample);
 $("#btn-reveal-sel").addEventListener("click", () => applyToSelection(true));
 $("#btn-hide-sel").addEventListener("click", () => applyToSelection(false));
 $("#btn-all").addEventListener("click", () => setAll(true));
 $("#btn-none").addEventListener("click", () => setAll(false));
 $("#btn-invert").addEventListener("click", invert);
-$("#btn-export").addEventListener("click", exportPresentation);
+$("#btn-export").addEventListener("click", exportStatement);
 
-$("#file").addEventListener("change", async (ev) => {
+$("#vtoken").addEventListener("change", (ev) => {
   const file = ev.target.files[0];
-  if (file) $("#text").value = await file.text();
-});
-
-$("#vfile").addEventListener("change", (ev) => {
-  const file = ev.target.files[0];
-  if (file) verifyBlob(file);
+  if (file) verifyBlob(file, $("#vcert").files[0]);
 });
 
 $("#btn-verify-current").addEventListener("click", async () => {
   try {
-    await verifyBlob(await presentBlob());
+    await verifyBlob(await restrictedBlob(), $("#vcert").files[0]);
   } catch (err) {
     setOut("#verify-out", `<span class="bad">${err.message}</span>`);
   }

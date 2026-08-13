@@ -3,69 +3,78 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SD-CWT text redaction</title>
+  <title>SD-CWT statement redaction</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <header>
-  <h1>SD-CWT text redaction</h1>
+  <h1>SD-CWT statement redaction</h1>
   <p class="lead">
-    A free-text claim carried as {{ chunk_chars }}-character chunks, each one
-    individually redactable. The signed envelope never changes &mdash; revealing
-    text only attaches disclosures to the unprotected header.
+    Operator tooling. Load the unredacted statement from
+    <code>GET /operator/statements/{txid}</code>, choose which
+    {{ chunk_chars }}-character body chunks to keep, and export a copy with the
+    rest withheld. The payload and signature are never touched, so the embedded
+    receipt still verifies.
   </p>
 </header>
 
 <main>
-  <section class="panel" id="panel-issue">
-    <h2><span class="step">1</span> Issue</h2>
+  <section class="panel" id="panel-load">
+    <h2><span class="step">1</span> Load</h2>
     <p class="hint">
-      The signed token is <strong>fully redacted</strong>: a single hash for the
-      whole field, one hash per chunk inside it, and no disclosures attached.
+      The statement carries its own receipt. Supply the service certificate to
+      check that receipt; without it the disclosures are still hash-matched.
     </p>
-    <textarea id="text" spellcheck="false" aria-label="document text">{{ sample }}</textarea>
     <div class="row">
-      <label>chunk size
-        <input id="size" type="number" value="{{ chunk_chars }}" min="1" max="4096">
-      </label>
-      <label class="file">load .txt<input id="file" type="file" accept=".txt,text/plain"></label>
-      <span class="sep"></span>
-      <button id="btn-issue" class="primary">Sign document</button>
+      <label class="file">statement .cose<input id="token" type="file" accept=".cose,application/cose"></label>
+      <label class="file">service_cert.pem<input id="cert" type="file" accept=".pem,.crt"></label>
+      <button id="btn-load" class="primary">Load</button>
     </div>
-    <div id="issue-out" class="out"></div>
+    <details class="sample">
+      <summary>No ledger to hand? Issue a sample locally</summary>
+      <textarea id="sample-text" spellcheck="false" aria-label="sample body text">A malformed JPEG in a document preview overflows a fixed 4096-byte buffer in parse_thumbnail().
+
+Reporter: Dana Whitfield, dana.whitfield@example-research.org, +1 555 0142.
+Affected customer: Northwind Traders, tenant 4d9f-2211, notified 5 March.
+
+Clamp the declared thumbnail length to the remaining input before the copy.</textarea>
+      <button id="btn-sample">Issue sample</button>
+      <p class="hint">Real schema, real chunking &mdash; but no receipt, since only the service can issue one.</p>
+    </details>
+    <div id="load-out" class="out"></div>
   </section>
 
-  <section class="panel is-hidden" id="panel-holder">
-    <h2><span class="step">2</span> Holder</h2>
+  <section class="panel is-hidden" id="panel-redact">
+    <h2><span class="step">2</span> Redact</h2>
     <p class="hint">
-      Select text with the mouse, then reveal or hide it. Start from either
-      side: reveal everything and black out the sensitive parts, or hide
-      everything and open up only what you want to prove.
+      Select text and withhold it. You can only narrow what is disclosed &mdash;
+      chunks already withheld in the loaded statement have no opening to restore,
+      and are marked as locked.
     </p>
     <div class="row toolbar">
       <button id="btn-reveal-sel">Reveal selection</button>
-      <button id="btn-hide-sel">Hide selection</button>
+      <button id="btn-hide-sel">Withhold selection</button>
       <span class="sep"></span>
       <button id="btn-all">Reveal all</button>
-      <button id="btn-none">Hide all</button>
+      <button id="btn-none">Withhold all</button>
       <button id="btn-invert">Invert</button>
       <span class="sep"></span>
       <span id="counter" class="counter"></span>
-      <button id="btn-export" class="primary">Download .cose</button>
+      <button id="btn-export" class="primary">Export .cose</button>
     </div>
-    <div id="doc" class="doc" aria-label="document with redactions"></div>
+    <div id="doc" class="doc" aria-label="statement body with redactions"></div>
   </section>
 
   <section class="panel" id="panel-verify">
     <h2><span class="step">3</span> Verify</h2>
     <p class="hint">
-      Checks the issuer signature over the payload, then hash-matches every
-      presented disclosure against the redacted claim hashes it commits to.
+      Checks the embedded CCF receipt against the service identity, then
+      hash-matches every attached opening against the signed payload.
     </p>
     <div class="row">
-      <label class="file">choose .cose<input id="vfile" type="file" accept=".cose,application/cose"></label>
-      <span class="sep"></span>
-      <button id="btn-verify-current">Verify current presentation</button>
+      <label class="file">statement .cose<input id="vtoken" type="file" accept=".cose,application/cose"></label>
+      <label class="file">service_cert.pem<input id="vcert" type="file" accept=".pem,.crt"></label>
+      <button id="btn-verify-current">Verify current selection</button>
     </div>
     <div id="verify-out" class="out"></div>
     <div id="verify-doc" class="doc"></div>
