@@ -10,21 +10,15 @@
 <header>
   <h1>SD-CWT statement redaction</h1>
   <p class="lead">
-    Operator tooling. Load the unredacted statement from
-    <code>GET /operator/statements/{txid}</code>, choose which
-    {{ chunk_chars }}-character body chunks to keep, and export a copy with the
-    rest withheld. The payload and signature are never touched, so the embedded
-    receipt still verifies.
+    Withhold parts of a statement's body without re-signing it.
   </p>
 </header>
 
 <main>
   <section class="panel" id="panel-load">
     <h2><span class="step">1</span> Load</h2>
-    <p class="hint">
-      The statement carries its own receipt. Supply the service certificate to
-      check that receipt; without it the disclosures are still hash-matched.
-    </p>
+    <p class="hint">From <code>GET /operator/statements/{txid}</code>. Without the
+      certificate the receipt is not checked.</p>
     <div class="row">
       <label class="file">statement .cose<input id="token" type="file" accept=".cose,application/cose"></label>
       <label class="file">service_cert.pem<input id="cert" type="file" accept=".pem,.crt"></label>
@@ -39,18 +33,15 @@ Affected customer: Northwind Traders, tenant 4d9f-2211, notified 5 March.
 
 Clamp the declared thumbnail length to the remaining input before the copy.</textarea>
       <button id="btn-sample">Issue sample</button>
-      <p class="hint">Real schema, real chunking &mdash; but no receipt, since only the service can issue one.</p>
+      <p class="hint">No receipt &mdash; only the service can issue one.</p>
     </details>
     <div id="load-out" class="out"></div>
   </section>
 
   <section class="panel is-hidden" id="panel-redact">
     <h2><span class="step">2</span> Redact</h2>
-    <p class="hint">
-      Select text and withhold it. You can only narrow what is disclosed &mdash;
-      chunks already withheld in the loaded statement have no opening to restore,
-      and are marked as locked.
-    </p>
+    <p class="hint">Withholding is one-way: hatched chunks arrived without an
+      opening and cannot be restored.</p>
     <div class="row toolbar">
       <button id="btn-reveal-sel">Reveal selection</button>
       <button id="btn-hide-sel">Withhold selection</button>
@@ -67,10 +58,6 @@ Clamp the declared thumbnail length to the remaining input before the copy.</tex
 
   <section class="panel" id="panel-verify">
     <h2><span class="step">3</span> Verify</h2>
-    <p class="hint">
-      Checks the embedded CCF receipt against the service identity, then
-      hash-matches every attached opening against the signed payload.
-    </p>
     <div class="row">
       <label class="file">statement .cose<input id="vtoken" type="file" accept=".cose,application/cose"></label>
       <label class="file">service_cert.pem<input id="vcert" type="file" accept=".pem,.crt"></label>

@@ -90,9 +90,7 @@ def _state() -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse(
-        request, "index.html", {"chunk_chars": st.BODY_CHUNK_CHARS}
-    )
+    return templates.TemplateResponse(request, "index.html", {})
 
 
 @app.post("/api/load")
