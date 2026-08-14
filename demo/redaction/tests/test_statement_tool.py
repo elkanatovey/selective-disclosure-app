@@ -72,9 +72,10 @@ def test_restricting_everything_still_validates(token):
     assert out.total == load(token).total
 
 
-def test_verify_reports_a_missing_receipt_without_failing(token):
+def test_without_a_receipt_a_statement_is_never_authentic(token):
     out = verify(token, None)
-    assert out.valid
+    assert out.status == "consistent"
+    assert not out.valid
     assert out.disclosures_ok
     assert not out.has_receipt
     assert out.chunk_count == load(token).total

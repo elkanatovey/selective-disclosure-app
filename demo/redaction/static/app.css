@@ -95,6 +95,7 @@ label.file {
   cursor: pointer;
 }
 label.file input { display: none; }
+label.file.chosen { border-style: solid; border-color: var(--accent); color: var(--ink); }
 
 button {
   background: var(--panel2);

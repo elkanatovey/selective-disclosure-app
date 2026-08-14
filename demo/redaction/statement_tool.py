@@ -192,14 +192,23 @@ class Verified:
     error: Optional[str] = None
 
     @property
+    def status(self) -> str:
+        """`authentic` needs a receipt verified against the service identity.
+        `consistent` means the openings hash-match a payload nobody vouched for:
+        an attacker controls both, so it proves only internal agreement."""
+        if not self.disclosures_ok:
+            return "invalid"
+        return "authentic" if self.receipt_ok else "consistent"
+
+    @property
     def valid(self) -> bool:
-        return self.disclosures_ok and (self.receipt_ok or not self.has_receipt)
+        return self.status == "authentic"
 
 
 def verify(token: bytes, service_cert_pem: Optional[bytes]) -> Verified:
     """Check the embedded receipt against the service identity, then hash-match
-    the attached openings. A locally issued sample has no receipt, so absence is
-    reported rather than treated as a failure."""
+    the attached openings. See `Verified.status`: without a receipt the result is
+    `consistent`, never `authentic`."""
     receipts = (_arr(token)[1] or {}).get(RECEIPTS_LABEL)
     has_receipt = bool(receipts) and service_cert_pem is not None
 
@@ -225,15 +234,31 @@ def verify(token: bytes, service_cert_pem: Optional[bytes]) -> Verified:
     return Verified(has_receipt, receipt_ok, True, loaded.total, loaded.revealed, err)
 
 
+SAMPLE_FIELDS = {
+    "title": "heap overflow in the thumbnail decoder",
+    "component": "previewd",
+    "severity": "high",
+    "references": ["CVE-2025-0001", "https://example.org/advisory/42"],
+}
+
+
 def sample_statement(text: str, **fields: Any) -> bytes:
     """Issue a statement locally, all openings attached, so the tool is usable
-    without a ledger. Uses the real schema; it just has no receipt."""
+    without a ledger. Uses the real schema; it just has no receipt.
+
+    Content fields default to `SAMPLE_FIELDS` so the sample exercises
+    field-level withholding, not only body chunks.
+    """
     from pycose.keys import EC2Key
     from pycose.keys.curves import P256
     from sd_cwt import present
 
     key = EC2Key.generate_key(crv=P256)
     token, discs = st.issue_statement(
-        key, iss="https://demo.example", iat=1700000000, body=text, **fields
+        key,
+        iss="https://demo.example",
+        iat=1700000000,
+        body=text,
+        **{**SAMPLE_FIELDS, **fields},
     )
     return present(token, discs)

@@ -20,8 +20,8 @@
     <p class="hint">From <code>GET /operator/statements/{txid}</code>. Without the
       certificate the receipt is not checked.</p>
     <div class="row">
-      <label class="file">statement .cose<input id="token" type="file" accept=".cose,application/cose"></label>
-      <label class="file">service_cert.pem<input id="cert" type="file" accept=".pem,.crt"></label>
+      <label class="file">statement .cose<input id="token" type="file"></label>
+      <label class="file">service_cert.pem<input id="cert" type="file"></label>
       <button id="btn-load" class="primary">Load</button>
     </div>
     <details class="sample">
@@ -60,8 +60,8 @@ Clamp the declared thumbnail length to the remaining input before the copy.</tex
   <section class="panel" id="panel-verify">
     <h2><span class="step">3</span> Verify</h2>
     <div class="row">
-      <label class="file">statement .cose<input id="vtoken" type="file" accept=".cose,application/cose"></label>
-      <label class="file">service_cert.pem<input id="vcert" type="file" accept=".pem,.crt"></label>
+      <label class="file">statement .cose<input id="vtoken" type="file"></label>
+      <label class="file">service_cert.pem<input id="vcert" type="file"></label>
       <button id="btn-verify-current">Verify current selection</button>
     </div>
     <div id="verify-out" class="out"></div>

@@ -209,10 +209,16 @@ async function verifyBlob(blob, cert) {
   const receipt = !d.has_receipt
     ? '<span class="warn">absent</span>'
     : mark(d.receipt_ok);
+  const status = {
+    authentic: '<span class="ok">authentic</span>',
+    consistent: '<span class="warn">consistent &mdash; origin unverified</span>',
+    invalid: '<span class="bad">invalid</span>',
+  }[d.status];
   const disclosed = Object.keys(d.fields || {});
   setOut(
     "#verify-out",
     `<dl>
+       <dt>result</dt><dd>${status}</dd>
        <dt>receipt</dt><dd>${receipt}</dd>
        <dt>disclosure hashes</dt><dd>${mark(d.disclosures_ok)}</dd>
        <dt>fields disclosed</dt><dd>${disclosed.join(", ") || "none"}</dd>
@@ -235,6 +241,18 @@ for (const id of ["#btn-reveal-sel", "#btn-hide-sel"]) {
 
 $("#btn-load").addEventListener("click", loadStatement);
 $("#btn-sample").addEventListener("click", issueSample);
+
+// A hidden input gives no sign a file was picked; show the name on the label.
+for (const id of ["#token", "#cert", "#vtoken", "#vcert"]) {
+  const input = $(id);
+  const label = input.parentElement;
+  const original = label.firstChild.textContent;
+  input.addEventListener("change", () => {
+    const file = input.files[0];
+    label.firstChild.textContent = file ? file.name : original;
+    label.classList.toggle("chosen", Boolean(file));
+  });
+}
 $("#btn-reveal-sel").addEventListener("click", () => applyToSelection(true));
 $("#btn-hide-sel").addEventListener("click", () => applyToSelection(false));
 $("#btn-all").addEventListener("click", () => setAll(true));

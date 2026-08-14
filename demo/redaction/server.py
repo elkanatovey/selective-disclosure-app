@@ -152,7 +152,7 @@ async def api_verify(token: UploadFile, service_cert: Optional[UploadFile] = Non
     except Exception:
         chunks, fields = [], {}
     return {
-        "valid": out.valid,
+        "status": out.status,
         "has_receipt": out.has_receipt,
         "receipt_ok": out.receipt_ok,
         "disclosures_ok": out.disclosures_ok,
