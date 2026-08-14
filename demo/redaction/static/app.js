@@ -260,10 +260,14 @@ $("#btn-none").addEventListener("click", () => setAll(false));
 $("#btn-invert").addEventListener("click", invert);
 $("#btn-export").addEventListener("click", exportStatement);
 
-$("#vtoken").addEventListener("change", (ev) => {
-  const file = ev.target.files[0];
+// Re-run on either input so the order they are chosen in does not matter.
+function verifyChosenFile() {
+  const file = $("#vtoken").files[0];
   if (file) verifyBlob(file, $("#vcert").files[0]);
-});
+}
+
+$("#vtoken").addEventListener("change", verifyChosenFile);
+$("#vcert").addEventListener("change", verifyChosenFile);
 
 $("#btn-verify-current").addEventListener("click", async () => {
   try {
