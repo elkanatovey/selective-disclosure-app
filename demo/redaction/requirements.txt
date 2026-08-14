@@ -1,0 +1,6 @@
+# Web demo extras. Layered on the shared sandbox venv, which already provides
+# sd_cwt (and therefore pycose + cbor2).
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart

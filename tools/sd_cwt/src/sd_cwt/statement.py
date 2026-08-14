@@ -115,12 +115,34 @@ _TYPES: dict[int, tuple[type, ...]] = {
 #: Length (bytes) of the random garbage sentinel padding absent content fields.
 PAD_LEN = 16
 
+#: Redaction granularity of ``body``: codepoints per Redacted Claim Hash. Must
+#: match BODY_CHUNK_CHARS in the C++ token core or the two emit different
+#: payloads.
+BODY_CHUNK_CHARS = 6
 
-def build_claims(iss: str, iat: int, fields: dict[int, Any]) -> dict[Any, Any]:
+
+def chunk_text(text: str, chars: int = BODY_CHUNK_CHARS) -> dict[int, str]:
+    """Split ``text`` into a map of chunk index -> ``chars`` codepoints.
+
+    Slicing a ``str`` cuts on codepoints, so each chunk is a valid CBOR text
+    string and joining them in index order reproduces ``text``.
+    """
+    if chars < 1:
+        raise ValueError("chunk size must be positive")
+    return {i: text[p : p + chars] for i, p in enumerate(range(0, len(text), chars))}
+
+
+def build_claims(
+    iss: str,
+    iat: int,
+    fields: dict[int, Any],
+    chunk_chars: int = BODY_CHUNK_CHARS,
+) -> dict[Any, Any]:
     """Assemble a full, strictly-uniform claims map.
 
     ``iss``/``iat`` go in the clear; every content field is included, real value
     when provided else a random garbage sentinel. Inputs are type-checked.
+    ``body`` becomes a chunk map; see spec/statement.cddl.
     """
     if not isinstance(iss, str):
         raise TypeError("iss must be a str")
@@ -140,7 +162,7 @@ def build_claims(iss: str, iat: int, fields: dict[int, Any]) -> dict[Any, Any]:
         if not isinstance(value, _TYPES[key]):
             allowed = "/".join(t.__name__ for t in _TYPES[key])
             raise TypeError(f"{NAME_BY_FIELD[key]} must be {allowed}")
-        claims[key] = value
+        claims[key] = chunk_text(value, chunk_chars) if key == BODY else value
     return claims
 
 
@@ -158,6 +180,7 @@ def issue_statement(
     references: Optional[list] = None,
     patch: Optional[str] = None,
     patch_date: Optional[int] = None,
+    chunk_chars: int = BODY_CHUNK_CHARS,
 ) -> tuple[bytes, list[Disclosure]]:
     """Build and sign a strictly-uniform statement token.
 
@@ -177,13 +200,13 @@ def issue_statement(
         PATCH: patch,
         PATCH_DATE: patch_date,
     }
-    claims = build_claims(iss, iat, fields)
-    # Every content field is redacted whole (strict uniformity). Additionally
-    # redact each `references` element individually so a single reference can
-    # later be disclosed without revealing its siblings. Only when present as a
-    # list (an absent field is a garbage sentinel with no elements). Mirrors the
-    # C++ token core (statement.cpp).
+    claims = build_claims(iss, iat, fields, chunk_chars)
+    # Every content field is redacted whole (strict uniformity), plus each
+    # `body` chunk and `references` element individually so one can later be
+    # disclosed without its siblings. Only when present. Mirrors statement.cpp.
     redact_paths: list[tuple] = [(k,) for k in CONTENT_FIELDS]
+    if body is not None:
+        redact_paths += [(BODY, i) for i in claims[BODY]]
     if references is not None:
         redact_paths += [(REFERENCES, i) for i in range(len(references))]
     return issue(claims, redact_paths, signer)
