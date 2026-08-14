@@ -31,6 +31,7 @@ from sd_cwt.core import _disclosure_digest
 
 RECEIPTS_LABEL = 394
 SD_CLAIMS_LABEL = 17
+REDACTED_ELEMENT_TAG = 60
 REDACTED_CLAIM_KEYS = cbor2.CBORSimpleValue(59)
 
 
@@ -64,12 +65,26 @@ def bare_statement(token: bytes) -> bytes:
     return cbor2.dumps(cbor2.CBORTag(tag.tag, arr))
 
 
+def _nested_of(value: Any) -> set:
+    """Digests referenced inside an opening's value: a chunk map's simple(59)
+    list, or an array's tag(60) placeholders."""
+    if isinstance(value, dict):
+        return set(value.get(REDACTED_CLAIM_KEYS, []))
+    if isinstance(value, list):
+        return {
+            e.value
+            for e in value
+            if isinstance(e, cbor2.CBORTag) and e.tag == REDACTED_ELEMENT_TAG
+        }
+    return set()
+
+
 def _chunk_digests(token: bytes) -> set:
     """Digests listed inside body's own opening -- exactly its chunk openings."""
     for enc in _sd_claims(token):
         d = cbor2.loads(enc)
         if len(d) == 3 and d[2] == st.BODY and isinstance(d[1], dict):
-            return set(d[1].get(REDACTED_CLAIM_KEYS, []))
+            return _nested_of(d[1])
     return set()
 
 
@@ -122,21 +137,48 @@ def load(token: bytes) -> Loaded:
     )
 
 
-def restrict(token: bytes, keep: Iterable[int]) -> bytes:
-    """Return a copy of `token` keeping only `keep`'s body chunk openings.
+def restrict(
+    token: bytes,
+    keep_chunks: Iterable[int],
+    keep_fields: Optional[Iterable[str]] = None,
+) -> bytes:
+    """Return a copy of `token` keeping only `keep_chunks`' body chunk openings
+    and `keep_fields`' content-field openings. `keep_fields=None` keeps them all.
 
-    Every non-chunk opening is preserved, including body's own -- without it the
-    chunk hashes are unreachable and the remaining openings would not validate.
+    Withholding a field also drops the openings nested inside it, which would
+    otherwise be unreachable and fail validation. Body's own opening is kept
+    whenever a chunk is, since its hashes live inside it.
     """
-    wanted = set(keep)
-    by_digest = _chunk_digests(token)
+    wanted = set(keep_chunks)
+    fields = None if keep_fields is None else set(keep_fields)
+    if fields is not None and wanted:
+        fields.add("body")
+    chunks = _chunk_digests(token)
+
+    orphaned: set = set()
+    if fields is not None:
+        for enc in _sd_claims(token):
+            d = cbor2.loads(enc)
+            if len(d) == 3:
+                name = st.NAME_BY_FIELD.get(d[2])
+                if name is not None and name not in fields:
+                    orphaned |= _nested_of(d[1])
+
     kept = []
     for enc in _sd_claims(token):
-        if _disclosure_digest(HashAlg.SHA_256, enc) not in by_digest:
-            kept.append(enc)
+        digest = _disclosure_digest(HashAlg.SHA_256, enc)
+        if digest in orphaned:
             continue
-        if cbor2.loads(enc)[2] in wanted:
-            kept.append(enc)
+        if digest in chunks:
+            if cbor2.loads(enc)[2] in wanted:
+                kept.append(enc)
+            continue
+        d = cbor2.loads(enc)
+        if fields is not None and len(d) == 3:
+            name = st.NAME_BY_FIELD.get(d[2])
+            if name is not None and name not in fields:
+                continue
+        kept.append(enc)
     return _with_sd_claims(token, kept)
 
 

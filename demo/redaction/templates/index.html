@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SD-CWT statement redaction</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ v }}">
 </head>
 <body>
 <header>
@@ -42,6 +42,7 @@ Clamp the declared thumbnail length to the remaining input before the copy.</tex
     <h2><span class="step">2</span> Redact</h2>
     <p class="hint">Withholding is one-way: hatched chunks arrived without an
       opening and cannot be restored.</p>
+    <div id="fields" class="fields"></div>
     <div class="row toolbar">
       <button id="btn-reveal-sel">Reveal selection</button>
       <button id="btn-hide-sel">Withhold selection</button>
@@ -68,6 +69,6 @@ Clamp the declared thumbnail length to the remaining input before the copy.</tex
   </section>
 </main>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{ v }}"></script>
 </body>
 </html>

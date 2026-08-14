@@ -10,6 +10,7 @@ const verifyDocEl = $("#verify-doc");
 let chunks = [];
 let chunkChars = 6;
 let kept = new Set();
+let fieldValues = {};
 
 // --- rendering --------------------------------------------------------------
 // Statement text is untrusted input and only ever reaches the DOM through
@@ -17,6 +18,29 @@ let kept = new Set();
 
 function bar(n) {
   return "\u00a0".repeat(n);
+}
+
+function renderFields() {
+  const frag = document.createDocumentFragment();
+  for (const [name, value] of Object.entries(fieldValues)) {
+    const label = document.createElement("label");
+    label.className = "field";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.dataset.field = name;
+    const text = document.createElement("span");
+    text.textContent = `${name}: ${value}`;
+    label.append(box, text);
+    frag.appendChild(label);
+  }
+  $("#fields").replaceChildren(frag);
+}
+
+function keptFields() {
+  return [...document.querySelectorAll("#fields input:checked")].map(
+    (b) => b.dataset.field
+  );
 }
 
 function renderDoc() {
@@ -105,9 +129,11 @@ async function detail(res) {
 function adopt(data) {
   chunks = data.chunks;
   chunkChars = data.chunk_chars;
+  fieldValues = data.fields;
   kept = new Set();
   chunks.forEach((t, i) => t !== null && kept.add(i));
   $("#panel-redact").classList.remove("is-hidden");
+  renderFields();
   renderDoc();
 
   const receipt = !data.has_receipt
@@ -115,16 +141,12 @@ function adopt(data) {
     : data.receipt_ok
       ? '<span class="ok">verified</span>'
       : '<span class="bad">FAILED</span>';
-  const fields = Object.entries(data.fields)
-    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
-    .join("");
   setOut(
     "#load-out",
     `<dl>
        <dt>chunks</dt><dd>${data.chunk_count} of ${data.chunk_chars} characters</dd>
        <dt>statement</dt><dd>${data.token_bytes.toLocaleString()} bytes</dd>
        <dt>receipt</dt><dd>${receipt}</dd>
-       ${fields}
      </dl>`
   );
 }
@@ -155,7 +177,7 @@ async function restrictedBlob() {
   const res = await fetch("/api/restrict", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ keep: [...kept] }),
+    body: JSON.stringify({ keep: [...kept], fields: keptFields() }),
   });
   if (!res.ok) throw new Error(await detail(res));
   return res.blob();
@@ -187,11 +209,13 @@ async function verifyBlob(blob, cert) {
   const receipt = !d.has_receipt
     ? '<span class="warn">absent</span>'
     : mark(d.receipt_ok);
+  const disclosed = Object.keys(d.fields || {});
   setOut(
     "#verify-out",
     `<dl>
        <dt>receipt</dt><dd>${receipt}</dd>
        <dt>disclosure hashes</dt><dd>${mark(d.disclosures_ok)}</dd>
+       <dt>fields disclosed</dt><dd>${disclosed.join(", ") || "none"}</dd>
        <dt>chunks committed</dt><dd>${d.chunk_count}</dd>
        <dt>revealed</dt><dd>${d.revealed_count}</dd>
        <dt>withheld</dt><dd>${d.chunk_count - d.revealed_count}</dd>

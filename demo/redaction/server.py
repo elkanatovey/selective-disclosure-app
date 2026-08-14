@@ -39,6 +39,7 @@ class SampleRequest(BaseModel):
 
 class RestrictRequest(BaseModel):
     keep: list[int] = []
+    fields: Optional[list[str]] = None
 
 
 async def _read(upload: Optional[UploadFile]) -> Optional[bytes]:
@@ -75,11 +76,13 @@ def _displayable(fields: dict) -> dict:
 
 def _state() -> dict:
     out = verify(_loaded.token, _service_cert)
+    fields = _displayable(_loaded.fields)
+    fields["body"] = f"{_loaded.total} chunks"
     return {
         "chunk_count": _loaded.total,
         "chunk_chars": st.BODY_CHUNK_CHARS,
         "chunks": _loaded.spans(),
-        "fields": _displayable(_loaded.fields),
+        "fields": fields,
         "token_bytes": len(_loaded.token),
         "has_receipt": out.has_receipt,
         "receipt_ok": out.receipt_ok,
@@ -88,9 +91,15 @@ def _state() -> dict:
     }
 
 
+def _assets_version() -> str:
+    """Cache-buster: static files are served with long-lived validators, so an
+    edited script would otherwise be ignored until a manual cache clear."""
+    return str(int(max(f.stat().st_mtime for f in (HERE / "static").iterdir())))
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse(request, "index.html", {})
+    return templates.TemplateResponse(request, "index.html", {"v": _assets_version()})
 
 
 @app.post("/api/load")
@@ -120,8 +129,13 @@ def api_sample(req: SampleRequest):
 def api_restrict(req: RestrictRequest):
     if _loaded is None:
         raise HTTPException(409, "no statement loaded")
+    # Openings we can see are padding are never shipped: they would tell the
+    # recipient which fields were never set.
+    fields = (
+        req.fields if req.fields is not None else list(_displayable(_loaded.fields))
+    )
     return Response(
-        content=restrict(_loaded.token, req.keep),
+        content=restrict(_loaded.token, req.keep, fields),
         media_type="application/cose",
         headers={"Content-Disposition": 'attachment; filename="redacted.cose"'},
     )
@@ -133,9 +147,10 @@ async def api_verify(token: UploadFile, service_cert: Optional[UploadFile] = Non
     cert = await _read(service_cert) or _service_cert
     out = verify(raw, cert)
     try:
-        chunks = load(raw).spans()
+        loaded = load(raw)
+        chunks, fields = loaded.spans(), _displayable(loaded.fields)
     except Exception:
-        chunks = []
+        chunks, fields = [], {}
     return {
         "valid": out.valid,
         "has_receipt": out.has_receipt,
@@ -144,5 +159,6 @@ async def api_verify(token: UploadFile, service_cert: Optional[UploadFile] = Non
         "chunk_count": out.chunk_count,
         "revealed_count": out.revealed,
         "chunks": chunks,
+        "fields": fields,
         "error": out.error,
     }

@@ -112,6 +112,16 @@ button:disabled { opacity: .5; cursor: default; }
 
 .counter { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 
+.fields { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 12px; }
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.field input { accent-color: var(--accent); margin: 0; }
+
 .out { margin-top: 12px; font-size: 13px; color: var(--muted); }
 .out .stat { color: var(--ink); font-variant-numeric: tabular-nums; }
 .out .ok { color: var(--ok); }
