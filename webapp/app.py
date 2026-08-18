@@ -59,6 +59,27 @@ def cert(
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(days=3650 if ca else 30))
         .add_extension(x509.BasicConstraints(ca=ca, path_length=0 if ca else None), True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(public_key), False)
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                issuer.public_key() if issuer is not None else public_key
+            ),
+            False,
+        )
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=ca,
+                crl_sign=ca,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            True,
+        )
         .sign(signing_key, hashes.SHA256())
     )
 

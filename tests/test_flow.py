@@ -6,6 +6,7 @@ import unicodedata
 import cbor2
 import pytest
 from cbor2 import CBORTag
+from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 from pycose.algorithms import Es256
@@ -160,6 +161,30 @@ def test_public_state_contains_only_public_key_material():
 
     with pytest.raises(HTTPException):
         endorse(EndorseBody(public_jwk={**public["msrcJwk"], "d": "secret"}))
+
+
+def test_endorsed_chain_has_scitt_didx509_extensions():
+    signer = ec.generate_private_key(ec.SECP256R1())
+    point = signer.public_key().public_numbers()
+    endorsement = endorse(
+        EndorseBody(
+            public_jwk={
+                "kty": "EC",
+                "crv": "P-256",
+                "x": b64(point.x.to_bytes(32, "big")),
+                "y": b64(point.y.to_bytes(32, "big")),
+            }
+        )
+    )
+    leaf = x509.load_der_x509_certificate(unb64(endorsement["leaf"]))
+    root = x509.load_der_x509_certificate(unb64(endorsement["root"]))
+    assert root.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    assert root.extensions.get_extension_for_class(x509.KeyUsage).value.key_cert_sign
+    assert not leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    assert leaf.extensions.get_extension_for_class(x509.KeyUsage).value.digital_signature
+    for certificate in (root, leaf):
+        certificate.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+        certificate.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
 
 
 def test_kbt_selects_one_body_chunk_and_binds_audience():
