@@ -50,10 +50,11 @@ if [[ ! -x "$VENV/bin/python" ]]; then
   python3 -m venv "$VENV"
   source "$VENV/bin/activate"
   python -m pip install --disable-pip-version-check -q -U pip
-  python -m pip install --disable-pip-version-check -q -e "$ROOT[test]" "ccf==$CCF_VERSION" "httpx==0.23.*" "loguru>=0.7,<0.8" "jwcrypto>=1.5,<2" "PyJWT>=2.10,<3" certifi requests
+  python -m pip install --disable-pip-version-check -q -e "$ROOT[test]" "ccf==$CCF_VERSION" "httpx==0.23.*" "loguru>=0.7,<0.8" "jwcrypto>=1.5,<2" "PyJWT>=2.10,<3" "pyasn1>=0.6,<0.7" "Jinja2>=3.1,<4" "matplotlib>=3.10,<4" "pandas>=2,<3" certifi requests
 fi
 source "$VENV/bin/activate"
 export PYTHONPATH="$ROOT:$SCITT_SRC/pyscitt${PYTHONPATH:+:$PYTHONPATH}"
+PYTHONPATH="/opt/ccf/bin:$PYTHONPATH" python -c "import infra.e2e_args, infra.network"
 
 setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host 127.0.0.1 --port 8090 >"$WORK/webapp.log" 2>&1 &
 WEB_PID=$!
