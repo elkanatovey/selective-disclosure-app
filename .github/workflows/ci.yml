@@ -30,7 +30,10 @@ jobs:
     container: mcr.microsoft.com/azurelinux/base/core:3.0
     steps:
       - name: Install system tools
-        run: tdnf install -y --disablerepo azurelinux-official-ms-non-oss build-essential ca-certificates curl git jq rpm-build python3-pip nodejs procps util-linux
+        run: |
+          gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
+          tdnf update -y
+          tdnf install -y --disablerepo azurelinux-official-ms-non-oss build-essential ca-certificates curl git jq rpm-build python3-pip nodejs procps util-linux
       - uses: actions/checkout@v4
       - name: Run browser-to-SCITT integration
         run: ./scripts/ci-scitt.sh
