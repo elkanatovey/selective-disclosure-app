@@ -27,10 +27,10 @@ jobs:
   real-scitt:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    container: mcr.microsoft.com/azurelinux/base/core:3.0.20260728
+    container: mcr.microsoft.com/azurelinux/base/core:3.0
     steps:
       - name: Install system tools
-        run: tdnf install -y ca-certificates curl git jq rpm-build python3-pip nodejs procps util-linux
+        run: tdnf install -y --disablerepo azurelinux-official-ms-non-oss build-essential ca-certificates curl git jq rpm-build python3-pip nodejs procps util-linux
       - uses: actions/checkout@v4
       - name: Run browser-to-SCITT integration
         run: ./scripts/ci-scitt.sh
