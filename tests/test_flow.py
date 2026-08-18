@@ -32,6 +32,7 @@ from webapp.app import (
     resolve_all,
     state,
     unb64,
+    verify_bundle,
     with_uhdr,
 )
 
@@ -186,8 +187,15 @@ def test_kbt_selects_one_body_chunk_and_binds_audience():
     result = mock_verifier(KbtBody(token=b64(kbt), audience=audience))
     assert result["txid"] == registration["txid"]
     assert result["fields"] == [1001, 1002]
+    detailed = verify_bundle(kbt, audience)
+    assert detailed["valid"]
+    assert {check["status"] for check in detailed["checks"]} == {"pass", "unavailable"}
+    assert detailed["report"]["fields"]["title"] == "private title"
+    assert detailed["report"]["body"]["chunks"][0] == "Café\n1"
+    assert all(chunk is None for chunk in detailed["report"]["body"]["chunks"][1:])
     with pytest.raises(HTTPException):
         mock_verifier(KbtBody(token=b64(kbt), audience="https://wrong.example"))
+    assert not verify_bundle(kbt, "https://wrong.example")["valid"]
 
     attacker = ec.generate_private_key(ec.SECP256R1())
     forged = Sign1Message(

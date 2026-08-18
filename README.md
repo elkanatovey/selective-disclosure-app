@@ -39,3 +39,9 @@ then export `*.kbt.cose`.
 The prototype exposes the mock MSRC holder key to the MSRC browser page. A real
 deployment must authenticate this page and keep that key in local secure storage
 or an HSM rather than returning it from an HTTP endpoint.
+
+Open `http://127.0.0.1:8090/verify` to verify an exported KBT against an
+externally supplied expected audience. The verifier displays the selectively
+disclosed report and separate status rows for COSE algorithms, issuer trust and
+signature, the SCITT receipt, KBT proof/freshness/audience, and disclosure
+consistency. Real Merkle inclusion remains explicitly unavailable in the mock.

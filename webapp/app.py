@@ -158,7 +158,7 @@ class KbtBody(BaseModel):
 def verify_issuer(token: bytes) -> dict[Any, Any]:
     value = parts(token)
     protected = cbor2.loads(value[0])
-    if protected.get(16) != 293 or protected.get(170) != -16:
+    if protected.get(1) != -7 or protected.get(16) != 293 or protected.get(170) != -16:
         raise ValueError("not the expected SD-CWT profile")
     chain = protected.get(33)
     if not isinstance(chain, list) or len(chain) != 2:
@@ -166,6 +166,11 @@ def verify_issuer(token: bytes) -> dict[Any, Any]:
     if chain[1] != state.governance_cert.public_bytes(serialization.Encoding.DER):
         raise ValueError("issuer is not endorsed by governance")
     leaf = x509.load_der_x509_certificate(chain[0])
+    now = datetime.now(UTC)
+    if not leaf.not_valid_before_utc <= now <= leaf.not_valid_after_utc:
+        raise ValueError("issuer certificate is outside its validity period")
+    if leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
+        raise ValueError("issuer leaf certificate must not be a CA")
     state.governance_cert.public_key().verify(
         leaf.signature, leaf.tbs_certificate_bytes, ec.ECDSA(leaf.signature_hash_algorithm)
     )
@@ -294,6 +299,9 @@ def verify_receipt(statement: bytes) -> str:
     if len(receipts) != 1:
         raise ValueError("SCITT receipt is missing")
     encoded = cbor(receipts[0])
+    receipt_protected = cbor2.loads(parts(encoded)[0])
+    if receipt_protected.get(1) != -7:
+        raise ValueError("unsupported receipt algorithm")
     message = Sign1Message.decode(encoded)
     message.key = public_cose(state.scitt_key.public_key())
     if not message.verify_signature():
@@ -307,7 +315,7 @@ def verify_receipt(statement: bytes) -> str:
 def verify_kbt(token: bytes, audience: str) -> dict[str, Any]:
     value = parts(token)
     protected = cbor2.loads(value[0])
-    if protected.get(16) != 294 or not isinstance(protected.get(13), CBORTag):
+    if protected.get(1) != -7 or protected.get(16) != 294 or not isinstance(protected.get(13), CBORTag):
         raise ValueError("invalid key binding token")
     statement = cbor(protected[13])
     payload = verify_issuer(statement)
@@ -325,6 +333,103 @@ def verify_kbt(token: bytes, audience: str) -> dict[str, Any]:
     return {"txid": txid, "fields": sorted(selected), "iat": claims.get(6)}
 
 
+def describe_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[str, Any]:
+    selected = resolve_selected(payload, presented)
+    names = {1001: "title", 1003: "component", 1004: "severity", 1005: "fingerprint", 1007: "patch", 1008: "patch_date"}
+    fields = {}
+    for key, name in names.items():
+        value = selected.get(key)
+        fields[name] = None if value is None else (value.hex() if isinstance(value, bytes) else value)
+    body = selected.get(1002)
+    if isinstance(body, dict):
+        openings = {hashlib.sha256(cbor(item)).digest(): cbor2.loads(item) for item in presented}
+        count = 0
+        for digest in payload[RCK]:
+            opening = openings.get(digest)
+            if opening is not None and len(opening) == 3 and opening[2] == 1002:
+                count = len(opening[1].get(RCK, []))
+                break
+        body_view = {"known": True, "chunks": [body.get(index) for index in range(count)]}
+    else:
+        body_view = {"known": False, "chunks": []}
+    return {"fields": fields, "body": body_view, "references": selected.get(1006)}
+
+
+def verify_bundle(token: bytes, audience: str) -> dict[str, Any]:
+    checks = []
+    def result(name: str, status: str, detail: str):
+        checks.append({"name": name, "status": status, "detail": detail})
+    try:
+        value = parts(token)
+        protected = cbor2.loads(value[0])
+        if protected.get(1) != -7 or protected.get(16) != 294 or not isinstance(protected.get(13), CBORTag):
+            raise ValueError("expected ES256 application/kb+cwt with kcwt")
+        statement = cbor(protected[13])
+        statement_value = parts(statement)
+        statement_protected = cbor2.loads(statement_value[0])
+        receipt_value = statement_value[1].get(SCITT_RECEIPTS, [])
+        if statement_protected.get(1) != -7 or statement_protected.get(16) != 293 or statement_protected.get(170) != -16:
+            raise ValueError("embedded statement algorithms/profile are unsupported")
+        if len(receipt_value) != 1 or cbor2.loads(parts(cbor(receipt_value[0]))[0]).get(1) != -7:
+            raise ValueError("receipt algorithm/profile is unsupported")
+        result("COSE envelopes and algorithms", "pass", "KBT, SD-CWT, and receipt use the expected ES256 profiles")
+    except Exception as exc:
+        result("COSE envelopes and algorithms", "fail", str(exc))
+        for name in ("Issuer trust and signature", "SCITT receipt", "KBT proof and audience", "Disclosure consistency"):
+            result(name, "skipped", "Blocked by invalid envelope structure")
+        result("SCITT Merkle inclusion", "unavailable", "The mock receipt has no Merkle proof")
+        return {"valid": False, "checks": checks, "report": None}
+    payload = None
+    txid = None
+    selected = None
+    try:
+        payload = verify_issuer(statement)
+        result("Issuer trust and signature", "pass", "Governance endorsement, did:x509 identity, schema, and issuer signature verified")
+    except Exception as exc:
+        result("Issuer trust and signature", "fail", str(exc))
+    try:
+        txid = verify_receipt(statement)
+        result("SCITT receipt", "pass", "Mock service signature and exact statement digest verified")
+    except Exception as exc:
+        result("SCITT receipt", "fail", str(exc))
+    try:
+        message = Sign1Message.decode(token)
+        message.key = public_cose(state.msrc_key.public_key())
+        if not message.verify_signature():
+            raise ValueError("signature does not match the cnf key")
+        claims = cbor2.loads(value[2])
+        if claims.get(3) != audience:
+            raise ValueError("audience does not match")
+        if 1 in claims or 2 in claims or not isinstance(claims.get(6), int):
+            raise ValueError("KBT claims are invalid")
+        now = int(time.time())
+        if claims[6] > now + 60 or claims[6] < now - 3600:
+            raise ValueError("KBT iat is outside the verifier window")
+        if 5 in claims and now < claims[5]:
+            raise ValueError("KBT is not yet valid")
+        if 4 in claims and now >= claims[4]:
+            raise ValueError("KBT has expired")
+        result("KBT proof and audience", "pass", "cnf proof-of-possession, audience, and iat verified")
+    except Exception as exc:
+        result("KBT proof and audience", "fail", str(exc))
+    try:
+        if payload is None:
+            raise ValueError("issuer payload is not trusted")
+        presented = statement_value[1].get(SD_CLAIMS, [])
+        selected = resolve_selected(payload, presented)
+        if not set(selected).issubset(set(range(1000, 1009))):
+            raise ValueError("disclosed fields are outside the report schema")
+        result("Disclosure consistency", "pass", "All presented openings match reachable hashes and the report schema")
+    except Exception as exc:
+        result("Disclosure consistency", "fail", str(exc))
+    result("SCITT Merkle inclusion", "unavailable", "The mock receipt has no Merkle proof")
+    report = None
+    if payload is not None and selected is not None:
+        report = describe_selected(payload, statement_value[1].get(SD_CLAIMS, []))
+        report.update({"subject": statement_protected.get(15, {}).get(2, ""), "txid": txid, "audience": audience})
+    return {"valid": all(check["status"] in {"pass", "unavailable"} for check in checks), "checks": checks, "report": report}
+
+
 @app.get("/")
 def home() -> FileResponse:
     return FileResponse(ROOT / "static" / "index.html")
@@ -333,6 +438,11 @@ def home() -> FileResponse:
 @app.get("/msrc")
 def msrc_home() -> FileResponse:
     return FileResponse(ROOT / "static" / "msrc.html")
+
+
+@app.get("/verify")
+def verifier_home() -> FileResponse:
+    return FileResponse(ROOT / "static" / "verify.html")
 
 
 @app.get("/api/state")
@@ -376,6 +486,14 @@ def inspect_msrc(body: DeliveryBody) -> dict[str, Any]:
 def mock_verifier(body: KbtBody) -> dict[str, Any]:
     try:
         return verify_kbt(unb64(body.token), body.audience)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/verify")
+def verify_api(body: KbtBody) -> dict[str, Any]:
+    try:
+        return verify_bundle(unb64(body.token), body.audience)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
