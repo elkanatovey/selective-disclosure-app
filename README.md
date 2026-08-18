@@ -30,3 +30,12 @@ uvicorn webapp.app:app --host 127.0.0.1 --port 8090
 ```
 
 Open `http://127.0.0.1:8090`. Run tests with `pytest`.
+
+Open `http://127.0.0.1:8090/msrc` for disclosure review. Load the downloaded
+`msrc-transparent-statement.cose`, uncheck fields or individual body/reference
+chunks to redact them, set the verifier audience, sign the Key Binding Token,
+then export `*.kbt.cose`.
+
+The prototype exposes the mock MSRC holder key to the MSRC browser page. A real
+deployment must authenticate this page and keep that key in local secure storage
+or an HSM rather than returning it from an HTTP endpoint.

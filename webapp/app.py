@@ -150,6 +150,11 @@ class DeliveryBody(BaseModel):
     statement: str
 
 
+class KbtBody(BaseModel):
+    token: str
+    audience: str
+
+
 def verify_issuer(token: bytes) -> dict[Any, Any]:
     value = parts(token)
     protected = cbor2.loads(value[0])
@@ -239,6 +244,50 @@ def resolve_all(payload: dict[Any, Any], presented: list[bytes]) -> dict[int, An
     return result
 
 
+def resolve_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[int, Any]:
+    openings = {}
+    for encoded in presented:
+        digest = hashlib.sha256(cbor(encoded)).digest()
+        if digest in openings:
+            raise ValueError("duplicate disclosure")
+        openings[digest] = cbor2.loads(encoded)
+    used = set()
+
+    def resolve(value: Any) -> Any:
+        if isinstance(value, dict) and RCK in value:
+            result = {}
+            for digest in value[RCK]:
+                opening = openings.get(digest)
+                if opening is not None:
+                    used.add(digest)
+                    _, item, key = opening
+                    result[key] = resolve(item)
+            return result
+        if isinstance(value, list):
+            result = []
+            for item in value:
+                if isinstance(item, CBORTag) and item.tag == 60:
+                    opening = openings.get(item.value)
+                    if opening is not None:
+                        used.add(item.value)
+                        result.append(resolve(opening[1]))
+                else:
+                    result.append(resolve(item))
+            return result
+        return value
+
+    result = {}
+    for digest in payload[RCK]:
+        opening = openings.get(digest)
+        if opening is not None:
+            used.add(digest)
+            _, value, field = opening
+            result[field] = resolve(value)
+    if used != set(openings):
+        raise ValueError("unmatched disclosure")
+    return result
+
+
 def verify_receipt(statement: bytes) -> str:
     value = parts(statement)
     receipts = value[1].get(SCITT_RECEIPTS, [])
@@ -255,9 +304,35 @@ def verify_receipt(statement: bytes) -> str:
     return claims[3]
 
 
+def verify_kbt(token: bytes, audience: str) -> dict[str, Any]:
+    value = parts(token)
+    protected = cbor2.loads(value[0])
+    if protected.get(16) != 294 or not isinstance(protected.get(13), CBORTag):
+        raise ValueError("invalid key binding token")
+    statement = cbor(protected[13])
+    payload = verify_issuer(statement)
+    txid = verify_receipt(statement)
+    message = Sign1Message.decode(token)
+    message.key = public_cose(state.msrc_key.public_key())
+    if not message.verify_signature():
+        raise ValueError("KBT signature does not match cnf")
+    claims = cbor2.loads(value[2])
+    if 1 in claims or 2 in claims or (6 not in claims and 7 not in claims):
+        raise ValueError("invalid KBT claims")
+    if claims.get(3) != audience:
+        raise ValueError("KBT audience mismatch")
+    selected = resolve_selected(payload, parts(statement)[1].get(SD_CLAIMS, []))
+    return {"txid": txid, "fields": sorted(selected), "iat": claims.get(6)}
+
+
 @app.get("/")
 def home() -> FileResponse:
     return FileResponse(ROOT / "static" / "index.html")
+
+
+@app.get("/msrc")
+def msrc_home() -> FileResponse:
+    return FileResponse(ROOT / "static" / "msrc.html")
 
 
 @app.get("/api/state")
@@ -269,6 +344,40 @@ def get_state() -> dict[str, Any]:
         "msrcKid": state.msrc_kid,
         "msrcJwk": {"kty": "EC", "crv": "P-256", "x": b64(point.x.to_bytes(32, "big")), "y": b64(point.y.to_bytes(32, "big"))},
     }
+
+
+@app.get("/mock/msrc/key")
+def get_msrc_key() -> dict[str, str]:
+    numbers = state.msrc_key.private_numbers()
+    public = numbers.public_numbers
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": b64(public.x.to_bytes(32, "big")),
+        "y": b64(public.y.to_bytes(32, "big")),
+        "d": b64(numbers.private_value.to_bytes(32, "big")),
+    }
+
+
+@app.post("/mock/msrc/inspect")
+def inspect_msrc(body: DeliveryBody) -> dict[str, Any]:
+    try:
+        statement = unb64(body.statement)
+        payload = verify_issuer(statement)
+        txid = verify_receipt(statement)
+        resolve_all(payload, parts(statement)[1].get(SD_CLAIMS, []))
+        protected = cbor2.loads(parts(statement)[0])
+        return {"txid": txid, "subject": protected.get(15, {}).get(2, "")}
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/mock/verifier")
+def mock_verifier(body: KbtBody) -> dict[str, Any]:
+    try:
+        return verify_kbt(unb64(body.token), body.audience)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/mock/governance/endorse")

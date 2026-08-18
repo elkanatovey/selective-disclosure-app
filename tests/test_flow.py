@@ -8,11 +8,14 @@ import pytest
 from cbor2 import CBORTag
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
+from pycose.algorithms import Es256
+from pycose.headers import Algorithm
 from pycose.messages import Sign1Message
 
 from webapp.app import (
     DeliveryBody,
     EndorseBody,
+    KbtBody,
     RCK,
     SCITT_RECEIPTS,
     SD_CLAIMS,
@@ -23,6 +26,7 @@ from webapp.app import (
     get_state,
     mock_msrc,
     mock_scitt,
+    mock_verifier,
     parts,
     private_cose,
     resolve_all,
@@ -155,3 +159,42 @@ def test_public_state_contains_only_public_key_material():
 
     with pytest.raises(HTTPException):
         endorse(EndorseBody(public_jwk={**public["msrcJwk"], "d": "secret"}))
+
+
+def test_kbt_selects_one_body_chunk_and_binds_audience():
+    redacted, disclosures, _ = browser_style_report()
+    registration = mock_scitt(TokenBody(token=b64(redacted)))
+    transparent = unb64(registration["transparent"])
+    decoded = [cbor2.loads(item) for item in disclosures]
+    selected = [
+        encoded
+        for encoded, item in zip(disclosures, decoded)
+        if len(item) == 3 and item[2] in {0, 1001, 1002}
+    ]
+    header = dict(parts(transparent)[1])
+    header[SD_CLAIMS] = selected
+    presented = with_uhdr(redacted, header)
+    audience = "https://researcher.example/verifier"
+    message = Sign1Message(
+        phdr={Algorithm: Es256, 13: cbor2.loads(presented), 16: 294},
+        uhdr={},
+        payload=cbor({3: audience, 6: int(time.time())}),
+    )
+    message.key = private_cose(state.msrc_key)
+    kbt = message.encode(tag=True)
+
+    result = mock_verifier(KbtBody(token=b64(kbt), audience=audience))
+    assert result["txid"] == registration["txid"]
+    assert result["fields"] == [1001, 1002]
+    with pytest.raises(HTTPException):
+        mock_verifier(KbtBody(token=b64(kbt), audience="https://wrong.example"))
+
+    attacker = ec.generate_private_key(ec.SECP256R1())
+    forged = Sign1Message(
+        phdr={Algorithm: Es256, 13: cbor2.loads(presented), 16: 294},
+        uhdr={},
+        payload=cbor({3: audience, 6: int(time.time())}),
+    )
+    forged.key = private_cose(attacker)
+    with pytest.raises(HTTPException):
+        mock_verifier(KbtBody(token=b64(forged.encode(tag=True)), audience=audience))

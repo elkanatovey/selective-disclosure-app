@@ -22,7 +22,7 @@ export function decode(bytes){
   const read=()=>{const first=take(1)[0],major=first>>5,ai=first&31;if(major===7){if(ai===20)return false;if(ai===21)return true;if(ai===22)return null;if(ai===24)return new Simple(take(1)[0]);throw new Error("unsupported CBOR simple value")}const n=uint(ai);if(major===0)return n;if(major===1)return-1-n;if(major===2)return take(n);if(major===3)return text.decode(take(n));if(major===4)return Array.from({length:n},read);if(major===5){const map=new Map();for(let i=0;i<n;i++)map.set(read(),read());return map}if(major===6)return new Tag(n,read());throw new Error("unsupported CBOR")};
   const value=read();if(at!==bytes.length)throw new Error("trailing CBOR");return value;
 }
-export const b64=bytes=>btoa(String.fromCharCode(...bytes)).replaceAll("+","-").replaceAll("/","_").replace(/=+$/g,"");
+export const b64=bytes=>{let value="";for(let i=0;i<bytes.length;i+=32768)value+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(value).replaceAll("+","-").replaceAll("/","_").replace(/=+$/g,"")};
 export const unb64=value=>Uint8Array.from(atob(value.replaceAll("-","+").replaceAll("_","/")+"=".repeat((4-value.length%4)%4)),c=>c.charCodeAt(0));
 const random=()=>crypto.getRandomValues(new Uint8Array(16)),hash=async bytes=>new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
 const digest=async opening=>hash(encode(opening));
@@ -67,4 +67,14 @@ export async function issueReport(subject,report,msrcJwk,endorse,signer){
 }
 export function present(transparent,issued){
   const tagged=decode(unb64(transparent));if(!(tagged instanceof Tag)||tagged.tag!==18)throw new Error("SCITT returned invalid COSE");const parts=tagged.value,stripped=encode(new Tag(18,[parts[0],new Map(),parts[2],parts[3]]));if(compare(stripped,issued.token)!==0)throw new Error("SCITT returned a different statement");if(!(parts[1] instanceof Map)||!parts[1].has(394))throw new Error("SCITT receipt is missing");parts[1].set(17,issued.disclosures);return encode(tagged);
+}
+const redKey=map=>[...map.keys()].find(key=>key instanceof Simple&&key.value===59);
+export async function inspectStatement(statement){
+  const tagged=decode(statement);if(!(tagged instanceof Tag)||tagged.tag!==18)throw new Error("file is not a COSE Sign1 statement");const parts=tagged.value,headers=parts[1];if(!(headers instanceof Map)||!headers.has(394)||!headers.has(17))throw new Error("file must contain a SCITT receipt and full disclosures");const payload=decode(parts[2]),root=redKey(payload),raw= headers.get(17),openings=new Map();
+  for(const encoded of raw)openings.set(b64(await digest(encoded)),{encoded,value:decode(encoded)});
+  const fields=new Map();for(const hash of payload.get(root)){const opening=openings.get(b64(hash));if(!opening)throw new Error("top-level disclosure is missing");const [,value,key]=opening.value,field={key,name:FIELDS.find(([,id])=>id===key)?.[0],opening:opening.encoded,value,children:[]};if(value instanceof Map){const nested=redKey(value);for(const hash of value.get(nested)||[]){const child=openings.get(b64(hash));if(child)field.children.push({index:child.value[2],value:child.value[1],opening:child.encoded})}field.children.sort((a,b)=>a.index-b.index)}else if(Array.isArray(value)){for(const [index,item] of value.entries())if(item instanceof Tag&&item.tag===60){const child=openings.get(b64(item.value));if(child)field.children.push({index,value:child.value[1],opening:child.encoded})}}fields.set(key,field)}
+  if(fields.size!==9)throw new Error("statement does not contain the report schema");return{statement,fields,payload};
+}
+export async function signKbt(model,selected,signer,audience){
+  if(!audience.trim())throw new TypeError("audience is required");if(!selected.length)throw new TypeError("select at least one disclosure");const cnf=model.payload.get(8)?.get(1),same=(left,right)=>compare(left,right)===0;if(!(cnf instanceof Map)||!same(cnf.get(-2),unb64(signer.publicJwk.x))||!same(cnf.get(-3),unb64(signer.publicJwk.y)))throw new Error("signing key does not match the statement cnf");const tagged=decode(model.statement),parts=tagged.value,headers=new Map(parts[1]);headers.set(17,selected);const presented=new Tag(18,[parts[0],headers,parts[2],parts[3]]),protectedBytes=encode(new Map([[1,-7],[13,presented],[16,294]])),payloadBytes=encode(new Map([[3,audience.trim()],[6,Math.floor(Date.now()/1000)]])),toSign=encode(["Signature1",protectedBytes,new Uint8Array(),payloadBytes]),signature=new Uint8Array(await crypto.subtle.sign({name:"ECDSA",hash:"SHA-256"},signer.privateKey,toSign));return encode(new Tag(18,[protectedBytes,new Map(),payloadBytes,signature]))
 }
