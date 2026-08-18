@@ -45,3 +45,40 @@ externally supplied expected audience. The verifier displays the selectively
 disclosed report and separate status rows for COSE algorithms, issuer trust and
 signature, the SCITT receipt, KBT proof/freshness/audience, and disclosure
 consistency. Real Merkle inclusion remains explicitly unavailable in the mock.
+
+## Interactive demo
+
+Start the web server:
+
+```bash
+. .venv/bin/activate
+uvicorn webapp.app:app --host 127.0.0.1 --port 8090
+```
+
+Then walk through the three roles:
+
+1. Open `http://127.0.0.1:8090`, submit a report, and download **MSRC delivery**.
+2. Open `http://127.0.0.1:8090/msrc`, load that `.cose` file, click or drag over
+    six-character body spans to redact/restore them, set the audience, sign, and
+    download the signed disclosure.
+3. Open `http://127.0.0.1:8090/verify`, load the `.kbt.cose`, enter the same
+    audience, and inspect the redacted report plus every verification result.
+
+The local mock state is in memory, so keep the same server process running for
+all three steps.
+
+## Real SCITT integration
+
+CI pins CCF `7.0.10` and SCITT commit
+`28a3458f5c3ec2c2a00c868a97515fc278150546`. On Azure Linux 3, run the same
+browser-crypto-to-real-ledger test with:
+
+```bash
+./scripts/ci-scitt.sh
+```
+
+It builds and launches SCITT, configures local governance, issues the SD-CWT
+with `webapp/static/sdcwt.js`, registers it through `/entries`, verifies the
+real standalone and embedded CCF receipts, constructs a partial KBT, and verifies
+the holder signature, audience, report schema, and disclosures. Generated
+artifacts are written under `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.

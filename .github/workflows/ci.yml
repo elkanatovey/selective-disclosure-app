@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -e '.[test]'
+      - run: pytest -q
+      - run: node --check webapp/static/app.js && node --check webapp/static/sdcwt.js && node --check webapp/static/msrc.js && node --check webapp/static/verify.js
+
+  real-scitt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container: mcr.microsoft.com/azurelinux/base/core:3.0.20260728
+    steps:
+      - name: Install system tools
+        run: tdnf install -y ca-certificates curl git jq rpm-build python3-pip nodejs procps util-linux
+      - uses: actions/checkout@v4
+      - name: Run browser-to-SCITT integration
+        run: ./scripts/ci-scitt.sh
+      - name: Upload integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-scitt-artifacts
+          path: ${{ runner.temp }}/scitt-ci/artifacts
