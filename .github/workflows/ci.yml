@@ -33,8 +33,13 @@ jobs:
         run: |
           gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
           tdnf update -y
-          tdnf install -y --disablerepo azurelinux-official-ms-non-oss build-essential ca-certificates curl git jq rpm-build python3-pip nodejs procps util-linux
+          tdnf install -y --disablerepo azurelinux-official-ms-non-oss build-essential ca-certificates curl git jq rpm-build python3-pip nodejs procps tar util-linux zstd
       - uses: actions/checkout@v4
+      - name: Cache built SCITT
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/scitt-ci/install
+          key: scitt-install-28a3458f5c3ec2c2a00c868a97515fc278150546-ccf-7.0.10-azurelinux-3.0-${{ runner.arch }}
       - name: Run browser-to-SCITT integration
         run: ./scripts/ci-scitt.sh
       - name: Upload integration artifacts
