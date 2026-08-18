@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import csv
 import hashlib
+import os
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,8 @@ ROOT = Path(__file__).parent
 RCK = CBORSimpleValue(59)
 SD_CLAIMS = 17
 SCITT_RECEIPTS = 394
+REAL_SCITT_URL = os.getenv("SCITT_URL")
+REAL_SCITT_CA = os.getenv("SCITT_CA")
 
 
 def b64(data: bytes) -> str:
@@ -176,6 +179,32 @@ class KbtBody(BaseModel):
     audience: str
 
 
+def real_scitt_config():
+    if not REAL_SCITT_URL or not REAL_SCITT_CA:
+        return None
+    try:
+        import ccf.cose
+        import requests
+    except ImportError as exc:
+        raise RuntimeError("install the real-scitt optional dependencies") from exc
+    ca = Path(REAL_SCITT_CA)
+    key = x509.load_pem_x509_certificate(ca.read_bytes()).public_key()
+    return requests, ccf.cose, ca, key
+
+
+def receipt_bytes(receipt: Any) -> bytes:
+    return receipt if isinstance(receipt, bytes) else cbor(receipt)
+
+
+def registration_txid(receipt: bytes) -> str:
+    value = parts(receipt)
+    for encoded in value[1].get(396, {}).get(-1, []):
+        evidence = cbor2.loads(encoded).get(1, [None, ""])[1]
+        if isinstance(evidence, str) and evidence.startswith("ce:"):
+            return evidence.split(":", 2)[1]
+    raise ValueError("receipt has no registration transaction ID")
+
+
 def verify_issuer(token: bytes) -> dict[Any, Any]:
     value = parts(token)
     protected = cbor2.loads(value[0])
@@ -314,15 +343,22 @@ def resolve_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[in
     return result
 
 
-def verify_receipt(statement: bytes) -> str:
+def verify_receipt_details(statement: bytes) -> dict[str, Any]:
     value = parts(statement)
     receipts = value[1].get(SCITT_RECEIPTS, [])
     if len(receipts) != 1:
         raise ValueError("SCITT receipt is missing")
-    encoded = cbor(receipts[0])
+    encoded = receipt_bytes(receipts[0])
     receipt_protected = cbor2.loads(parts(encoded)[0])
-    if receipt_protected.get(1) != -7:
+    if receipt_protected.get(1) not in {-7, -35}:
         raise ValueError("unsupported receipt algorithm")
+    if isinstance(receipts[0], bytes):
+        config = real_scitt_config()
+        if config is None:
+            raise ValueError("real SCITT trust configuration is unavailable")
+        _, cose, _, key = config
+        cose.verify_receipt(encoded, key, hashlib.sha256(with_uhdr(statement, {})).digest())
+        return {"txid": registration_txid(encoded), "merkle": True}
     message = Sign1Message.decode(encoded)
     message.key = public_cose(state.scitt_key.public_key())
     if not message.verify_signature():
@@ -330,7 +366,11 @@ def verify_receipt(statement: bytes) -> str:
     claims = cbor2.loads(message.payload)
     if claims.get(2) != hashlib.sha256(with_uhdr(statement, {})).digest():
         raise ValueError("receipt does not bind this statement")
-    return claims[3]
+    return {"txid": claims[3], "merkle": False}
+
+
+def verify_receipt(statement: bytes) -> str:
+    return verify_receipt_details(statement)["txid"]
 
 
 def verify_kbt(token: bytes, audience: str) -> dict[str, Any]:
@@ -391,7 +431,7 @@ def verify_bundle(token: bytes, audience: str) -> dict[str, Any]:
         receipt_value = statement_value[1].get(SCITT_RECEIPTS, [])
         if statement_protected.get(1) != -7 or statement_protected.get(16) != 293 or statement_protected.get(170) != -16:
             raise ValueError("embedded statement algorithms/profile are unsupported")
-        if len(receipt_value) != 1 or cbor2.loads(parts(cbor(receipt_value[0]))[0]).get(1) != -7:
+        if len(receipt_value) != 1 or cbor2.loads(parts(receipt_bytes(receipt_value[0]))[0]).get(1) not in {-7, -35}:
             raise ValueError("receipt algorithm/profile is unsupported")
         result("COSE envelopes and algorithms", "pass", "KBT, SD-CWT, and receipt use the expected ES256 profiles")
     except Exception as exc:
@@ -409,8 +449,9 @@ def verify_bundle(token: bytes, audience: str) -> dict[str, Any]:
     except Exception as exc:
         result("Issuer trust and signature", "fail", str(exc))
     try:
-        txid = verify_receipt(statement)
-        result("SCITT receipt", "pass", "Mock service signature and exact statement digest verified")
+        receipt_info = verify_receipt_details(statement)
+        txid = receipt_info["txid"]
+        result("SCITT receipt", "pass", "Service signature and exact statement digest verified")
     except Exception as exc:
         result("SCITT receipt", "fail", str(exc))
     try:
@@ -443,7 +484,10 @@ def verify_bundle(token: bytes, audience: str) -> dict[str, Any]:
         result("Disclosure consistency", "pass", "All presented openings match reachable hashes and the report schema")
     except Exception as exc:
         result("Disclosure consistency", "fail", str(exc))
-    result("SCITT Merkle inclusion", "unavailable", "The mock receipt has no Merkle proof")
+    if "receipt_info" in locals() and receipt_info["merkle"]:
+        result("SCITT Merkle inclusion", "pass", "CCF Merkle inclusion proof verified")
+    else:
+        result("SCITT Merkle inclusion", "unavailable", "The mock receipt has no Merkle proof")
     report = None
     if payload is not None and selected is not None:
         report = describe_selected(payload, statement_value[1].get(SD_CLAIMS, []))
@@ -469,8 +513,13 @@ def verifier_home() -> FileResponse:
 @app.get("/api/state")
 def get_state() -> dict[str, Any]:
     point = state.msrc_key.public_key().public_numbers()
+    parties = [dict(party) for party in state.parties]
+    if REAL_SCITT_URL and REAL_SCITT_CA:
+        registry = next(party for party in parties if party["role"] == "registry")
+        registry.update({"name": "Real SCITT", "path": "/scitt/register"})
     return {
-        "parties": state.parties,
+        "parties": parties,
+        "ledger": {"mode": "real" if REAL_SCITT_URL and REAL_SCITT_CA else "mock", "name": "Real SCITT" if REAL_SCITT_URL and REAL_SCITT_CA else "Mock SCITT"},
         "issuer": state.issuer,
         "msrcKid": state.msrc_kid,
         "msrcJwk": {"kty": "EC", "crv": "P-256", "x": b64(point.x.to_bytes(32, "big")), "y": b64(point.y.to_bytes(32, "big"))},
@@ -554,6 +603,49 @@ def mock_scitt(body: TokenBody) -> dict[str, Any]:
         txid = f"1.{state.seqno}"
         transparent = with_uhdr(token, {SCITT_RECEIPTS: [cbor2.loads(receipt(token, txid))]})
         return {"txid": txid, "transparent": b64(transparent), "bytes": len(transparent)}
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/scitt/register")
+def real_scitt(body: TokenBody) -> dict[str, Any]:
+    try:
+        config = real_scitt_config()
+        if config is None:
+            raise ValueError("real SCITT is not configured")
+        requests, cose, ca, key = config
+        token = unb64(body.token)
+        response = requests.post(
+            f"{REAL_SCITT_URL}/entries?waitForCommit=true",
+            data=token,
+            headers={"content-type": "application/cose"},
+            verify=ca,
+            timeout=30,
+        )
+        response.raise_for_status()
+        txid = response.headers["x-ms-ccf-transaction-id"]
+        digest = hashlib.sha256(token).digest()
+        cose.verify_receipt(response.content, key, digest)
+        transparent = None
+        for _ in range(100):
+            fetched = requests.get(
+                f"{REAL_SCITT_URL}/entries/{txid}/statement", verify=ca, timeout=30
+            )
+            if fetched.status_code == 200:
+                transparent = fetched.content
+                break
+            if fetched.status_code not in (202, 503):
+                fetched.raise_for_status()
+            time.sleep(0.1)
+        if transparent is None:
+            raise TimeoutError(f"historical transaction {txid} remained uncached")
+        if with_uhdr(transparent, {}) != token:
+            raise ValueError("SCITT returned different signed bytes")
+        receipts = parts(transparent)[1].get(SCITT_RECEIPTS, [])
+        if len(receipts) != 1:
+            raise ValueError("transparent statement has no single receipt")
+        cose.verify_receipt(receipt_bytes(receipts[0]), key, digest)
+        return {"txid": txid, "transparent": b64(transparent), "bytes": len(transparent), "receiptVerified": True}
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 

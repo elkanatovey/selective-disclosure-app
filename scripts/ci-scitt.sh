@@ -92,6 +92,23 @@ python -m pyscitt.cli.governance local_development --url https://127.0.0.1:8000 
   --cacert "$COMMON/service_cert.pem" --member-key "$COMMON/member0_privk.pem" \
   --member-cert "$COMMON/member0_cert.pem" --service-trust-store "$ARTIFACTS/trust-store"
 
+if [[ ${SCITT_DEMO:-0} == 1 ]]; then
+  kill -- "-$WEB_PID" 2>/dev/null || true
+  wait "$WEB_PID" 2>/dev/null || true
+  WEB_PID=
+  SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
+    setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host 0.0.0.0 --port 8090 >"$WORK/webapp.log" 2>&1 &
+  WEB_PID=$!
+  printf '\nReal SCITT demo is ready:\n'
+  printf '  Researcher: http://127.0.0.1:8090/\n'
+  printf '  MSRC:       http://127.0.0.1:8090/msrc\n'
+  printf '  Verifier:   http://127.0.0.1:8090/verify\n'
+  printf '  SCITT:      https://127.0.0.1:8000\n'
+  printf '\nKeep this process running. Press Ctrl+C to stop the demo.\n'
+  wait "$WEB_PID"
+  exit
+fi
+
 node "$ROOT/scripts/scitt_flow.mjs" issue "$ARTIFACTS"
 python "$ROOT/scripts/scitt_flow.py" submit --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS"
 node "$ROOT/scripts/scitt_flow.mjs" present "$ARTIFACTS"

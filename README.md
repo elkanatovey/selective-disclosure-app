@@ -67,6 +67,18 @@ Then walk through the three roles:
 The local mock state is in memory, so keep the same server process running for
 all three steps.
 
+To run the same interactive pages against an actual local SCITT CCF Ledger
+instead of the mock registry:
+
+```bash
+./scripts/run-real-demo.sh
+```
+
+The first run installs/builds the pinned CCF/SCITT dependencies when necessary.
+Keep the command running, then use the same three URLs above. The submission
+page header will say **Real SCITT**, and its transaction/receipt come from the
+node on `https://127.0.0.1:8000`. Press Ctrl+C to stop both services.
+
 ## Real SCITT integration
 
 CI pins CCF `7.0.10` and SCITT commit

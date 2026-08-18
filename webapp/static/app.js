@@ -19,7 +19,7 @@ async function signer(){if(document.querySelector('[name="key-mode"]:checked').v
 
 async function load(){
   config=await fetch("/api/state").then(r=>r.json());
-  $("app-status").textContent="Ready";
+  $("app-status").textContent=config.ledger.name;
 }
 
 $("composer").addEventListener("submit",async event=>{
@@ -28,12 +28,12 @@ $("composer").addEventListener("submit",async event=>{
   try{
     status("working","Preparing submission","Signing report");
     const issued=await issueReport($("subject").value,report(),config.msrcJwk,jwk=>post(party("governance"),{public_jwk:jwk}),await signer());
-    status("working","Submitting report","Registering with SCITT");
+    status("working","Submitting report",`Registering with ${config.ledger.name}`);
     const registered=await post(party("registry"),{token:b64(issued.token)});
     const statement=present(registered.transparent,issued);
     status("working","Completing submission","Delivering to MSRC");
     const delivered=await post(party("holder"),{statement:b64(statement)});
-    status("success","Submission complete","Registered and delivered to MSRC");
+    status("success","Submission complete",`Registered in ${config.ledger.name} and delivered to MSRC`);
     artifacts={redacted:b64(issued.token),full:b64(statement)};
     $("txid").textContent=delivered.txid;$("redacted-size").textContent=`${issued.token.length.toLocaleString()} B`;$("full-size").textContent=`${statement.length.toLocaleString()} B`;$("confirmation").hidden=false;
   }catch(error){$("error").textContent=error.message;status("error","Submission failed","Report was not submitted")}
