@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.mypy_cache/
+.sd-demo/
+sandbox.log
+app/
+demo/
+test/
+third_party/
+tools/
