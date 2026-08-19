@@ -10,7 +10,7 @@ SCITT_SRC=${SCITT_SRC:-$WORK/scitt-ccf-ledger}
 SCITT_INSTALL=${SCITT_INSTALL:-$WORK/install}
 CCF_VENV=${SCITT_CI_VENV:-$WORK/ccf-venv}
 APP_VENV=${SCITT_APP_VENV:-$WORK/app-venv}
-CCF_VENV_STAMP=$CCF_VENV/.ccf-runtime-v3
+CCF_VENV_STAMP=$CCF_VENV/.ccf-runtime-v4
 APP_VENV_STAMP=$APP_VENV/.sd-cwt-runtime-v1
 NETWORK=$WORK/network
 ARTIFACTS=$WORK/artifacts
@@ -65,7 +65,7 @@ fi
 if [[ ! -x "$CCF_VENV/bin/python" || ! -f "$CCF_VENV_STAMP" ]]; then
   [[ -x "$CCF_VENV/bin/python" ]] || python3 -m venv "$CCF_VENV"
   "$CCF_VENV/bin/python" -m pip install --disable-pip-version-check -q -U pip
-  "$CCF_VENV/bin/python" -m pip install --disable-pip-version-check -q "ccf==$CCF_VERSION" "httpx==0.23.*" "loguru>=0.7,<0.8" "jwcrypto>=1.5,<2" "PyJWT>=2.10,<3" "pyasn1>=0.6,<0.7" "Jinja2>=3.1,<4" "matplotlib>=3.10,<4" "pandas>=2,<3" "fastapi>=0.115,<1" "uvicorn>=0.30,<1" certifi requests
+  "$CCF_VENV/bin/python" -m pip install --disable-pip-version-check -q "ccf==$CCF_VERSION" "httpx==0.23.*" "pycose>=1.1,<2" "loguru>=0.7,<0.8" "jwcrypto>=1.5,<2" "PyJWT>=2.10,<3" "pyasn1>=0.6,<0.7" "Jinja2>=3.1,<4" "matplotlib>=3.10,<4" "pandas>=2,<3" "fastapi>=0.115,<1" "uvicorn>=0.30,<1" certifi requests
   touch "$CCF_VENV_STAMP"
 fi
 if [[ ! -x "$APP_VENV/bin/python" || ! -f "$APP_VENV_STAMP" ]]; then
