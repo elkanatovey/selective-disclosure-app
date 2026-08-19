@@ -23,6 +23,7 @@ jobs:
       - run: pip install -e '.[test]'
       - run: pytest -q
       - run: node --check webapp/static/app.js && node --check webapp/static/sdcwt.js && node --check webapp/static/msrc.js && node --check webapp/static/verify.js
+      - run: bash -n scripts/run-mock-demo.sh scripts/run-real-demo.sh scripts/ci-scitt.sh
 
   real-scitt:
     runs-on: ubuntu-24.04

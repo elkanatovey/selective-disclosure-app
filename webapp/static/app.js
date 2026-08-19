@@ -9,15 +9,19 @@ async function post(path,body){
   if(!response.ok)throw new Error(data.detail||response.statusText);
   return data;
 }
+async function deliver(path,statement){
+  const response=await fetch(path,{method:"POST",headers:{"content-type":"application/cose"},body:statement});
+  const data=await response.json();if(!response.ok)throw new Error(data.detail||response.statusText);return data;
+}
 async function responseError(response){try{const data=await response.json();return new Error(data.detail||response.statusText)}catch{return new Error(response.statusText)}}
 const isCose=response=>response.headers.get("content-type")?.split(";",1)[0]==="application/cose";
 async function register(path,token){
   const response=await fetch(`${path}?waitForCommit=true`,{method:"POST",headers:{"content-type":"application/cose"},body:token});
-  if(!response.ok)throw await responseError(response);if(!isCose(response))throw new Error("SCITT did not return a COSE receipt");
+  if(!response.ok)throw await responseError(response);if(!isCose(response)||response.headers.get("x-receipt-verified")!=="true")throw new Error("SCITT receipt was not verified");
   const txid=response.headers.get("x-ms-ccf-transaction-id"),receipt=new Uint8Array(await response.arrayBuffer());if(!txid||!receipt.length)throw new Error("SCITT registration response is incomplete");
   for(let attempt=0;attempt<100;attempt++){
     const fetched=await fetch(`${path}/${encodeURIComponent(txid)}/statement`);
-    if(fetched.ok){if(!isCose(fetched))throw new Error("SCITT did not return a COSE statement");return{txid,transparent:b64(new Uint8Array(await fetched.arrayBuffer()))}}
+    if(fetched.ok){if(!isCose(fetched)||fetched.headers.get("x-receipt-verified")!=="true")throw new Error("SCITT statement receipt was not verified");return{txid,transparent:b64(new Uint8Array(await fetched.arrayBuffer()))}}
     if(![202,503].includes(fetched.status))throw await responseError(fetched);
     await new Promise(resolve=>setTimeout(resolve,100));
   }
@@ -46,7 +50,7 @@ $("composer").addEventListener("submit",async event=>{
     const registered=await register(party("registry"),issued.token);
     const statement=present(registered.transparent,issued);
     status("working","Completing submission","Delivering to MSRC");
-    const delivered=await post(party("holder"),{statement:b64(statement)});
+    const delivered=await deliver(party("holder"),statement);
     status("success","Submission complete",`Registered in ${config.ledger.name} and delivered to MSRC`);
     artifacts={redacted:b64(issued.token),full:b64(statement)};
     $("txid").textContent=delivered.txid;$("redacted-size").textContent=`${issued.token.length.toLocaleString()} B`;$("full-size").textContent=`${statement.length.toLocaleString()} B`;$("confirmation").hidden=false;

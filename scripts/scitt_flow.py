@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from pycose.keys import CoseKey
 from pycose.messages import Sign1Message
 
-from webapp.app import resolve_selected
+from webapp.crypto import resolve_selected
 
 RCK = CBORSimpleValue(59)
 
@@ -44,16 +44,20 @@ def submit(args):
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
     token = (output / "statement.cose").read_bytes()
+    registry_url = args.researcher_url or args.url
+    registry_verify = args.cacert if args.researcher_url is None else True
     response = requests.post(
-        f"{args.url}/entries?waitForCommit=true",
+        f"{registry_url}/entries?waitForCommit=true",
         data=token,
         headers={"content-type": "application/cose"},
-        verify=args.cacert,
+        verify=registry_verify,
         timeout=30,
     )
     response.raise_for_status()
     if response.status_code != 201:
         raise AssertionError(f"unexpected registration status {response.status_code}")
+    if args.researcher_url and response.headers.get("x-receipt-verified") != "true":
+        raise AssertionError("researcher did not verify the standalone receipt")
     txid = response.headers["x-ms-ccf-transaction-id"]
     digest = hashlib.sha256(token).digest()
     key = service_key(args.cacert)
@@ -61,11 +65,13 @@ def submit(args):
     transparent = None
     for _ in range(100):
         fetched = requests.get(
-            f"{args.url}/entries/{txid}/statement",
-            verify=args.cacert,
+            f"{registry_url}/entries/{txid}/statement",
+            verify=registry_verify,
             timeout=30,
         )
         if fetched.status_code == 200:
+            if args.researcher_url and fetched.headers.get("x-receipt-verified") != "true":
+                raise AssertionError("researcher did not verify the embedded receipt")
             transparent = fetched.content
             break
         if fetched.status_code not in (202, 503):
@@ -176,6 +182,8 @@ for command, function in (("submit", submit), ("verify", verify), ("reject", rej
     child.add_argument("--url", default="https://127.0.0.1:8000")
     child.add_argument("--cacert", type=Path, required=True)
     child.add_argument("--output", type=Path, required=True)
+    if command == "submit":
+        child.add_argument("--researcher-url")
     child.set_defaults(function=function)
 arguments = parser.parse_args()
 arguments.function(arguments)

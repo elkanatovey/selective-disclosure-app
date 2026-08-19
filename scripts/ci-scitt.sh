@@ -9,22 +9,29 @@ WORK=${SCITT_CI_WORK:-${RUNNER_TEMP:-/tmp}/scitt-ci}
 SCITT_SRC=${SCITT_SRC:-$WORK/scitt-ccf-ledger}
 SCITT_INSTALL=${SCITT_INSTALL:-$WORK/install}
 VENV=${SCITT_CI_VENV:-$WORK/venv}
+VENV_STAMP=$VENV/.scitt-runtime-v2
 NETWORK=$WORK/network
 ARTIFACTS=$WORK/artifacts
 COMMON=$NETWORK/ci_common
 SCITT_PID=
-WEB_PID=
-FOREIGN_WEB_PID=
+RESEARCHER_PID=
+MSRC_PID=
+VERIFIER_PID=
+FOREIGN_MSRC_PID=
 
 cleanup(){
   status=$?
   if [[ $status -ne 0 ]]; then
     printf '\nSCITT log:\n'; tail -n 120 "$WORK/scitt.log" 2>/dev/null || true
-    printf '\nWebapp log:\n'; tail -n 80 "$WORK/webapp.log" 2>/dev/null || true
-    printf '\nForeign issuer log:\n'; tail -n 40 "$WORK/foreign-webapp.log" 2>/dev/null || true
+    printf '\nResearcher log:\n'; tail -n 80 "$WORK/researcher.log" 2>/dev/null || true
+    printf '\nMSRC log:\n'; tail -n 80 "$WORK/msrc.log" 2>/dev/null || true
+    printf '\nVerifier log:\n'; tail -n 80 "$WORK/verifier.log" 2>/dev/null || true
+    printf '\nForeign MSRC log:\n'; tail -n 40 "$WORK/foreign-msrc.log" 2>/dev/null || true
   fi
-  [[ -z "$FOREIGN_WEB_PID" ]] || kill -- "-$FOREIGN_WEB_PID" 2>/dev/null || true
-  [[ -z "$WEB_PID" ]] || kill -- "-$WEB_PID" 2>/dev/null || true
+  [[ -z "$FOREIGN_MSRC_PID" ]] || kill -- "-$FOREIGN_MSRC_PID" 2>/dev/null || true
+  [[ -z "$RESEARCHER_PID" ]] || kill -- "-$RESEARCHER_PID" 2>/dev/null || true
+  [[ -z "$MSRC_PID" ]] || kill -- "-$MSRC_PID" 2>/dev/null || true
+  [[ -z "$VERIFIER_PID" ]] || kill -- "-$VERIFIER_PID" 2>/dev/null || true
   [[ -z "$SCITT_PID" ]] || kill -- "-$SCITT_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -50,21 +57,29 @@ if [[ ! -x "$SCITT_INSTALL/bin/cchost" ]]; then
   cmake --build "$WORK/build" --target install
 fi
 
-if [[ ! -x "$VENV/bin/python" ]]; then
-  python3 -m venv "$VENV"
+if [[ ! -x "$VENV/bin/python" || ! -f "$VENV_STAMP" ]]; then
+  [[ -x "$VENV/bin/python" ]] || python3 -m venv "$VENV"
   source "$VENV/bin/activate"
   python -m pip install --disable-pip-version-check -q -U pip
-  python -m pip install --disable-pip-version-check -q -e "$ROOT[test]" "ccf==$CCF_VERSION" "httpx==0.23.*" "loguru>=0.7,<0.8" "jwcrypto>=1.5,<2" "PyJWT>=2.10,<3" "pyasn1>=0.6,<0.7" "Jinja2>=3.1,<4" "matplotlib>=3.10,<4" "pandas>=2,<3" certifi requests
+  python -m pip install --disable-pip-version-check -q -e "$ROOT" "ccf==$CCF_VERSION" "httpx==0.23.*" "loguru>=0.7,<0.8" "jwcrypto>=1.5,<2" "PyJWT>=2.10,<3" "pyasn1>=0.6,<0.7" "Jinja2>=3.1,<4" "matplotlib>=3.10,<4" "pandas>=2,<3" certifi requests
+  touch "$VENV_STAMP"
 fi
 source "$VENV/bin/activate"
 export PYTHONPATH="$ROOT:$SCITT_SRC/pyscitt${PYTHONPATH:+:$PYTHONPATH}"
 PYTHONPATH="/opt/ccf/bin:$PYTHONPATH" python -c "import infra.e2e_args, infra.network"
 
-WEB_HOST=127.0.0.1
-[[ ${SCITT_DEMO:-0} == 1 ]] && WEB_HOST=0.0.0.0
+APP_HOST=127.0.0.1
+[[ ${SCITT_DEMO:-0} == 1 ]] && APP_HOST=0.0.0.0
 SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
-  setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host "$WEB_HOST" --port 8090 >"$WORK/webapp.log" 2>&1 &
-WEB_PID=$!
+  RESEARCHER_ORIGIN=http://127.0.0.1:8090 \
+  setsid python -m uvicorn webapp.msrc:app --app-dir "$ROOT" --host "$APP_HOST" --port 8091 >"$WORK/msrc.log" 2>&1 &
+MSRC_PID=$!
+MSRC_URL=http://127.0.0.1:8091 SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
+  setsid python -m uvicorn webapp.researcher:app --app-dir "$ROOT" --host "$APP_HOST" --port 8090 >"$WORK/researcher.log" 2>&1 &
+RESEARCHER_PID=$!
+MSRC_URL=http://127.0.0.1:8091 SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
+  setsid python -m uvicorn webapp.verifier:app --app-dir "$ROOT" --host "$APP_HOST" --port 8092 >"$WORK/verifier.log" 2>&1 &
+VERIFIER_PID=$!
 export CURL_CLIENT=ON INITIAL_MEMBER_COUNT=1
 setsid python /opt/ccf/bin/start_network.py --binary-dir /opt/ccf/bin --package "$SCITT_INSTALL/bin/cchost" \
   --constitution "$SCITT_INSTALL/share/scitt/constitution/actions.js" \
@@ -117,7 +132,7 @@ client = Client(
 )
 setup_local_development(client, trust_store)
 
-issuer = requests.get("http://127.0.0.1:8090/api/state", timeout=5).json()["issuer"]
+issuer = requests.get("http://127.0.0.1:8091/api/public", timeout=5).json()["issuer"]
 ca_prefix = issuer.split("::", 1)[0] + "::"
 policy = (
     "export function apply(phdr) { "
@@ -138,37 +153,57 @@ PY
 if [[ ${SCITT_DEMO:-0} == 1 ]]; then
   printf '\nReal SCITT demo is ready:\n'
   printf '  Researcher: http://127.0.0.1:8090/\n'
-  printf '  MSRC:       http://127.0.0.1:8090/msrc\n'
-  printf '  Verifier:   http://127.0.0.1:8090/verify\n'
+  printf '  MSRC:       http://127.0.0.1:8091/\n'
+  printf '  Verifier:   http://127.0.0.1:8092/\n'
   printf '  SCITT:      https://127.0.0.1:8000\n'
   printf '\nKeep this process running. Press Ctrl+C to stop the demo.\n'
-  wait "$WEB_PID"
+  wait "$RESEARCHER_PID"
   exit
 fi
 
 node "$ROOT/scripts/scitt_flow.mjs" issue "$ARTIFACTS"
-python "$ROOT/scripts/scitt_flow.py" submit --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS"
+python "$ROOT/scripts/scitt_flow.py" submit --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS" --researcher-url http://127.0.0.1:8090
 node "$ROOT/scripts/scitt_flow.mjs" present "$ARTIFACTS"
 python "$ROOT/scripts/scitt_flow.py" verify --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS"
-setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host 127.0.0.1 --port 8091 >"$WORK/foreign-webapp.log" 2>&1 &
-FOREIGN_WEB_PID=$!
+python - "$ARTIFACTS" <<'PY'
+import json, sys
+from pathlib import Path
+import requests
+
+artifacts = Path(sys.argv[1])
+audience = json.loads((artifacts / "expected.json").read_text())["audience"]
+response = requests.post(
+  "http://127.0.0.1:8092/api/verify",
+  params={"audience": audience},
+  data=(artifacts / "disclosure.kbt.cose").read_bytes(),
+  headers={"content-type": "application/cose"},
+  timeout=30,
+)
+response.raise_for_status()
+if not response.json()["valid"]:
+  raise AssertionError("independent verifier rejected the real SCITT disclosure")
+print(json.dumps({"phase": "verifier-app", "valid": True}))
+PY
+SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
+  setsid python -m uvicorn webapp.msrc:app --app-dir "$ROOT" --host 127.0.0.1 --port 8093 >"$WORK/foreign-msrc.log" 2>&1 &
+FOREIGN_MSRC_PID=$!
 python - <<'PY'
 import time
 import requests
 
 for _ in range(40):
   try:
-    if requests.get("http://127.0.0.1:8091/api/state", timeout=1).status_code == 200:
+    if requests.get("http://127.0.0.1:8093/api/public", timeout=1).status_code == 200:
       break
   except requests.RequestException:
     pass
   time.sleep(.1)
 else:
-  raise TimeoutError("foreign issuer service did not become ready")
+  raise TimeoutError("foreign MSRC service did not become ready")
 PY
-node "$ROOT/scripts/scitt_flow.mjs" issue "$ARTIFACTS/foreign" http://127.0.0.1:8091
-kill -- "-$FOREIGN_WEB_PID" 2>/dev/null || true
-wait "$FOREIGN_WEB_PID" 2>/dev/null || true
-FOREIGN_WEB_PID=
+node "$ROOT/scripts/scitt_flow.mjs" issue-foreign "$ARTIFACTS/foreign" http://127.0.0.1:8093
+kill -- "-$FOREIGN_MSRC_PID" 2>/dev/null || true
+wait "$FOREIGN_MSRC_PID" 2>/dev/null || true
+FOREIGN_MSRC_PID=
 python "$ROOT/scripts/scitt_flow.py" reject --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS/foreign"
 printf 'Real SCITT integration passed. Artifacts: %s\n' "$ARTIFACTS"

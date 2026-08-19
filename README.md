@@ -1,51 +1,50 @@
 # Bug Report Submission
 
 An end-to-end prototype for submitting a vulnerability report as a selectively
-disclosable SD-CWT, registering the signed statement in SCITT, and later
-presenting only the fields chosen by MSRC.
+disclosable SD-CWT, registering it in SCITT, and presenting only the fields
+chosen by MSRC.
+
+## Architecture
+
+Each role runs as an independent application with its own process and origin:
 
 ```text
-Researcher browser
-    -> signs SD-CWT with cnf = MSRC public key
-    -> registers the redacted statement in SCITT
-    -> delivers the transparent statement to MSRC
-MSRC
-    -> selects disclosures and signs a KBT
-    -> sends the presentation to the verifier
-Verifier
-    -> checks trust, receipt, holder proof, audience, and disclosures
+Researcher :8090  --->  SCITT :8000
+      |                    |
+      v                    | receipt
+MSRC :8091 <---------------+
+      |
+      | signed KBT
+      v
+Verifier :8092
 ```
 
-The repository supports two registry modes:
+| Service | Owns | Does not own |
+| --- | --- | --- |
+| Researcher | UI, submitted statement bytes, SCITT receipt verification | MSRC or SCITT private keys |
+| MSRC | Researcher CA, holder key, delivery inbox, KBT signing | SCITT ledger state |
+| Verifier | Public trust configuration only | Any private key or shared process state |
+| SCITT | Ledger and receipt key | MSRC holder key |
 
-- **Mock mode** runs every service in one FastAPI process for a quick demo.
-- **Real mode** registers statements with an actual local SCITT CCF Ledger and
-    verifies its CCF receipt and Merkle inclusion proof. The MSRC Researcher CA
-    and MSRC key custody remain local prototype services in both modes.
+The three applications share only [webapp/crypto.py](webapp/crypto.py), a
+state-free COSE/SD-CWT library. The Verifier derives the holder verification key
+from the signed statement's `cnf` claim. The MSRC private key is never returned
+by an HTTP endpoint.
 
-Both modes expose the same SCITT-compatible registry facade: the browser posts
-raw `application/cose` to `/entries` and retrieves the transparent COSE
-statement from `/entries/{txid}/statement`. Real mode forwards that exchange to
-the CCF node; mock mode implements the same contract in memory.
+## Researcher completion gate
 
-## What the prototype does
+The researcher page does not report success merely because SCITT returned an
+HTTP response. Its backend must:
 
-- Generates a non-exportable P-256 researcher signing key in the browser, or
-    imports a private P-256 PKCS#8 PEM/JWK without uploading the private key.
-- Has the prototype MSRC Researcher CA certify only the public signing key.
-- Fetches MSRC's public key automatically and places it in the SD-CWT `cnf`
-    claim before signing.
-- Encodes the strict nine-claim report profile. Missing fields receive random
-    padding so the public statement always has the same shape.
-- Splits normalized body text into independently redactable,
-    position-preserving six-codepoint chunks. References are independently
-    redactable as well.
-- Sends only the redacted COSE Sign1 statement to SCITT, then gives MSRC the
-    complete disclosures with the embedded SCITT receipt.
-- Lets MSRC select fields and chunks, bind the presentation to an audience,
-    sign a Key Binding Token (KBT) with the key named by `cnf`, and export it.
-- Verifies the issuer signature and trust chain, SCITT receipt, KBT holder
-    proof, expected audience, freshness, report schema, and disclosure hashes.
+1. Verify the standalone SCITT receipt against the exact submitted statement.
+2. Match the receipt transaction ID to the SCITT response header.
+3. Fetch the transparent statement.
+4. Verify that its signed bytes exactly match the browser-signed statement.
+5. Verify the embedded receipt and transaction ID.
+
+Only verified responses carry `x-receipt-verified: true`. The browser requires
+that header on both registration and retrieval before delivering anything to
+MSRC or displaying **Submission complete**.
 
 ## Mock demo
 
@@ -54,107 +53,109 @@ Requires Python 3.11 or newer and a browser with WebCrypto support.
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[test]'
-.venv/bin/python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8090
+./scripts/run-mock-demo.sh
 ```
 
-Keep that process running while completing the three roles:
+This starts four independent processes:
 
-1. Open `http://127.0.0.1:8090/`. Submit a report, then download **MSRC
-     delivery** (`msrc-transparent-statement.cose`).
-2. Open `http://127.0.0.1:8090/msrc`. Load the MSRC delivery, click fields or
-     click and drag over body chunks to redact or restore them, enter the
-     verifier audience, select **Sign disclosure**, and export the `.kbt.cose`.
-3. Open `http://127.0.0.1:8090/verify`. Load the KBT and enter exactly the same
-     expected audience. A valid presentation shows **Disclosure verified** and
-     the independently disclosed report content.
+- Researcher: `http://127.0.0.1:8090/`
+- MSRC: `http://127.0.0.1:8091/`
+- Verifier: `http://127.0.0.1:8092/`
+- Mock SCITT: `http://127.0.0.1:8000/`
 
-For a negative check, verify the same KBT with a different expected audience.
-The KBT proof and audience check fails and the overall result is
-**Verification failed**.
+Walk through the roles while the launcher remains running:
 
-Mock state and keys exist only in memory. Restarting the server invalidates
-artifacts from the previous process. The mock receipt has no Merkle proof, so
-that check is shown as unavailable rather than passed.
+1. Submit at the Researcher app and download **MSRC delivery**.
+2. Open the MSRC app, load `msrc-transparent-statement.cose`, select the fields
+   and six-codepoint body chunks to disclose, enter the audience, sign, and
+   download the `.kbt.cose` file.
+3. Open the Verifier app, load the KBT, enter exactly the same expected
+   audience, and inspect the independent verification results.
+
+For a negative check, enter a different audience in the Verifier. The KBT proof
+and audience check fails and the overall result is **Verification failed**.
+
+Mock SCITT uses the same raw `application/cose` API as real SCITT:
+`POST /entries` returns a COSE receipt and
+`GET /entries/{txid}/statement` returns a transparent COSE statement. Its
+ledger and all service keys are in memory and disappear when the launcher
+stops. Mock receipts have no Merkle proof, so that check is reported as
+unavailable.
 
 ## Real SCITT demo
 
-The real-ledger launcher is supported on x86-64 Azure Linux 3, matching the CI
-job. It requires permission to install the pinned CCF RPM on its first run,
-network access, and these system tools:
+The real-ledger launcher is supported on x86-64 Azure Linux 3, matching CI. It
+requires permission to install the pinned CCF RPM, network access, and these
+system tools:
 
 ```bash
 gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
 tdnf update -y
 tdnf install -y --disablerepo azurelinux-official-ms-non-oss \
-    build-essential ca-certificates curl git jq rpm-build python3-pip \
-    nodejs procps tar util-linux zstd
+  build-essential ca-certificates curl git jq rpm-build python3-pip \
+  nodejs procps tar util-linux zstd
 ```
 
-Run those package commands as root in the Azure Linux environment. Then, from
-the repository root, start the persistent demo:
+Run those package commands as root, then start the persistent demo:
 
 ```bash
 ./scripts/run-real-demo.sh
 ```
 
-The first run downloads and verifies CCF `7.0.10`, clones and builds SCITT at
-commit `28a3458f5c3ec2c2a00c868a97515fc278150546`, and creates an isolated Python
-environment under `/tmp/scitt-real-demo`. It can take several minutes. Later
-runs reuse the built SCITT tree and environment.
+The first run downloads and verifies CCF `7.0.10`, builds SCITT commit
+`28a3458f5c3ec2c2a00c868a97515fc278150546`, and creates an isolated Python
+environment. Later runs reuse those installations. Wait for
+`Real SCITT demo is ready`, then use the same three app URLs listed above. The
+SCITT node is `https://127.0.0.1:8000`.
 
-Wait for `Real SCITT demo is ready`, keep the command running, and follow the
-same three-page walkthrough:
+The launcher submits a real CCF governance proposal restricting registration
+to `did:x509` identities rooted in that run's MSRC Researcher CA. SCITT verifies
+the COSE signature and certificate chain before applying the policy. CI also
+submits an otherwise valid statement from a foreign CA and requires SCITT to
+reject it.
 
-- Researcher: `http://127.0.0.1:8090/`
-- MSRC: `http://127.0.0.1:8090/msrc`
-- Verifier: `http://127.0.0.1:8090/verify`
-- SCITT node: `https://127.0.0.1:8000`
-
-The browser does not connect directly to the SCITT HTTPS endpoint. Its
-same-origin requests go to FastAPI on port 8090, and FastAPI submits them to
-SCITT. The backend uses CCF's generated service certificate as an explicit CA
-and validates the node certificate for `127.0.0.1`; TLS verification is not
-disabled. Opening port 8000 directly in a browser would require installing that
-local service certificate as a trusted CA.
-
-The researcher page header says **Real SCITT** in this mode. Registration,
-transaction ID, receipt, and Merkle proof come from the local CCF node. Press
-Ctrl+C in the launcher terminal to stop both services. Ports 8090 and 8000 must
-be available before starting it.
-
-The launcher submits a real CCF governance proposal that restricts registration
-to `did:x509` identities rooted in the currently running MSRC Researcher CA.
-SCITT verifies the COSE signature and certificate chain before applying that
-policy. The CA is ephemeral, so restarting the demo creates and governs a new
-trusted root.
+The browser does not connect directly to SCITT TLS. The Researcher backend uses
+CCF's generated service certificate as an explicit CA and validates the node's
+`127.0.0.1` identity. TLS verification is never disabled.
 
 ## Tests
-
-Run the unit and negative-path tests after installing the mock demo:
 
 ```bash
 .venv/bin/python -m pytest -q
 ```
 
-To run the non-interactive browser-crypto-to-real-ledger integration on Azure
-Linux 3:
+The tests cover fixed-shape SD-CWT issuance, disclosure reconstruction,
+`cnf`-derived KBT verification, wrong audience and wrong key rejection,
+corrupted receipt rejection, public-only MSRC metadata, and route/state
+separation across all apps.
+
+Run the complete real-ledger integration on Azure Linux 3 with:
 
 ```bash
 ./scripts/ci-scitt.sh
 ```
 
-The integration launches SCITT, governs the MSRC CA trust policy, issues the
-SD-CWT with `webapp/static/sdcwt.js`, registers it through `/entries`, and checks
-exact signed-byte preservation, standalone and embedded CCF receipts, Merkle
-inclusion, holder proof, audience binding, schema, and disclosures. It also
-proves that an otherwise valid statement rooted in a foreign CA is rejected.
-Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`; services
-stop when the integration completes.
+It verifies exact signed-byte preservation, standalone and embedded CCF
+receipts, Merkle inclusion, governed MSRC CA admission, foreign-CA rejection,
+server-side holder signing, audience binding, schema, and disclosures.
+Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.
 
-## Prototype security boundary
+## Project layout
 
-The MSRC page currently retrieves the prototype holder private key from the
-FastAPI process. A deployment must authenticate the MSRC interface and keep
-that key in browser-backed secure storage, an HSM, or another holder-controlled
-signing service. Similarly, the prototype MSRC Researcher CA is only a stand-in
-for an authenticated issuer-onboarding and certificate service.
+- [webapp/researcher.py](webapp/researcher.py): Researcher UI and verified SCITT proxy.
+- [webapp/msrc.py](webapp/msrc.py): MSRC CA, delivery validation, and KBT signing.
+- [webapp/verifier.py](webapp/verifier.py): Stateless independent verification.
+- [webapp/mock_scitt.py](webapp/mock_scitt.py): Standalone in-memory SCITT mock.
+- [webapp/crypto.py](webapp/crypto.py): Shared state-free cryptographic operations.
+- [webapp/static/sdcwt.js](webapp/static/sdcwt.js): Browser SD-CWT issuance and disclosure parsing.
+- [scripts/run-mock-demo.sh](scripts/run-mock-demo.sh): Split mock launcher.
+- [scripts/run-real-demo.sh](scripts/run-real-demo.sh): Split real-SCITT launcher.
+- [scripts/ci-scitt.sh](scripts/ci-scitt.sh): Full real-ledger integration.
+
+## Prototype boundaries
+
+The MSRC CA and holder keys are ephemeral and unauthenticated researcher
+endorsement is enabled for the demo. The Verifier retrieves the current MSRC
+public trust metadata over its configured service connection. Production must
+authenticate issuer onboarding and the MSRC UI, persist keys in an HSM or other
+holder-controlled signer, and provision verifier trust anchors independently.

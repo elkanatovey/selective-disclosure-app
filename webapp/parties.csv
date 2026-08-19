@@ -1,4 +1,0 @@
-role,name,path
-issuer,MSRC Researcher CA,/mock/msrc/endorse
-registry,Mock SCITT,/entries
-holder,MSRC,/mock/msrc
