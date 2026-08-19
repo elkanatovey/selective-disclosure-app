@@ -7,6 +7,7 @@ from typing import Any
 
 import cbor2
 import requests
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import FastAPI, HTTPException, Request
@@ -36,7 +37,6 @@ from .crypto import (
 ROOT = Path(__file__).parent
 SCITT_URL = os.getenv("SCITT_URL", "http://127.0.0.1:8000")
 SCITT_CA = os.getenv("SCITT_CA")
-RECEIPT_VERIFIER_URL = os.getenv("RECEIPT_VERIFIER_URL")
 RESEARCHER_ORIGIN = os.getenv("RESEARCHER_ORIGIN", "http://127.0.0.1:8090")
 
 
@@ -84,9 +84,8 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 def receipt_trust() -> ReceiptTrust:
     if SCITT_CA:
-        if not RECEIPT_VERIFIER_URL:
-            raise RuntimeError("real SCITT receipt verifier is not configured")
-        return ReceiptTrust(real_verifier_url=RECEIPT_VERIFIER_URL)
+        ca = x509.load_pem_x509_certificate(Path(SCITT_CA).read_bytes())
+        return ReceiptTrust(real_ca=ca)
     response = requests.get(f"{SCITT_URL}/api/trust", timeout=5)
     response.raise_for_status()
     return ReceiptTrust(mock_key=public_key_from_jwk(response.json()["publicJwk"]))

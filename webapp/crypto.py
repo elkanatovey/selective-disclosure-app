@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import cbor2
-import requests
 import sd_cwt
 from cbor2 import CBORSimpleValue, CBORTag
 from cryptography import x509
@@ -27,12 +26,12 @@ SCITT_RECEIPTS = 394
 
 @dataclass(frozen=True)
 class ReceiptTrust:
-    real_verifier_url: str | None = None
+    real_ca: x509.Certificate | None = None
     mock_key: ec.EllipticCurvePublicKey | None = None
 
     @property
     def merkle(self) -> bool:
-        return self.real_verifier_url is not None
+        return self.real_ca is not None
 
 
 def b64(data: bytes) -> str:
@@ -237,6 +236,15 @@ def receipt_bytes(receipt: Any) -> bytes:
     return receipt if isinstance(receipt, bytes) else cbor(receipt)
 
 
+def registration_txid(receipt: bytes) -> str:
+    value = parts(receipt)
+    for encoded in value[1].get(396, {}).get(-1, []):
+        evidence = cbor2.loads(encoded).get(1, [None, ""])[1]
+        if isinstance(evidence, str) and evidence.startswith("ce:"):
+            return evidence.split(":", 2)[1]
+    raise ValueError("receipt has no registration transaction ID")
+
+
 def verify_standalone_receipt(
     receipt: bytes,
     statement: bytes,
@@ -246,14 +254,11 @@ def verify_standalone_receipt(
     if protected.get(1) not in {-7, -35}:
         raise ValueError("unsupported receipt algorithm")
     digest = hashlib.sha256(statement).digest()
-    if trust.real_verifier_url is not None:
-        response = requests.post(
-            f"{trust.real_verifier_url}/verify",
-            json={"receipt": b64(receipt), "digest": b64(digest)},
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()["txid"]
+    if trust.real_ca is not None:
+        import ccf.cose
+
+        ccf.cose.verify_receipt(receipt, trust.real_ca.public_key(), digest)
+        return registration_txid(receipt)
     if trust.mock_key is None:
         raise ValueError("SCITT receipt trust is not configured")
     message = Sign1Message.decode(receipt)

@@ -20,7 +20,6 @@ import webapp.mock_scitt as mock_scitt_service
 import webapp.msrc as msrc_service
 import webapp.researcher as researcher_service
 import webapp.verifier as verifier_service
-import webapp.crypto as crypto_service
 from webapp.crypto import (
     RCK,
     SCITT_RECEIPTS,
@@ -263,29 +262,6 @@ def test_researcher_completion_requires_verified_receipts(monkeypatch):
     )
     assert rejected.status_code == 400
     assert "x-receipt-verified" not in rejected.headers
-
-
-def test_real_receipts_delegate_to_isolated_ccf_verifier(monkeypatch):
-    owner = authority()
-    redacted, _, _, _, receipt, _, _, txid = transparent_statement(owner)
-    request = {}
-
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"txid": txid}
-
-    def post(url, **kwargs):
-        request.update({"url": url, **kwargs})
-        return Response()
-
-    monkeypatch.setattr(crypto_service.requests, "post", post)
-    trust = ReceiptTrust(real_verifier_url="http://127.0.0.1:8093")
-    assert verify_standalone_receipt(receipt, redacted, trust) == txid
-    assert request["url"] == "http://127.0.0.1:8093/verify"
-    assert set(request["json"]) == {"receipt", "digest"}
 
 
 def test_apps_have_distinct_routes_and_private_state():

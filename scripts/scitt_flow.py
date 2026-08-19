@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import cbor2
+import ccf.cose
 import requests
 import sd_cwt
 from cbor2 import CBORSimpleValue, CBORTag
@@ -33,21 +34,17 @@ def bare(statement: bytes) -> bytes:
     return cbor2.dumps(CBORTag(18, [protected, {}, payload, signature]), canonical=True)
 
 
-def b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+def service_key(ca: Path):
+    return x509.load_pem_x509_certificate(ca.read_bytes()).public_key()
 
 
-def verify_receipt(url: str, receipt: bytes, statement: bytes) -> str:
-    response = requests.post(
-        f"{url}/verify",
-        json={
-            "receipt": b64(receipt),
-            "digest": b64(hashlib.sha256(statement).digest()),
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    return response.json()["txid"]
+def verify_receipt(receipt: bytes, statement: bytes, key) -> str:
+    ccf.cose.verify_receipt(receipt, key, hashlib.sha256(statement).digest())
+    for encoded in parts(receipt)[1].get(396, {}).get(-1, []):
+        evidence = cbor2.loads(encoded).get(1, [None, ""])[1]
+        if isinstance(evidence, str) and evidence.startswith("ce:"):
+            return evidence.split(":", 2)[1]
+    raise AssertionError("receipt has no registration transaction ID")
 
 
 def submit(args):
@@ -69,7 +66,8 @@ def submit(args):
     if args.researcher_url and response.headers.get("x-receipt-verified") != "true":
         raise AssertionError("researcher did not verify the standalone receipt")
     txid = response.headers["x-ms-ccf-transaction-id"]
-    if verify_receipt(args.receipt_verifier_url, response.content, token) != txid:
+    key = service_key(args.cacert)
+    if verify_receipt(response.content, token, key) != txid:
         raise AssertionError("standalone receipt transaction ID does not match")
     transparent = None
     for _ in range(100):
@@ -93,7 +91,7 @@ def submit(args):
     receipts = parts(transparent)[1].get(394, [])
     if len(receipts) != 1:
         raise AssertionError("transparent statement does not contain one receipt")
-    if verify_receipt(args.receipt_verifier_url, receipts[0], token) != txid:
+    if verify_receipt(receipts[0], token, key) != txid:
         raise AssertionError("embedded receipt transaction ID does not match")
     seqno = txid.split(".")[1]
     indexed = requests.get(
@@ -168,7 +166,7 @@ def verify(args):
     receipt_list = uhdr.get(394, [])
     if len(receipt_list) != 1:
         raise AssertionError("real SCITT receipt missing from KBT")
-    txid = verify_receipt(args.receipt_verifier_url, receipt_list[0], bare(statement))
+    txid = verify_receipt(receipt_list[0], bare(statement), service_key(args.cacert))
     claims = result.kbt_claims or {}
     if not isinstance(claims.get(6), int):
         raise AssertionError("KBT proof, audience, or iat is invalid")
@@ -189,8 +187,6 @@ for command, function in (("submit", submit), ("verify", verify), ("reject", rej
     child.add_argument("--output", type=Path, required=True)
     if command == "submit":
         child.add_argument("--researcher-url")
-    if command in {"submit", "verify"}:
-        child.add_argument("--receipt-verifier-url", required=True)
     child.set_defaults(function=function)
 arguments = parser.parse_args()
 arguments.function(arguments)
