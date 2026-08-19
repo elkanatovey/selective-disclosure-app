@@ -22,6 +22,10 @@ if [[ ! -x "$PYTHON" ]]; then
   printf 'Create the demo environment first: python3 -m venv .venv && .venv/bin/python -m pip install -e .\n' >&2
   exit 1
 fi
+if ! "$PYTHON" -c "import sd_cwt" >/dev/null 2>&1; then
+  printf 'Install the current project first: .venv/bin/python -m pip install -e .\n' >&2
+  exit 1
+fi
 mkdir -p "$WORK"
 
 SCITT_URL=http://127.0.0.1:8000 RESEARCHER_ORIGIN=http://127.0.0.1:8090 \

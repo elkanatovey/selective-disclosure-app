@@ -27,9 +27,20 @@ Verifier :8092
 | SCITT | Ledger and receipt key | MSRC holder key |
 
 The three applications share only [webapp/crypto.py](webapp/crypto.py), a
-state-free COSE/SD-CWT library. The Verifier derives the holder verification key
-from the signed statement's `cnf` claim. The MSRC private key is never returned
-by an HTTP endpoint.
+state-free adapter over the repository's Python `sd_cwt` reference package.
+That package is pinned to commit
+`9ccdef6a01f76351951292f1c3d0882cc9390a1d` and performs strict draft-08
+decoding, issuer signature checks, disclosure matching, and KBT signing and
+verification. The Verifier derives the holder key from the signed statement's
+`cnf` claim. The MSRC private key is never returned by an HTTP endpoint.
+
+Browser issuance remains in JavaScript so the Researcher private key can stay
+non-exportable in WebCrypto. CI verifies those browser-generated artifacts with
+the Python reference. Real CCF receipt verification uses the official
+`ccf.cose.verify_receipt` implementation in a loopback-only helper process.
+This helper has a separate Python environment because official CCF requires
+`cbor2>=5.6`, while the current `pycose`-based SD-CWT reference requires
+`cbor2<5.6`.
 
 ## Researcher completion gate
 
@@ -103,8 +114,10 @@ Run those package commands as root, then start the persistent demo:
 ```
 
 The first run downloads and verifies CCF `7.0.10`, builds SCITT commit
-`28a3458f5c3ec2c2a00c868a97515fc278150546`, and creates an isolated Python
-environment. Later runs reuse those installations. Wait for
+`28a3458f5c3ec2c2a00c868a97515fc278150546`, and creates separate Python
+environments for the SD-CWT applications and official CCF tooling. Later runs
+reuse those installations. The internal CCF receipt helper listens only on
+`127.0.0.1:8093`. Wait for
 `Real SCITT demo is ready`, then use the same three app URLs listed above. The
 SCITT node is `https://127.0.0.1:8000`.
 
@@ -147,6 +160,7 @@ Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.
 - [webapp/verifier.py](webapp/verifier.py): Stateless independent verification.
 - [webapp/mock_scitt.py](webapp/mock_scitt.py): Standalone in-memory SCITT mock.
 - [webapp/crypto.py](webapp/crypto.py): Shared state-free cryptographic operations.
+- [webapp/ccf_receipt.py](webapp/ccf_receipt.py): Isolated official CCF receipt verification.
 - [webapp/static/sdcwt.js](webapp/static/sdcwt.js): Browser SD-CWT issuance and disclosure parsing.
 - [scripts/run-mock-demo.sh](scripts/run-mock-demo.sh): Split mock launcher.
 - [scripts/run-real-demo.sh](scripts/run-real-demo.sh): Split real-SCITT launcher.

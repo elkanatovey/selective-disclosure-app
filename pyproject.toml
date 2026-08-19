@@ -7,11 +7,12 @@ name = "bug-report-submission"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-  "cbor2>=5.5,<6",
+  "cbor2>=5.5,<5.6",
   "cryptography>=48,<50",
   "fastapi>=0.115,<1",
   "pycose>=1.1,<2",
   "requests>=2.32,<3",
+  "sd_cwt @ git+https://github.com/elkanatovey/selective-disclosure-app.git@9ccdef6a01f76351951292f1c3d0882cc9390a1d#subdirectory=tools/sd_cwt",
   "uvicorn>=0.30,<1",
 ]
 

@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import cbor2
+import requests
+import sd_cwt
 from cbor2 import CBORSimpleValue, CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -25,12 +27,12 @@ SCITT_RECEIPTS = 394
 
 @dataclass(frozen=True)
 class ReceiptTrust:
-    real_ca: x509.Certificate | None = None
+    real_verifier_url: str | None = None
     mock_key: ec.EllipticCurvePublicKey | None = None
 
     @property
     def merkle(self) -> bool:
-        return self.real_ca is not None
+        return self.real_verifier_url is not None
 
 
 def b64(data: bytes) -> str:
@@ -197,11 +199,8 @@ def verify_issuer(
         leaf.tbs_certificate_bytes,
         ec.ECDSA(leaf.signature_hash_algorithm),
     )
-    message = Sign1Message.decode(token)
-    message.key = public_cose(leaf.public_key())
-    if not message.verify_signature():
-        raise ValueError("invalid statement signature")
-    payload = cbor2.loads(message.payload)
+    verified = sd_cwt.verify(token, public_cose(leaf.public_key()))
+    payload = verified.payload
     cwt = protected.get(15, {})
     if cwt.get(1) != issuer or payload.get(1) != issuer:
         raise ValueError("unexpected issuer")
@@ -238,15 +237,6 @@ def receipt_bytes(receipt: Any) -> bytes:
     return receipt if isinstance(receipt, bytes) else cbor(receipt)
 
 
-def registration_txid(receipt: bytes) -> str:
-    value = parts(receipt)
-    for encoded in value[1].get(396, {}).get(-1, []):
-        evidence = cbor2.loads(encoded).get(1, [None, ""])[1]
-        if isinstance(evidence, str) and evidence.startswith("ce:"):
-            return evidence.split(":", 2)[1]
-    raise ValueError("receipt has no registration transaction ID")
-
-
 def verify_standalone_receipt(
     receipt: bytes,
     statement: bytes,
@@ -256,11 +246,14 @@ def verify_standalone_receipt(
     if protected.get(1) not in {-7, -35}:
         raise ValueError("unsupported receipt algorithm")
     digest = hashlib.sha256(statement).digest()
-    if trust.real_ca is not None:
-        import ccf.cose
-
-        ccf.cose.verify_receipt(receipt, trust.real_ca.public_key(), digest)
-        return registration_txid(receipt)
+    if trust.real_verifier_url is not None:
+        response = requests.post(
+            f"{trust.real_verifier_url}/verify",
+            json={"receipt": b64(receipt), "digest": b64(digest)},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()["txid"]
     if trust.mock_key is None:
         raise ValueError("SCITT receipt trust is not configured")
     message = Sign1Message.decode(receipt)
@@ -287,44 +280,7 @@ def verify_transparent_statement(
 
 
 def resolve_all(payload: dict[Any, Any], presented: list[bytes]) -> dict[int, Any]:
-    openings = {
-        hashlib.sha256(cbor(item)).digest(): cbor2.loads(item) for item in presented
-    }
-
-    def resolve(value: Any) -> Any:
-        if isinstance(value, dict):
-            hashes = value.get(RCK)
-            if hashes is None:
-                return {key: resolve(item) for key, item in value.items()}
-            result = {}
-            for digest in hashes:
-                opening = openings.get(digest)
-                if opening is None or len(opening) != 3:
-                    raise ValueError("map disclosure is missing")
-                _, item, key = opening
-                if key in result:
-                    raise ValueError("duplicate disclosed map key")
-                result[key] = resolve(item)
-            return result
-        if isinstance(value, list):
-            result = []
-            for item in value:
-                if isinstance(item, CBORTag) and item.tag == 60:
-                    opening = openings.get(item.value)
-                    if opening is None or len(opening) != 2:
-                        raise ValueError("array disclosure is missing")
-                    result.append(resolve(opening[1]))
-                else:
-                    result.append(resolve(item))
-            return result
-        return value
-
-    result: dict[int, Any] = {}
-    for digest in payload.get(RCK, []):
-        if digest not in openings:
-            raise ValueError("field disclosure is missing")
-        _, value, field = openings[digest]
-        result[field] = resolve(value)
+    result = dict(sd_cwt.match_disclosures(payload, presented).disclosed)
     if set(result) != set(range(1000, 1009)):
         raise ValueError("disclosures do not match the report schema")
     if isinstance(result[1002], dict):
@@ -338,47 +294,7 @@ def resolve_all(payload: dict[Any, Any], presented: list[bytes]) -> dict[int, An
 
 
 def resolve_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[int, Any]:
-    openings = {}
-    for encoded in presented:
-        digest = hashlib.sha256(cbor(encoded)).digest()
-        if digest in openings:
-            raise ValueError("duplicate disclosure")
-        openings[digest] = cbor2.loads(encoded)
-    used = set()
-
-    def resolve(value: Any) -> Any:
-        if isinstance(value, dict) and RCK in value:
-            result = {}
-            for digest in value[RCK]:
-                opening = openings.get(digest)
-                if opening is not None:
-                    used.add(digest)
-                    _, item, key = opening
-                    result[key] = resolve(item)
-            return result
-        if isinstance(value, list):
-            result = []
-            for item in value:
-                if isinstance(item, CBORTag) and item.tag == 60:
-                    opening = openings.get(item.value)
-                    if opening is not None:
-                        used.add(item.value)
-                        result.append(resolve(opening[1]))
-                else:
-                    result.append(resolve(item))
-            return result
-        return value
-
-    result = {}
-    for digest in payload[RCK]:
-        opening = openings.get(digest)
-        if opening is not None:
-            used.add(digest)
-            _, value, field = opening
-            result[field] = resolve(value)
-    if used != set(openings):
-        raise ValueError("unmatched disclosure")
-    return result
+    return dict(sd_cwt.match_disclosures(payload, presented).disclosed)
 
 
 def sign_kbt(
@@ -397,16 +313,17 @@ def sign_kbt(
     if expected != holder_key.public_key().public_numbers():
         raise ValueError("signing key does not match the statement cnf")
     resolve_selected(payload, selected)
-    headers = dict(value[1])
-    headers[SD_CLAIMS] = selected
-    presented = CBORTag(18, [value[0], headers, value[2], value[3]])
-    message = Sign1Message(
-        phdr={Algorithm: Es256, 13: presented, 16: 294},
-        uhdr={},
-        payload=cbor({3: audience.strip(), 6: int(time.time())}),
+    disclosures = [
+        sd_cwt.Disclosure(salt=b"", value=None, encoded=encoded)
+        for encoded in selected
+    ]
+    return sd_cwt.kbt_sign(
+        statement,
+        disclosures,
+        private_cose(holder_key),
+        aud=audience.strip(),
+        iat=int(time.time()),
     )
-    message.key = private_cose(holder_key)
-    return message.encode(tag=True)
 
 
 def describe_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[str, Any]:
@@ -503,6 +420,7 @@ def verify_bundle(
     payload = None
     txid = None
     selected = None
+    kbt_result = None
     try:
         payload = verify_issuer(statement, ca, issuer)
         result(
@@ -525,14 +443,14 @@ def verify_bundle(
     try:
         if payload is None:
             raise ValueError("issuer payload is not trusted")
-        message = Sign1Message.decode(token)
-        message.key = public_cose(public_key_from_cnf(payload.get(8)))
-        if not message.verify_signature():
-            raise ValueError("signature does not match the cnf key")
-        claims = cbor2.loads(value[2])
-        if claims.get(3) != audience:
-            raise ValueError("audience does not match")
-        if 1 in claims or 2 in claims or not isinstance(claims.get(6), int):
+        leaf = x509.load_der_x509_certificate(statement_protected[33][0])
+        kbt_result = sd_cwt.kbt_verify(
+            token,
+            public_cose(leaf.public_key()),
+            expected_aud=audience,
+        )
+        claims = kbt_result.kbt_claims or {}
+        if not isinstance(claims.get(6), int):
             raise ValueError("KBT claims are invalid")
         now = int(time.time())
         if claims[6] > now + 60 or claims[6] < now - 3600:
@@ -551,8 +469,10 @@ def verify_bundle(
     try:
         if payload is None:
             raise ValueError("issuer payload is not trusted")
+        if kbt_result is None:
+            raise ValueError("KBT is not trusted")
         presented = statement_value[1].get(SD_CLAIMS, [])
-        selected = resolve_selected(payload, presented)
+        selected = dict(kbt_result.claims.disclosed)
         if not set(selected).issubset(set(range(1000, 1009))):
             raise ValueError("disclosed fields are outside the report schema")
         result(

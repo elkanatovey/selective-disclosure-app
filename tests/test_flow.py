@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import cbor2
 import pytest
+import sd_cwt
 from cbor2 import CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -19,6 +20,7 @@ import webapp.mock_scitt as mock_scitt_service
 import webapp.msrc as msrc_service
 import webapp.researcher as researcher_service
 import webapp.verifier as verifier_service
+import webapp.crypto as crypto_service
 from webapp.crypto import (
     RCK,
     SCITT_RECEIPTS,
@@ -32,6 +34,7 @@ from webapp.crypto import (
     parts,
     private_cose,
     public_cose_map,
+    public_cose,
     public_jwk,
     resolve_all,
     sign_kbt,
@@ -171,6 +174,14 @@ def test_verifier_uses_cnf_and_rejects_wrong_audience_or_key():
     full = with_uhdr(redacted, {**parts(transparent)[1], SD_CLAIMS: disclosures})
     kbt = sign_kbt(full, selected, owner.holder_key, audience)
 
+    leaf = x509.load_der_x509_certificate(cbor2.loads(parts(redacted)[0])[33][0])
+    reference = sd_cwt.kbt_verify(
+        kbt,
+        public_cose(leaf.public_key()),
+        expected_aud=audience,
+    )
+    assert set(reference.claims.disclosed) == {1001, 1002}
+
     result = verify_bundle(kbt, audience, owner.ca_cert, owner.issuer, trust)
     assert result["valid"]
     assert result["report"]["txid"] == txid
@@ -252,6 +263,29 @@ def test_researcher_completion_requires_verified_receipts(monkeypatch):
     )
     assert rejected.status_code == 400
     assert "x-receipt-verified" not in rejected.headers
+
+
+def test_real_receipts_delegate_to_isolated_ccf_verifier(monkeypatch):
+    owner = authority()
+    redacted, _, _, _, receipt, _, _, txid = transparent_statement(owner)
+    request = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"txid": txid}
+
+    def post(url, **kwargs):
+        request.update({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr(crypto_service.requests, "post", post)
+    trust = ReceiptTrust(real_verifier_url="http://127.0.0.1:8093")
+    assert verify_standalone_receipt(receipt, redacted, trust) == txid
+    assert request["url"] == "http://127.0.0.1:8093/verify"
+    assert set(request["json"]) == {"receipt", "digest"}
 
 
 def test_apps_have_distinct_routes_and_private_state():

@@ -10,16 +10,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import cbor2
-import ccf.cose
 import requests
+import sd_cwt
 from cbor2 import CBORSimpleValue, CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pycose.keys import CoseKey
-from pycose.messages import Sign1Message
-
-from webapp.crypto import resolve_selected
 
 RCK = CBORSimpleValue(59)
 
@@ -36,8 +33,21 @@ def bare(statement: bytes) -> bytes:
     return cbor2.dumps(CBORTag(18, [protected, {}, payload, signature]), canonical=True)
 
 
-def service_key(ca: Path):
-    return x509.load_pem_x509_certificate(ca.read_bytes()).public_key()
+def b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def verify_receipt(url: str, receipt: bytes, statement: bytes) -> str:
+    response = requests.post(
+        f"{url}/verify",
+        json={
+            "receipt": b64(receipt),
+            "digest": b64(hashlib.sha256(statement).digest()),
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["txid"]
 
 
 def submit(args):
@@ -59,9 +69,8 @@ def submit(args):
     if args.researcher_url and response.headers.get("x-receipt-verified") != "true":
         raise AssertionError("researcher did not verify the standalone receipt")
     txid = response.headers["x-ms-ccf-transaction-id"]
-    digest = hashlib.sha256(token).digest()
-    key = service_key(args.cacert)
-    ccf.cose.verify_receipt(response.content, key, digest)
+    if verify_receipt(args.receipt_verifier_url, response.content, token) != txid:
+        raise AssertionError("standalone receipt transaction ID does not match")
     transparent = None
     for _ in range(100):
         fetched = requests.get(
@@ -84,7 +93,8 @@ def submit(args):
     receipts = parts(transparent)[1].get(394, [])
     if len(receipts) != 1:
         raise AssertionError("transparent statement does not contain one receipt")
-    ccf.cose.verify_receipt(receipts[0], key, digest)
+    if verify_receipt(args.receipt_verifier_url, receipts[0], token) != txid:
+        raise AssertionError("embedded receipt transaction ID does not match")
     seqno = txid.split(".")[1]
     indexed = requests.get(
         f"{args.url}/entries/txIds?from={seqno}&to={seqno}",
@@ -142,7 +152,7 @@ def verify(args):
     output = args.output
     metadata = json.loads((output / "expected.json").read_text())
     kbt = (output / "disclosure.kbt.cose").read_bytes()
-    kbt_protected, kbt_uhdr, kbt_payload, _ = parts(kbt)
+    kbt_protected, _, _, _ = parts(kbt)
     kbt_phdr = cbor2.loads(kbt_protected)
     if kbt_phdr.get(1) != -7 or kbt_phdr.get(16) != 294 or not isinstance(kbt_phdr.get(13), CBORTag):
         raise AssertionError("invalid KBT profile")
@@ -150,29 +160,24 @@ def verify(args):
     protected, uhdr, payload_bytes, _ = parts(statement)
     payload = cbor2.loads(payload_bytes)
     leaf = verify_certificates(cbor2.loads(protected), payload[1])
-    issuer_message = Sign1Message.decode(bare(statement))
     issuer_pem = leaf.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
-    issuer_message.key = CoseKey.from_pem_public_key(issuer_pem)
-    if not issuer_message.verify_signature() or len(payload[RCK]) != 9:
-        raise AssertionError("issuer signature or report shape is invalid")
+    issuer_key = CoseKey.from_pem_public_key(issuer_pem)
+    result = sd_cwt.kbt_verify(kbt, issuer_key, expected_aud=metadata["audience"])
+    if len(payload[RCK]) != 9:
+        raise AssertionError("report shape is invalid")
     receipt_list = uhdr.get(394, [])
     if len(receipt_list) != 1:
         raise AssertionError("real SCITT receipt missing from KBT")
-    ccf.cose.verify_receipt(receipt_list[0], service_key(args.cacert), hashlib.sha256(bare(statement)).digest())
-    cnf = payload[8][1]
-    holder = ec.EllipticCurvePublicNumbers(int.from_bytes(cnf[-2], "big"), int.from_bytes(cnf[-3], "big"), ec.SECP256R1()).public_key()
-    holder_pem = holder.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
-    kbt_message = Sign1Message.decode(kbt)
-    kbt_message.key = CoseKey.from_pem_public_key(holder_pem)
-    claims = cbor2.loads(kbt_payload)
-    if not kbt_message.verify_signature() or claims.get(3) != metadata["audience"] or not isinstance(claims.get(6), int):
+    txid = verify_receipt(args.receipt_verifier_url, receipt_list[0], bare(statement))
+    claims = result.kbt_claims or {}
+    if not isinstance(claims.get(6), int):
         raise AssertionError("KBT proof, audience, or iat is invalid")
-    selected = resolve_selected(payload, uhdr.get(17, []))
+    selected = dict(result.claims.disclosed)
     if set(selected) != {1001, 1002, 1006}:
         raise AssertionError(f"unexpected disclosed fields: {sorted(selected)}")
     if selected[1001] != metadata["title"] or selected[1002] != {0: metadata["firstBodyChunk"]} or selected[1006] != [metadata["reference"]]:
         raise AssertionError("selective disclosure values are inconsistent")
-    print(json.dumps({"phase": "verify", "fields": sorted(selected), "actualReceipt": True, "kbtVerified": True}))
+    print(json.dumps({"phase": "verify", "txid": txid, "fields": sorted(selected), "actualReceipt": True, "kbtVerified": True, "sdCwtVerifier": "reference"}))
 
 
 parser = argparse.ArgumentParser()
@@ -184,6 +189,8 @@ for command, function in (("submit", submit), ("verify", verify), ("reject", rej
     child.add_argument("--output", type=Path, required=True)
     if command == "submit":
         child.add_argument("--researcher-url")
+    if command in {"submit", "verify"}:
+        child.add_argument("--receipt-verifier-url", required=True)
     child.set_defaults(function=function)
 arguments = parser.parse_args()
 arguments.function(arguments)
