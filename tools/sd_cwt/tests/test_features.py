@@ -23,6 +23,7 @@ def signer() -> EC2Key:
 def test_standard_cose_verifier_accepts_signature(signer):
     # A plain pycose verifier (no SD-CWT awareness) verifies the signature.
     token, _ = sd_cwt.issue({1: "iss", 501: "RCE"}, [(501,)], signer)
+    assert isinstance(cbor2.loads(token).value, list)
     msg = CoseMessage.decode(token)
     msg.key = signer
     assert msg.verify_signature() is True

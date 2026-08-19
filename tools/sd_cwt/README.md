@@ -4,6 +4,7 @@ A minimal, domain-agnostic **Selective Disclosure CBOR Web Token (SD-CWT)**
 implementation (custom profile of
 [draft-ietf-spice-sd-cwt-08](https://datatracker.ietf.org/doc/draft-ietf-spice-sd-cwt/)),
 wrapping [`pycose`](https://pypi.org/project/pycose/) + `cbor2` + `hashlib`.
+It supports `cbor2` 5.6 through 5.x.
 
 It implements the subset of SD-CWT used by this project (see `docs/DESIGN.md` §13):
 map + array-element redaction, **nested/recursive redaction** at arbitrary depth,
@@ -29,7 +30,7 @@ To-Be-Decoy tags.
 ```bash
 cd tools/sd_cwt
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e .[lint]      # pycose + cbor2 (pinned) + pytest + black/isort/mypy
+pip install -e .[lint]      # pycose + cbor2 + pytest + black/isort/mypy
 ./scripts/checks.sh         # format + types + tests (pass -f to auto-fix)
 ```
 
