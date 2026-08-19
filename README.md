@@ -29,7 +29,7 @@ Verifier :8092
 The three applications share only [webapp/crypto.py](webapp/crypto.py), a
 state-free adapter over the repository's Python `sd_cwt` reference package.
 That package is pinned to commit
-`94fa4fcdb146442af908a82d890005c69418c8cb` and performs strict draft-08
+`9cf54783f2cb505b6bfed88cd8657c1e03bcd3c4` and performs strict draft-08
 decoding, issuer signature checks, disclosure matching, and KBT signing and
 verification. The Verifier derives the holder key from the signed statement's
 `cnf` claim. The MSRC private key is never returned by an HTTP endpoint.

@@ -12,7 +12,7 @@ dependencies = [
   "fastapi>=0.115,<1",
   "pycose>=1.1,<2",
   "requests>=2.32,<3",
-  "sd_cwt @ git+https://github.com/elkanatovey/selective-disclosure-app.git@94fa4fcdb146442af908a82d890005c69418c8cb#subdirectory=tools/sd_cwt",
+  "sd_cwt @ git+https://github.com/elkanatovey/selective-disclosure-app.git@9cf54783f2cb505b6bfed88cd8657c1e03bcd3c4#subdirectory=tools/sd_cwt",
   "uvicorn>=0.30,<1",
 ]
 
