@@ -44,8 +44,11 @@ jobs:
         run: mypy src/sd_cwt
 
   test:
-    name: Tests (pytest)
+    name: Tests (cbor2 ${{ matrix.cbor2 }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cbor2: ["5.6.5", "5.9.0"]
     defaults:
       run:
         working-directory: tools/sd_cwt
@@ -57,6 +60,6 @@ jobs:
           cache: "pip"
           cache-dependency-path: tools/sd_cwt/pyproject.toml
       - name: Install package + test deps
-        run: pip install -e ".[test]"
+        run: pip install -e ".[test]" "cbor2==${{ matrix.cbor2 }}"
       - name: Run tests
         run: pytest -q

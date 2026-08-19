@@ -3,9 +3,7 @@
 # Licensed under the MIT License.
 #
 # Create or refresh the shared CCF sandbox environment used by e2e tests and
-# the demo. CCF is installed first because its cbor2 metadata conflicts with the
-# older cbor2 release required by pycose; the second install intentionally
-# selects the working version documented in test/e2e/requirements.txt.
+# the demo.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,5 +28,7 @@ if [ "$CCF_REQUIREMENT" != "ccf==$CCF_INSTALLED" ]; then
   "$VENV_DIR/bin/pip" install -q -r test/e2e/requirements-ccf.txt
 fi
 
-"$VENV_DIR/bin/pip" install -q -r .ccf-install/bin/requirements.txt
-"$VENV_DIR/bin/pip" install -q -r test/e2e/requirements.txt -e tools/sd_cwt
+"$VENV_DIR/bin/pip" install -q \
+  -r .ccf-install/bin/requirements.txt \
+  -r test/e2e/requirements.txt \
+  -e tools/sd_cwt
