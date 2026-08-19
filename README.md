@@ -1,96 +1,147 @@
 # Bug Report Submission
 
-A minimal researcher-side SD-CWT web flow with real cryptography and local mocks.
+An end-to-end prototype for submitting a vulnerability report as a selectively
+disclosable SD-CWT, registering the signed statement in SCITT, and later
+presenting only the fields chosen by MSRC.
 
 ```text
-browser key -> mock governance endorsement
-            -> redacted statement -> mock SCITT -> receipt
-            -> full disclosure + receipt -> MSRC
+Researcher browser
+    -> signs SD-CWT with cnf = MSRC public key
+    -> registers the redacted statement in SCITT
+    -> delivers the transparent statement to MSRC
+MSRC
+    -> selects disclosures and signs a KBT
+    -> sends the presentation to the verifier
+Verifier
+    -> checks trust, receipt, holder proof, audience, and disclosures
 ```
 
-The browser generates a non-exportable ephemeral P-256 issuer key. Mock
-governance signs its public key certificate. The browser builds and signs the
-strict nine-field report profile; absent fields use random padding and all
-fields are redacted. The clear `cnf` claim contains MSRC's public key. SCITT
-receives only the redacted COSE Sign1; MSRC receives every disclosure and the
-embedded receipt.
+The repository supports two registry modes:
 
-Body text is NFC/newline-normalized and stored as independently redactable,
-position-preserving six-codepoint chunks beneath the redacted `body` field.
+- **Mock mode** runs every service in one FastAPI process for a quick demo.
+- **Real mode** registers statements with an actual local SCITT CCF Ledger and
+    verifies its CCF receipt and Merkle inclusion proof. Governance endorsement
+    and MSRC key custody remain local prototype services in both modes.
 
-The form exposes each report field separately. The researcher may either use a
-fresh ephemeral key or upload a private P-256 key as PKCS#8 PEM/private JWK. An
-uploaded key is imported locally and only its public JWK is sent for endorsement.
+## What the prototype does
+
+- Generates a non-exportable P-256 researcher signing key in the browser, or
+    imports a private P-256 PKCS#8 PEM/JWK without uploading the private key.
+- Fetches MSRC's public key automatically and places it in the SD-CWT `cnf`
+    claim before signing.
+- Encodes the strict nine-claim report profile. Missing fields receive random
+    padding so the public statement always has the same shape.
+- Splits normalized body text into independently redactable,
+    position-preserving six-codepoint chunks. References are independently
+    redactable as well.
+- Sends only the redacted COSE Sign1 statement to SCITT, then gives MSRC the
+    complete disclosures with the embedded SCITT receipt.
+- Lets MSRC select fields and chunks, bind the presentation to an audience,
+    sign a Key Binding Token (KBT) with the key named by `cnf`, and export it.
+- Verifies the issuer signature and trust chain, SCITT receipt, KBT holder
+    proof, expected audience, freshness, report schema, and disclosure hashes.
+
+## Mock demo
+
+Requires Python 3.11 or newer and a browser with WebCrypto support.
 
 ```bash
 python3 -m venv .venv
-. .venv/bin/activate
-pip install -e '.[test]'
-uvicorn webapp.app:app --host 127.0.0.1 --port 8090
+.venv/bin/python -m pip install -e '.[test]'
+.venv/bin/python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8090
 ```
 
-Open `http://127.0.0.1:8090`. Run tests with `pytest`.
+Keep that process running while completing the three roles:
 
-Open `http://127.0.0.1:8090/msrc` for disclosure review. Load the downloaded
-`msrc-transparent-statement.cose`, uncheck fields or individual body/reference
-chunks to redact them, set the verifier audience, sign the Key Binding Token,
-then export `*.kbt.cose`.
+1. Open `http://127.0.0.1:8090/`. Submit a report, then download **MSRC
+     delivery** (`msrc-transparent-statement.cose`).
+2. Open `http://127.0.0.1:8090/msrc`. Load the MSRC delivery, click fields or
+     click and drag over body chunks to redact or restore them, enter the
+     verifier audience, select **Sign disclosure**, and export the `.kbt.cose`.
+3. Open `http://127.0.0.1:8090/verify`. Load the KBT and enter exactly the same
+     expected audience. A valid presentation shows **Disclosure verified** and
+     the independently disclosed report content.
 
-The prototype exposes the mock MSRC holder key to the MSRC browser page. A real
-deployment must authenticate this page and keep that key in local secure storage
-or an HSM rather than returning it from an HTTP endpoint.
+For a negative check, verify the same KBT with a different expected audience.
+The KBT proof and audience check fails and the overall result is
+**Verification failed**.
 
-Open `http://127.0.0.1:8090/verify` to verify an exported KBT against an
-externally supplied expected audience. The verifier displays the selectively
-disclosed report and separate status rows for COSE algorithms, issuer trust and
-signature, the SCITT receipt, KBT proof/freshness/audience, and disclosure
-consistency. Real Merkle inclusion remains explicitly unavailable in the mock.
+Mock state and keys exist only in memory. Restarting the server invalidates
+artifacts from the previous process. The mock receipt has no Merkle proof, so
+that check is shown as unavailable rather than passed.
 
-## Interactive demo
+## Real SCITT demo
 
-Start the web server:
+The real-ledger launcher is supported on x86-64 Azure Linux 3, matching the CI
+job. It requires permission to install the pinned CCF RPM on its first run,
+network access, and these system tools:
 
 ```bash
-. .venv/bin/activate
-uvicorn webapp.app:app --host 127.0.0.1 --port 8090
+gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
+tdnf update -y
+tdnf install -y --disablerepo azurelinux-official-ms-non-oss \
+    build-essential ca-certificates curl git jq rpm-build python3-pip \
+    nodejs procps tar util-linux zstd
 ```
 
-Then walk through the three roles:
-
-1. Open `http://127.0.0.1:8090`, submit a report, and download **MSRC delivery**.
-2. Open `http://127.0.0.1:8090/msrc`, load that `.cose` file, click or drag over
-    six-character body spans to redact/restore them, set the audience, sign, and
-    download the signed disclosure.
-3. Open `http://127.0.0.1:8090/verify`, load the `.kbt.cose`, enter the same
-    audience, and inspect the redacted report plus every verification result.
-
-The local mock state is in memory, so keep the same server process running for
-all three steps.
-
-To run the same interactive pages against an actual local SCITT CCF Ledger
-instead of the mock registry:
+Run those package commands as root in the Azure Linux environment. Then, from
+the repository root, start the persistent demo:
 
 ```bash
 ./scripts/run-real-demo.sh
 ```
 
-The first run installs/builds the pinned CCF/SCITT dependencies when necessary.
-Keep the command running, then use the same three URLs above. The submission
-page header will say **Real SCITT**, and its transaction/receipt come from the
-node on `https://127.0.0.1:8000`. Press Ctrl+C to stop both services.
+The first run downloads and verifies CCF `7.0.10`, clones and builds SCITT at
+commit `28a3458f5c3ec2c2a00c868a97515fc278150546`, and creates an isolated Python
+environment under `/tmp/scitt-real-demo`. It can take several minutes. Later
+runs reuse the built SCITT tree and environment.
 
-## Real SCITT integration
+Wait for `Real SCITT demo is ready`, keep the command running, and follow the
+same three-page walkthrough:
 
-CI pins CCF `7.0.10` and SCITT commit
-`28a3458f5c3ec2c2a00c868a97515fc278150546`. On Azure Linux 3, run the same
-browser-crypto-to-real-ledger test with:
+- Researcher: `http://127.0.0.1:8090/`
+- MSRC: `http://127.0.0.1:8090/msrc`
+- Verifier: `http://127.0.0.1:8090/verify`
+- SCITT node: `https://127.0.0.1:8000`
+
+The browser does not connect directly to the SCITT HTTPS endpoint. Its
+same-origin requests go to FastAPI on port 8090, and FastAPI submits them to
+SCITT. The backend uses CCF's generated service certificate as an explicit CA
+and validates the node certificate for `127.0.0.1`; TLS verification is not
+disabled. Opening port 8000 directly in a browser would require installing that
+local service certificate as a trusted CA.
+
+The researcher page header says **Real SCITT** in this mode. Registration,
+transaction ID, receipt, and Merkle proof come from the local CCF node. Press
+Ctrl+C in the launcher terminal to stop both services. Ports 8090 and 8000 must
+be available before starting it.
+
+## Tests
+
+Run the unit and negative-path tests after installing the mock demo:
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+To run the non-interactive browser-crypto-to-real-ledger integration on Azure
+Linux 3:
 
 ```bash
 ./scripts/ci-scitt.sh
 ```
 
-It builds and launches SCITT, configures local governance, issues the SD-CWT
-with `webapp/static/sdcwt.js`, registers it through `/entries`, verifies the
-real standalone and embedded CCF receipts, constructs a partial KBT, and verifies
-the holder signature, audience, report schema, and disclosures. Generated
-artifacts are written under `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.
+The integration launches SCITT, applies local-development governance, issues
+the SD-CWT with `webapp/static/sdcwt.js`, registers it through `/entries`, and
+checks exact signed-byte preservation, standalone and embedded CCF receipts,
+Merkle inclusion, holder proof, audience binding, schema, and disclosures. It
+writes artifacts to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts` and stops its
+services when complete.
+
+## Prototype security boundary
+
+The MSRC page currently retrieves the prototype holder private key from the
+FastAPI process. A deployment must authenticate the MSRC interface and keep
+that key in browser-backed secure storage, an HSM, or another holder-controlled
+signing service. Similarly, the mock governance endpoint is only a stand-in for
+an actual governed issuer onboarding process.
