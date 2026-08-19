@@ -5,13 +5,7 @@
 #   - requests            HTTP client
 #   - cbor2, pycose       CBOR/COSE + sd_cwt statement verification
 #   - sd_cwt (in-repo)    reference statement verifier
-#   - ccf                 CCF receipt verification (installed separately; see
-#                         requirements-ccf.txt)
-#
-# Dependency note: sd_cwt pins cbor2<5.6 (pycose 1.1.0 breaks on cbor2>=5.6),
-# while ccf's metadata asks for cbor2>=5.6. In practice ccf.cose.verify_receipt
-# works with cbor2 5.5.1, so both coexist; pip prints a compatibility warning
-# that is safe to ignore. (If pycose ever supports cbor2>=5.6, drop the pin.)
+#   - ccf                 CCF receipt verification (see requirements-ccf.txt)
 #
 # Use the shared setup script to create or refresh the CCF sandbox environment:
 #
@@ -22,5 +16,5 @@
 # which manages that same venv.
 requests
 pycose
-cbor2<5.6
+cbor2>=5.6,<6
 pytest
