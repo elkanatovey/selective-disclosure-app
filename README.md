@@ -20,13 +20,19 @@ The repository supports two registry modes:
 
 - **Mock mode** runs every service in one FastAPI process for a quick demo.
 - **Real mode** registers statements with an actual local SCITT CCF Ledger and
-    verifies its CCF receipt and Merkle inclusion proof. Governance endorsement
+    verifies its CCF receipt and Merkle inclusion proof. The MSRC Researcher CA
     and MSRC key custody remain local prototype services in both modes.
+
+Both modes expose the same SCITT-compatible registry facade: the browser posts
+raw `application/cose` to `/entries` and retrieves the transparent COSE
+statement from `/entries/{txid}/statement`. Real mode forwards that exchange to
+the CCF node; mock mode implements the same contract in memory.
 
 ## What the prototype does
 
 - Generates a non-exportable P-256 researcher signing key in the browser, or
     imports a private P-256 PKCS#8 PEM/JWK without uploading the private key.
+- Has the prototype MSRC Researcher CA certify only the public signing key.
 - Fetches MSRC's public key automatically and places it in the SD-CWT `cnf`
     claim before signing.
 - Encodes the strict nine-claim report profile. Missing fields receive random
@@ -116,6 +122,12 @@ transaction ID, receipt, and Merkle proof come from the local CCF node. Press
 Ctrl+C in the launcher terminal to stop both services. Ports 8090 and 8000 must
 be available before starting it.
 
+The launcher submits a real CCF governance proposal that restricts registration
+to `did:x509` identities rooted in the currently running MSRC Researcher CA.
+SCITT verifies the COSE signature and certificate chain before applying that
+policy. The CA is ephemeral, so restarting the demo creates and governs a new
+trusted root.
+
 ## Tests
 
 Run the unit and negative-path tests after installing the mock demo:
@@ -131,17 +143,18 @@ Linux 3:
 ./scripts/ci-scitt.sh
 ```
 
-The integration launches SCITT, applies local-development governance, issues
-the SD-CWT with `webapp/static/sdcwt.js`, registers it through `/entries`, and
-checks exact signed-byte preservation, standalone and embedded CCF receipts,
-Merkle inclusion, holder proof, audience binding, schema, and disclosures. It
-writes artifacts to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts` and stops its
-services when complete.
+The integration launches SCITT, governs the MSRC CA trust policy, issues the
+SD-CWT with `webapp/static/sdcwt.js`, registers it through `/entries`, and checks
+exact signed-byte preservation, standalone and embedded CCF receipts, Merkle
+inclusion, holder proof, audience binding, schema, and disclosures. It also
+proves that an otherwise valid statement rooted in a foreign CA is rejected.
+Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`; services
+stop when the integration completes.
 
 ## Prototype security boundary
 
 The MSRC page currently retrieves the prototype holder private key from the
 FastAPI process. A deployment must authenticate the MSRC interface and keep
 that key in browser-backed secure storage, an HSM, or another holder-controlled
-signing service. Similarly, the mock governance endpoint is only a stand-in for
-an actual governed issuer onboarding process.
+signing service. Similarly, the prototype MSRC Researcher CA is only a stand-in
+for an authenticated issuer-onboarding and certificate service.

@@ -9,6 +9,7 @@ from cbor2 import CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pycose.algorithms import Es256
 from pycose.headers import Algorithm
 from pycose.messages import Sign1Message
@@ -20,13 +21,12 @@ from webapp.app import (
     RCK,
     SCITT_RECEIPTS,
     SD_CLAIMS,
-    TokenBody,
+    app,
     b64,
     cbor,
     endorse,
     get_state,
     mock_msrc,
-    mock_scitt,
     mock_verifier,
     parts,
     private_cose,
@@ -36,6 +36,8 @@ from webapp.app import (
     verify_bundle,
     with_uhdr,
 )
+
+client = TestClient(app)
 
 
 def opening(value, key=None):
@@ -135,22 +137,39 @@ def test_external_signer_registration_and_msrc_delivery():
     assert "".join(body_parts[index] for index in range(len(body_parts))) == body
     assert "\r" not in body and "é" in body
 
-    registration = mock_scitt(TokenBody(token=b64(redacted)))
-    transparent = unb64(registration["transparent"])
+    registration = client.post(
+        "/entries?waitForCommit=true",
+        content=redacted,
+        headers={"content-type": "application/cose"},
+    )
+    assert registration.status_code == 201
+    assert registration.headers["content-type"] == "application/cose"
+    txid = registration.headers["x-ms-ccf-transaction-id"]
+    assert parts(registration.content)
+    json_registration = client.post("/entries", json={"token": b64(redacted)})
+    assert json_registration.status_code == 415
+    fetched = client.get(f"/entries/{txid}/statement")
+    assert fetched.status_code == 200
+    assert fetched.headers["content-type"] == "application/cose"
+    transparent = fetched.content
     header = dict(parts(transparent)[1])
     assert SCITT_RECEIPTS in header
     header[SD_CLAIMS] = disclosures
     full = with_uhdr(redacted, header)
     assert all(parts(full)[index] == parts(redacted)[index] for index in (0, 2, 3))
 
+    rejected = client.post(
+        "/entries?waitForCommit=true",
+        content=full,
+        headers={"content-type": "application/cose"},
+    )
+    assert rejected.status_code == 400
     with pytest.raises(HTTPException):
-        mock_scitt(TokenBody(token=b64(full)))
-    with pytest.raises(HTTPException):
-        mock_msrc(DeliveryBody(statement=registration["transparent"]))
+        mock_msrc(DeliveryBody(statement=b64(transparent)))
 
     delivered = mock_msrc(DeliveryBody(statement=b64(full)))
     assert delivered["fields"] == 9
-    assert delivered["txid"] == registration["txid"]
+    assert delivered["txid"] == txid
     assert resolve_all(payload, disclosures)[1002] == body
 
 
@@ -189,8 +208,13 @@ def test_endorsed_chain_has_scitt_didx509_extensions():
 
 def test_kbt_selects_one_body_chunk_and_binds_audience():
     redacted, disclosures, _ = browser_style_report()
-    registration = mock_scitt(TokenBody(token=b64(redacted)))
-    transparent = unb64(registration["transparent"])
+    registration = client.post(
+        "/entries?waitForCommit=true",
+        content=redacted,
+        headers={"content-type": "application/cose"},
+    )
+    txid = registration.headers["x-ms-ccf-transaction-id"]
+    transparent = client.get(f"/entries/{txid}/statement").content
     decoded = [cbor2.loads(item) for item in disclosures]
     selected = [
         encoded
@@ -210,7 +234,7 @@ def test_kbt_selects_one_body_chunk_and_binds_audience():
     kbt = message.encode(tag=True)
 
     result = mock_verifier(KbtBody(token=b64(kbt), audience=audience))
-    assert result["txid"] == registration["txid"]
+    assert result["txid"] == txid
     assert result["fields"] == [1001, 1002]
     detailed = verify_bundle(kbt, audience)
     assert detailed["valid"]

@@ -15,8 +15,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pycose.algorithms import Es256
@@ -129,16 +129,17 @@ def with_uhdr(token: bytes, header: dict[Any, Any]) -> bytes:
 
 class State:
     def __init__(self) -> None:
-        self.governance_key = ec.generate_private_key(ec.SECP256R1())
-        self.governance_cert = cert(
-            "Mock SCITT Governance",
-            self.governance_key.public_key(),
-            self.governance_key,
+        self.msrc_ca_key = ec.generate_private_key(ec.SECP256R1())
+        self.msrc_ca_cert = cert(
+            "MSRC Researcher CA",
+            self.msrc_ca_key.public_key(),
+            self.msrc_ca_key,
         )
-        root_hash = self.governance_cert.fingerprint(hashes.SHA256())
+        root_hash = self.msrc_ca_cert.fingerprint(hashes.SHA256())
         self.issuer = f"did:x509:0:sha256:{b64(root_hash)}::subject:CN:Web Statement Issuer"
         self.msrc_key = ec.generate_private_key(ec.SECP256R1())
         self.scitt_key = ec.generate_private_key(ec.SECP256R1())
+        self.entries: dict[str, tuple[bytes, bytes | None]] = {}
         self.inbox: list[dict[str, Any]] = []
         self.seqno = 0
         with (ROOT / "parties.csv").open(newline="") as handle:
@@ -164,10 +165,6 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 class EndorseBody(BaseModel):
     public_jwk: dict[str, str]
-
-
-class TokenBody(BaseModel):
-    token: str
 
 
 class DeliveryBody(BaseModel):
@@ -213,15 +210,15 @@ def verify_issuer(token: bytes) -> dict[Any, Any]:
     chain = protected.get(33)
     if not isinstance(chain, list) or len(chain) != 2:
         raise ValueError("missing issuer certificate chain")
-    if chain[1] != state.governance_cert.public_bytes(serialization.Encoding.DER):
-        raise ValueError("issuer is not endorsed by governance")
+    if chain[1] != state.msrc_ca_cert.public_bytes(serialization.Encoding.DER):
+        raise ValueError("issuer is not endorsed by the MSRC CA")
     leaf = x509.load_der_x509_certificate(chain[0])
     now = datetime.now(UTC)
     if not leaf.not_valid_before_utc <= now <= leaf.not_valid_after_utc:
         raise ValueError("issuer certificate is outside its validity period")
     if leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
         raise ValueError("issuer leaf certificate must not be a CA")
-    state.governance_cert.public_key().verify(
+    state.msrc_ca_cert.public_key().verify(
         leaf.signature, leaf.tbs_certificate_bytes, ec.ECDSA(leaf.signature_hash_algorithm)
     )
     message = Sign1Message.decode(token)
@@ -516,7 +513,7 @@ def get_state() -> dict[str, Any]:
     parties = [dict(party) for party in state.parties]
     if REAL_SCITT_URL and REAL_SCITT_CA:
         registry = next(party for party in parties if party["role"] == "registry")
-        registry.update({"name": "Real SCITT", "path": "/scitt/register"})
+        registry["name"] = "Real SCITT"
     return {
         "parties": parties,
         "ledger": {"mode": "real" if REAL_SCITT_URL and REAL_SCITT_CA else "mock", "name": "Real SCITT" if REAL_SCITT_URL and REAL_SCITT_CA else "Mock SCITT"},
@@ -568,7 +565,7 @@ def verify_api(body: KbtBody) -> dict[str, Any]:
         raise HTTPException(400, str(exc)) from exc
 
 
-@app.post("/mock/governance/endorse")
+@app.post("/mock/msrc/endorse")
 def endorse(body: EndorseBody) -> dict[str, Any]:
     try:
         jwk = body.public_jwk
@@ -581,71 +578,95 @@ def endorse(body: EndorseBody) -> dict[str, Any]:
             int.from_bytes(unb64(jwk["y"]), "big"),
             ec.SECP256R1(),
         ).public_key()
-        leaf = cert("Web Statement Issuer", public_key, state.governance_key, state.governance_cert)
+        leaf = cert("Web Statement Issuer", public_key, state.msrc_ca_key, state.msrc_ca_cert)
         return {
             "issuer": state.issuer,
             "serial": hex(leaf.serial_number)[2:14],
             "leaf": b64(leaf.public_bytes(serialization.Encoding.DER)),
-            "root": b64(state.governance_cert.public_bytes(serialization.Encoding.DER)),
+            "root": b64(state.msrc_ca_cert.public_bytes(serialization.Encoding.DER)),
         }
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
-@app.post("/mock/scitt")
-def mock_scitt(body: TokenBody) -> dict[str, Any]:
+@app.post("/entries")
+async def register_entry(
+    request: Request,
+    wait_for_commit: bool = Query(True, alias="waitForCommit"),
+) -> Response:
     try:
-        token = unb64(body.token)
-        payload = verify_issuer(token)
-        if parts(token)[1]:
-            raise ValueError("SCITT only accepts the fully redacted envelope")
-        state.seqno += 1
-        txid = f"1.{state.seqno}"
-        transparent = with_uhdr(token, {SCITT_RECEIPTS: [cbor2.loads(receipt(token, txid))]})
-        return {"txid": txid, "transparent": b64(transparent), "bytes": len(transparent)}
+        content_type = request.headers.get("content-type", "").partition(";")[0]
+        if content_type.lower() != "application/cose":
+            raise HTTPException(415, "SCITT entries require application/cose")
+        token = await request.body()
+        if not token:
+            raise HTTPException(400, "SCITT entry is empty")
+        config = real_scitt_config()
+        if config is not None:
+            requests, cose, ca, key = config
+            response = requests.post(
+                f"{REAL_SCITT_URL}/entries",
+                params={"waitForCommit": str(wait_for_commit).lower()},
+                data=token,
+                headers={"content-type": "application/cose"},
+                verify=ca,
+                timeout=30,
+            )
+            response.raise_for_status()
+            if response.status_code != 201:
+                raise ValueError(f"unexpected SCITT registration status {response.status_code}")
+            txid = response.headers["x-ms-ccf-transaction-id"]
+            cose.verify_receipt(response.content, key, hashlib.sha256(token).digest())
+            receipt_data = response.content
+            transparent = None
+        else:
+            verify_issuer(token)
+            if parts(token)[1]:
+                raise ValueError("SCITT only accepts the fully redacted envelope")
+            state.seqno += 1
+            txid = f"1.{state.seqno}"
+            receipt_data = receipt(token, txid)
+            transparent = with_uhdr(
+                token, {SCITT_RECEIPTS: [cbor2.loads(receipt_data)]}
+            )
+        state.entries[txid] = (token, transparent)
+        return Response(
+            receipt_data,
+            status_code=201,
+            media_type="application/cose",
+            headers={"x-ms-ccf-transaction-id": txid},
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
-@app.post("/scitt/register")
-def real_scitt(body: TokenBody) -> dict[str, Any]:
+@app.get("/entries/{txid}/statement")
+def get_entry_statement(txid: str) -> Response:
     try:
+        registered = state.entries.get(txid)
         config = real_scitt_config()
-        if config is None:
-            raise ValueError("real SCITT is not configured")
-        requests, cose, ca, key = config
-        token = unb64(body.token)
-        response = requests.post(
-            f"{REAL_SCITT_URL}/entries?waitForCommit=true",
-            data=token,
-            headers={"content-type": "application/cose"},
-            verify=ca,
-            timeout=30,
-        )
-        response.raise_for_status()
-        txid = response.headers["x-ms-ccf-transaction-id"]
-        digest = hashlib.sha256(token).digest()
-        cose.verify_receipt(response.content, key, digest)
-        transparent = None
-        for _ in range(100):
+        if config is not None:
+            requests, _, ca, _ = config
             fetched = requests.get(
                 f"{REAL_SCITT_URL}/entries/{txid}/statement", verify=ca, timeout=30
             )
-            if fetched.status_code == 200:
-                transparent = fetched.content
-                break
-            if fetched.status_code not in (202, 503):
-                fetched.raise_for_status()
-            time.sleep(0.1)
-        if transparent is None:
-            raise TimeoutError(f"historical transaction {txid} remained uncached")
-        if with_uhdr(transparent, {}) != token:
-            raise ValueError("SCITT returned different signed bytes")
-        receipts = parts(transparent)[1].get(SCITT_RECEIPTS, [])
-        if len(receipts) != 1:
-            raise ValueError("transparent statement has no single receipt")
-        cose.verify_receipt(receipt_bytes(receipts[0]), key, digest)
-        return {"txid": txid, "transparent": b64(transparent), "bytes": len(transparent), "receiptVerified": True}
+            if fetched.status_code in (202, 503):
+                return Response(status_code=fetched.status_code)
+            fetched.raise_for_status()
+            transparent = fetched.content
+            if registered is not None and with_uhdr(transparent, {}) != registered[0]:
+                raise ValueError("SCITT returned different signed bytes")
+            if verify_receipt_details(transparent)["txid"] != txid:
+                raise ValueError("SCITT receipt transaction ID does not match")
+        else:
+            if registered is None or registered[1] is None:
+                raise HTTPException(404, "SCITT entry was not found")
+            transparent = registered[1]
+        return Response(transparent, media_type="application/cose")
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 

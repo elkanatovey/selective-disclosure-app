@@ -11,7 +11,7 @@ const metadataPath=join(output,"expected.json");
 
 if(mode==="issue"){
   const state=await json(`${appUrl}/api/state`),report={title:"CI browser-issued report",body:"Browser SD-CWT registered by a real SCITT node.",component:"ci",severity:"high",fingerprint:"deadbeef",references:["CVE-2026-4242"]},subject="ci-real-scitt",audience="https://ci.example/verifier";
-  const issued=await issueReport(subject,report,state.msrcJwk,jwk=>post("/mock/governance/endorse",{public_jwk:jwk}));
+  const issued=await issueReport(subject,report,state.msrcJwk,jwk=>post("/mock/msrc/endorse",{public_jwk:jwk}));
   await writeFile(join(output,"statement.cose"),issued.token);
   await writeFile(join(output,"disclosures.cbor"),encode(issued.disclosures));
   await writeFile(metadataPath,JSON.stringify({subject,audience,title:report.title,firstBodyChunk:Array.from(report.body.normalize("NFC")).slice(0,6).join(""),reference:report.references[0]},null,2));

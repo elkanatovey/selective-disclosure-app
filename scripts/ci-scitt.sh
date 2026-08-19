@@ -11,15 +11,19 @@ SCITT_INSTALL=${SCITT_INSTALL:-$WORK/install}
 VENV=${SCITT_CI_VENV:-$WORK/venv}
 NETWORK=$WORK/network
 ARTIFACTS=$WORK/artifacts
+COMMON=$NETWORK/ci_common
 SCITT_PID=
 WEB_PID=
+FOREIGN_WEB_PID=
 
 cleanup(){
   status=$?
   if [[ $status -ne 0 ]]; then
     printf '\nSCITT log:\n'; tail -n 120 "$WORK/scitt.log" 2>/dev/null || true
     printf '\nWebapp log:\n'; tail -n 80 "$WORK/webapp.log" 2>/dev/null || true
+    printf '\nForeign issuer log:\n'; tail -n 40 "$WORK/foreign-webapp.log" 2>/dev/null || true
   fi
+  [[ -z "$FOREIGN_WEB_PID" ]] || kill -- "-$FOREIGN_WEB_PID" 2>/dev/null || true
   [[ -z "$WEB_PID" ]] || kill -- "-$WEB_PID" 2>/dev/null || true
   [[ -z "$SCITT_PID" ]] || kill -- "-$SCITT_PID" 2>/dev/null || true
 }
@@ -56,7 +60,10 @@ source "$VENV/bin/activate"
 export PYTHONPATH="$ROOT:$SCITT_SRC/pyscitt${PYTHONPATH:+:$PYTHONPATH}"
 PYTHONPATH="/opt/ccf/bin:$PYTHONPATH" python -c "import infra.e2e_args, infra.network"
 
-setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host 127.0.0.1 --port 8090 >"$WORK/webapp.log" 2>&1 &
+WEB_HOST=127.0.0.1
+[[ ${SCITT_DEMO:-0} == 1 ]] && WEB_HOST=0.0.0.0
+SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
+  setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host "$WEB_HOST" --port 8090 >"$WORK/webapp.log" 2>&1 &
 WEB_PID=$!
 export CURL_CLIENT=ON INITIAL_MEMBER_COUNT=1
 setsid python /opt/ccf/bin/start_network.py --binary-dir /opt/ccf/bin --package "$SCITT_INSTALL/bin/cchost" \
@@ -88,18 +95,47 @@ else:
     raise TimeoutError('SCITT did not become ready')
 PY
 
-COMMON=$NETWORK/ci_common
-python -m pyscitt.cli.governance local_development --url https://127.0.0.1:8000 \
-  --cacert "$COMMON/service_cert.pem" --member-key "$COMMON/member0_privk.pem" \
-  --member-cert "$COMMON/member0_cert.pem" --service-trust-store "$ARTIFACTS/trust-store"
+python - "$COMMON" "$ARTIFACTS/trust-store" "$WORK/scitt-configuration.json" <<'PY'
+import json, sys
+from pathlib import Path
+import requests
+from pyscitt import governance
+from pyscitt.client import Client
+from pyscitt.cli.governance import setup_local_development
+from pyscitt.local_key_sign_client import LocalKeySignClient
+
+common = Path(sys.argv[1])
+trust_store = Path(sys.argv[2])
+configuration_path = Path(sys.argv[3])
+client = Client(
+    url="https://127.0.0.1:8000",
+    cacert=str(common / "service_cert.pem"),
+    member_auth=LocalKeySignClient(
+        (common / "member0_cert.pem").read_text(),
+        (common / "member0_privk.pem").read_text(),
+    ),
+)
+setup_local_development(client, trust_store)
+
+issuer = requests.get("http://127.0.0.1:8090/api/state", timeout=5).json()["issuer"]
+ca_prefix = issuer.split("::", 1)[0] + "::"
+policy = (
+    "export function apply(phdr) { "
+    f"const ca = {json.dumps(ca_prefix)}; "
+    "if (typeof phdr.cwt.iss !== 'string' || !phdr.cwt.iss.startsWith(ca)) "
+    "{ return 'Issuer is not endorsed by the MSRC CA'; } return true; }"
+)
+configuration = {
+    "authentication": {"allowUnauthenticated": True},
+    "policy": {"policyScript": policy},
+}
+configuration_path.write_text(json.dumps(configuration, indent=2))
+print(f"Restricting SCITT issuers to MSRC CA {ca_prefix}")
+proposal = governance.set_scitt_configuration_proposal(configuration)
+client.governance.propose(proposal, must_pass=True)
+PY
 
 if [[ ${SCITT_DEMO:-0} == 1 ]]; then
-  kill -- "-$WEB_PID" 2>/dev/null || true
-  wait "$WEB_PID" 2>/dev/null || true
-  WEB_PID=
-  SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
-    setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host 0.0.0.0 --port 8090 >"$WORK/webapp.log" 2>&1 &
-  WEB_PID=$!
   printf '\nReal SCITT demo is ready:\n'
   printf '  Researcher: http://127.0.0.1:8090/\n'
   printf '  MSRC:       http://127.0.0.1:8090/msrc\n'
@@ -114,4 +150,25 @@ node "$ROOT/scripts/scitt_flow.mjs" issue "$ARTIFACTS"
 python "$ROOT/scripts/scitt_flow.py" submit --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS"
 node "$ROOT/scripts/scitt_flow.mjs" present "$ARTIFACTS"
 python "$ROOT/scripts/scitt_flow.py" verify --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS"
+setsid python -m uvicorn webapp.app:app --app-dir "$ROOT" --host 127.0.0.1 --port 8091 >"$WORK/foreign-webapp.log" 2>&1 &
+FOREIGN_WEB_PID=$!
+python - <<'PY'
+import time
+import requests
+
+for _ in range(40):
+  try:
+    if requests.get("http://127.0.0.1:8091/api/state", timeout=1).status_code == 200:
+      break
+  except requests.RequestException:
+    pass
+  time.sleep(.1)
+else:
+  raise TimeoutError("foreign issuer service did not become ready")
+PY
+node "$ROOT/scripts/scitt_flow.mjs" issue "$ARTIFACTS/foreign" http://127.0.0.1:8091
+kill -- "-$FOREIGN_WEB_PID" 2>/dev/null || true
+wait "$FOREIGN_WEB_PID" 2>/dev/null || true
+FOREIGN_WEB_PID=
+python "$ROOT/scripts/scitt_flow.py" reject --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS/foreign"
 printf 'Real SCITT integration passed. Artifacts: %s\n' "$ARTIFACTS"

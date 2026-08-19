@@ -1,4 +1,4 @@
 role,name,path
-governance,Mock Governance,/mock/governance/endorse
-registry,Mock SCITT,/mock/scitt
+issuer,MSRC Researcher CA,/mock/msrc/endorse
+registry,Mock SCITT,/entries
 holder,MSRC,/mock/msrc

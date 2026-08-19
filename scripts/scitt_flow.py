@@ -94,6 +94,26 @@ def submit(args):
     print(json.dumps({"phase": "submit", "txid": txid, "receiptVerified": True}))
 
 
+def reject(args):
+    token = (args.output / "statement.cose").read_bytes()
+    response = requests.post(
+        f"{args.url}/entries?waitForCommit=true",
+        data=token,
+        headers={"content-type": "application/cose"},
+        verify=args.cacert,
+        timeout=30,
+    )
+    if response.status_code != 400:
+        raise AssertionError(f"foreign issuer returned {response.status_code}, expected 400")
+    try:
+        error = cbor2.loads(response.content)
+    except cbor2.CBORDecodeError:
+        error = response.text
+    if "MSRC CA" not in str(error):
+        raise AssertionError(f"foreign issuer was not rejected by the MSRC CA policy: {error}")
+    print(json.dumps({"phase": "reject", "foreignIssuerRejected": True}))
+
+
 def verify_certificates(phdr, issuer):
     if phdr.get(1) != -7 or phdr.get(16) != 293 or phdr.get(170) != -16:
         raise AssertionError("unsupported SD-CWT profile")
@@ -151,7 +171,7 @@ def verify(args):
 
 parser = argparse.ArgumentParser()
 sub = parser.add_subparsers(dest="command", required=True)
-for command, function in (("submit", submit), ("verify", verify)):
+for command, function in (("submit", submit), ("verify", verify), ("reject", reject)):
     child = sub.add_parser(command)
     child.add_argument("--url", default="https://127.0.0.1:8000")
     child.add_argument("--cacert", type=Path, required=True)

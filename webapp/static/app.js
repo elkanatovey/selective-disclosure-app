@@ -9,6 +9,20 @@ async function post(path,body){
   if(!response.ok)throw new Error(data.detail||response.statusText);
   return data;
 }
+async function responseError(response){try{const data=await response.json();return new Error(data.detail||response.statusText)}catch{return new Error(response.statusText)}}
+const isCose=response=>response.headers.get("content-type")?.split(";",1)[0]==="application/cose";
+async function register(path,token){
+  const response=await fetch(`${path}?waitForCommit=true`,{method:"POST",headers:{"content-type":"application/cose"},body:token});
+  if(!response.ok)throw await responseError(response);if(!isCose(response))throw new Error("SCITT did not return a COSE receipt");
+  const txid=response.headers.get("x-ms-ccf-transaction-id"),receipt=new Uint8Array(await response.arrayBuffer());if(!txid||!receipt.length)throw new Error("SCITT registration response is incomplete");
+  for(let attempt=0;attempt<100;attempt++){
+    const fetched=await fetch(`${path}/${encodeURIComponent(txid)}/statement`);
+    if(fetched.ok){if(!isCose(fetched))throw new Error("SCITT did not return a COSE statement");return{txid,transparent:b64(new Uint8Array(await fetched.arrayBuffer()))}}
+    if(![202,503].includes(fetched.status))throw await responseError(fetched);
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  throw new Error(`SCITT statement ${txid} remained unavailable`);
+}
 
 function status(state,title,detail){$("submission-status").dataset.state=state;$("status-title").textContent=title;$("status-detail").textContent=detail}
 function download(value,name){const a=document.createElement("a");a.href=`data:application/cose;base64,${value.replace(/-/g,"+").replace(/_/g,"/")}`;a.download=name;a.click()}
@@ -27,9 +41,9 @@ $("composer").addEventListener("submit",async event=>{
   $("confirmation").hidden=true;
   try{
     status("working","Preparing submission","Signing report");
-    const issued=await issueReport($("subject").value,report(),config.msrcJwk,jwk=>post(party("governance"),{public_jwk:jwk}),await signer());
+    const issued=await issueReport($("subject").value,report(),config.msrcJwk,jwk=>post(party("issuer"),{public_jwk:jwk}),await signer());
     status("working","Submitting report",`Registering with ${config.ledger.name}`);
-    const registered=await post(party("registry"),{token:b64(issued.token)});
+    const registered=await register(party("registry"),issued.token);
     const statement=present(registered.transparent,issued);
     status("working","Completing submission","Delivering to MSRC");
     const delivered=await post(party("holder"),{statement:b64(statement)});

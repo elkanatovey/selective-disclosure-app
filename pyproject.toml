@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<10"]
+test = ["httpx2>=2,<3", "pytest>=8,<10"]
 real-scitt = ["ccf==7.0.10", "requests>=2.32,<3"]
 
 [tool.pytest.ini_options]
