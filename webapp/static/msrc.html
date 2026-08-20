@@ -3,17 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MSRC Disclosure Review</title>
+  <title>Microsoft Security Response Center - Disclosure Review</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/msrc.css?v=5">
+  <link rel="stylesheet" href="/static/entity.css?v=1">
+  <link rel="stylesheet" href="/static/msrc.css?v=6">
 </head>
 <body>
-  <header><div class="brand"><span>MR</span><h1>MSRC Disclosure Review</h1></div><div class="ready"><i></i><strong id="service-status">Ready</strong></div></header>
+  <header class="entity-header">
+    <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="shield"></i></span><div class="entity-title"><p>MSRC service - Disclosure authority</p><h1>Microsoft Security Response Center</h1></div></div>
+  </header>
   <main>
     <section class="import-view" id="import-view">
-      <div class="import-heading"><p>Selective disclosure</p><h2>Open a submitted report</h2></div>
+      <div class="import-heading"><p>Selective disclosure</p><h2>Redact a submitted report</h2></div>
       <label class="drop-zone" id="drop-zone">
         <input id="statement-file" type="file" accept=".cose,application/cose">
         <i data-lucide="file-up"></i><strong>Choose a transparent statement</strong><span>Load the MSRC delivery `.cose` file</span>

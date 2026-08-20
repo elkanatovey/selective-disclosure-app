@@ -3,14 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Disclosure Verifier</title>
+  <title>Independent Verifier - Disclosure Review</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/verify.css?v=1">
+  <link rel="stylesheet" href="/static/entity.css?v=1">
+  <link rel="stylesheet" href="/static/verify.css?v=2">
 </head>
 <body>
-  <header><div class="brand"><span>DV</span><h1>Disclosure Verifier</h1></div><div class="ready"><i></i><strong>Local verifier</strong></div></header>
+  <header class="entity-header">
+    <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="badge-check"></i></span><div class="entity-title"><p>Verifier service - Relying party</p><h1>Independent Verifier</h1></div></div>
+  </header>
   <main>
     <form id="verify-form" class="import-view">
       <div class="import-heading"><p>Signed artifact review</p><h2>Verify a signed disclosure</h2></div>

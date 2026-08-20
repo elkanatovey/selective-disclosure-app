@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Bug Report Submission</title>
+  <title>Independent Researcher - Bug Report Submission</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=2">
+  <link rel="stylesheet" href="/static/entity.css?v=1">
+  <link rel="stylesheet" href="/static/app.css?v=3">
 </head>
 <body>
-  <header class="app-header">
-    <div class="brand"><span class="brand-mark">BR</span><h1>Bug Report Submission</h1><span class="tag">prototype</span></div>
-    <div class="service-state"><span></span><strong id="app-status">Connecting</strong></div>
+  <header class="entity-header">
+    <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="user-round"></i></span><div class="entity-title"><p>Researcher service - Submitter</p><h1>Independent Researcher</h1></div></div>
+    <div class="entity-context"><span class="connection-dot"></span><div><small>Connected registry</small><strong id="app-status">Connecting</strong></div></div>
   </header>
 
   <main>
@@ -37,6 +38,7 @@
 
       <aside class="submission-panel">
         <section>
+          <div class="trust-boundary"><i data-lucide="key-round"></i><div><strong>Researcher-controlled key</strong><small>Private key remains in this browser</small></div></div>
           <p class="eyebrow">Signing identity</p>
           <fieldset class="key-source">
             <div class="key-options">
