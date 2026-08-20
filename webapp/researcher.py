@@ -87,7 +87,7 @@ def public_state() -> dict[str, Any]:
                 },
                 {
                     "role": "registry",
-                    "name": "Real SCITT" if real else "Mock SCITT",
+                    "name": "Microsoft Signing Transparency Ledger" if real else "Mock SCITT",
                     "path": "/entries",
                 },
                 {
@@ -98,7 +98,7 @@ def public_state() -> dict[str, Any]:
             ],
             "ledger": {
                 "mode": "real" if real else "mock",
-                "name": "Real SCITT" if real else "Mock SCITT",
+                "name": "Microsoft Signing Transparency Ledger" if real else "Mock SCITT",
             },
             **public,
         }
