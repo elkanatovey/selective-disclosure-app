@@ -85,7 +85,7 @@ namespace selectivedisclosure
     for (const auto& d : disclosures)
     {
       entries.push_back(
-        cbor::make_array({encode_path(d.path), sdcwt::bytes_value(d.encoded)}));
+        cbor::make_array({encode_path(d.path), cbor::make_bytes(d.encoded)}));
     }
     return cbor::serialize(cbor::make_array(std::move(entries)));
   }

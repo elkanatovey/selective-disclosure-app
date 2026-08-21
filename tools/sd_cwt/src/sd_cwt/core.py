@@ -613,6 +613,13 @@ def match_disclosures(
         _check_cbor(encoded)  # disclosures are attacker-supplied, unsigned
         dig = _disclosure_digest(sd_alg, encoded)
         decoded = cbor2.loads(encoded)
+        if (
+            not isinstance(decoded, list)
+            or not decoded
+            or not isinstance(decoded[0], bytes)
+            or len(decoded[0]) != SALT_LEN
+        ):
+            raise ValueError("disclosure salt must be exactly 16 bytes")
         if len(decoded) == 3:
             _salt, value, key = decoded
             by_map[dig] = (key, value)

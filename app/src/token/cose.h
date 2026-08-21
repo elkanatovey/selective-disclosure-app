@@ -2,10 +2,13 @@
 // Licensed under the MIT License.
 #pragma once
 
-#include <ccf/crypto/ec_key_pair.h>
 #include <cstdint>
 #include <span>
 #include <vector>
+
+#if !defined(SDCWT_PORTABLE)
+#  include <ccf/crypto/ec_key_pair.h>
+#endif
 
 namespace sdcwt
 {
@@ -19,17 +22,26 @@ namespace sdcwt
   inline constexpr int64_t COSE_CRV_P384 = 2;
   inline constexpr int64_t COSE_CRV_P521 = 3;
 
-  // Map an EC curve to its COSE ECDSA signing algorithm id (ES256/384/512).
-  // Throws std::invalid_argument for non-ECDSA / unsupported curves.
-  int64_t cose_es_alg_for_curve(ccf::crypto::CurveID curve);
-
-  // Map an EC curve to its COSE Elliptic Curve id (P-256=1/P-384=2/P-521=3),
-  // as used in a COSE_Key. Throws std::invalid_argument for unsupported curves.
-  int64_t cose_ec_curve_id(ccf::crypto::CurveID curve);
-
   // Encode a minimal protected-header map {1: alg}. Extended by the SD-CWT
   // layer with the `sd_alg` (170) and `typ` (16) headers.
   std::vector<uint8_t> encode_protected_header(int64_t alg = COSE_ALG_ES256);
+
+  // Build the RFC 9052 Sig_structure bytes for asynchronous signing.
+  std::vector<uint8_t> prepare_cose_sign1_signature(
+    std::span<const uint8_t> protected_header_cbor,
+    std::span<const uint8_t> payload,
+    std::span<const uint8_t> external_aad = {});
+
+  // Assemble a COSE_Sign1 from a raw IEEE P1363 signature returned by
+  // WebCrypto or the native CCF signer.
+  std::vector<uint8_t> finalize_cose_sign1_signature(
+    std::span<const uint8_t> protected_header_cbor,
+    std::span<const uint8_t> payload,
+    std::span<const uint8_t> signature);
+
+#if !defined(SDCWT_PORTABLE)
+  int64_t cose_es_alg_for_curve(ccf::crypto::CurveID curve);
+  int64_t cose_ec_curve_id(ccf::crypto::CurveID curve);
 
   // Build and sign a tagged COSE_Sign1 (CBOR tag 18) over `payload`, using the
   // already-CBOR-encoded protected-header bytes and an ECDSA key. The signing
@@ -50,4 +62,5 @@ namespace sdcwt
     std::span<const uint8_t> protected_header_cbor,
     std::span<const uint8_t> payload,
     std::span<const uint8_t> external_aad = {});
+#endif
 }

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include "ccf/_private/crypto/cbor.h"
 #include "ccf/app_interface.h"
 #include "ccf/claims_digest.h"
 #include "ccf/common_auth_policies.h"
@@ -260,8 +261,9 @@ namespace selectivedisclosure
           return;
         }
         const auto body = ccf::cbor::serialize(ccf::cbor::make_map(
-          {{ccf::cbor::make_string("key"), sdcwt::bytes_value(*pubkey)},
-           {ccf::cbor::make_string("receipt"), sdcwt::bytes_value(receipt)}}));
+          {{ccf::cbor::make_string("key"), ccf::cbor::make_bytes(*pubkey)},
+           {ccf::cbor::make_string("receipt"),
+            ccf::cbor::make_bytes(receipt)}}));
         respond_ok(
           *ctx.rpc_ctx, ccf::http::headervalues::contenttype::CBOR, body);
       };

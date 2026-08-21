@@ -14,13 +14,24 @@ endif()
 # --- Vendored dependencies -------------------------------------------------
 include(FetchContent)
 
+set(EVERCBOR_ROOT
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/CCF/3rdparty/internal
+)
+set(EVERCBOR_INCLUDE_DIRS
+  ${EVERCBOR_ROOT}
+  ${EVERCBOR_ROOT}/evercbor
+)
+
 # The token core (CBOR/COSE/SD-CWT construction), shared by the enclave app and
 # the host unit tests.
 set(TOKEN_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cbor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cbor_value.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/cose.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/token/presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/sd_cwt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/token/statement.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/token/verification.cpp
 )
 
 # App-level pure logic (CBOR submission parsing, ...), unit-testable without CCF
@@ -31,18 +42,15 @@ set(APP_LOGIC_SRCS
 )
 
 # --- The CCF application ----------------------------------------------------
-# CBOR encode/decode uses CCF's own evercbor-backed `ccf::cbor` (header
-# ccf/_private/crypto/cbor.h, symbols in ccfcrypto), so no CBOR library is
-# vendored here. The header is under `_private`, so CCF makes no API-stability
-# promise for it; the pinned CCF release in third_party/CCF is what keeps that
-# safe, and a break would be a compile error rather than silent misbehaviour.
+# The token core uses its project-owned EverCBOR adapter. Native hashing,
+# entropy, and ECDSA remain supplied by CCF.
 add_ccf_app(
   selective_disclosure
   SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
        ${TOKEN_SRCS}
        ${APP_LOGIC_SRCS}
-  INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src
+  INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src ${EVERCBOR_INCLUDE_DIRS}
 )
 
 # --- Host unit tests (no enclave, no chain) --------------------------------
@@ -65,6 +73,7 @@ if(BUILD_TESTS)
   # main CCF headers live under the install prefix, so add them explicitly.
   target_include_directories(
     unit_tests SYSTEM PRIVATE
+    ${EVERCBOR_INCLUDE_DIRS}
     ${CCF_DIR}/include
     ${CCF_DIR}/include/ccf
     ${CCF_DIR}/include/3rdparty

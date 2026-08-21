@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 #pragma once
 
-#include <ccf/_private/crypto/cbor.h>
+#include "token/cbor.h"
+
 #include <cstdint>
 #include <span>
 #include <string>
@@ -53,15 +54,15 @@ namespace sdcwt
   // make_bytes for possibly-empty data: make_bytes rejects a NULL data pointer,
   // so an empty vector/span (data() == nullptr) throws even though an empty
   // byte string is legal CBOR. Passes a non-null zero-length anchor instead.
-  ccf::cbor::Value bytes_value(std::span<const uint8_t> data);
+  cbor::Value bytes_value(std::span<const uint8_t> data);
 
-  // Build a `ccf::cbor` view of a value/key, sorting map entries into CDE order
-  // (RFC 8949 §4.2); `ccf::cbor::serialize` itself does not sort.
+  // Build a CBOR view of a value/key, sorting map entries into CDE order
+  // (RFC 8949 §4.2); the encoder itself preserves insertion order.
   //
   // LIFETIME: the result BORROWS from `v` (Bytes is a span, String a view).
   // Serialize it in the same expression; never let it outlive `v`.
-  ccf::cbor::Value to_ccf_cbor(const CborValue& v);
-  ccf::cbor::Value to_ccf_cbor(const CborKey& k);
+  cbor::Value to_cbor(const CborValue& v);
+  cbor::Value to_cbor(const CborKey& k);
 
   std::vector<uint8_t> encode_value(const CborValue& v);
 }

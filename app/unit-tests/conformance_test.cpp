@@ -4,7 +4,6 @@
 #include "token/statement.h"
 #include "token/statement_internal.h"
 
-#include <ccf/_private/crypto/cbor.h>
 #include <ccf/crypto/ec_key_pair.h>
 #include <cstdlib>
 #include <filesystem>
@@ -19,13 +18,13 @@ namespace
   std::vector<uint8_t> encode_disclosures(
     const std::vector<sdcwt::Disclosure>& disclosures)
   {
-    std::vector<ccf::cbor::Value> items;
+    std::vector<sdcwt::cbor::Value> items;
     items.reserve(disclosures.size());
     for (const auto& d : disclosures)
     {
       items.push_back(sdcwt::bytes_value(d.encoded));
     }
-    return ccf::cbor::serialize(ccf::cbor::make_array(std::move(items)));
+    return sdcwt::cbor::serialize(sdcwt::cbor::make_array(std::move(items)));
   }
 
   // Emit a C++-produced statement (token + disclosures + signer pubkey) for the

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "token/cbor_value.h"
+#include "token/presentation.h"
 
 #include <ccf/crypto/ec_key_pair.h>
 #include <ccf/crypto/ec_public_key.h>
@@ -131,15 +132,6 @@ namespace sdcwt
     HashAlg sd_alg = HashAlg::SHA_256,
     size_t pad_to = 0,
     const ccf::crypto::ECPublicKey* holder = nullptr);
-
-  // Attach `selected` disclosures (their encoded `[salt, value, key]` bytes) to
-  // an issued SD-CWT's unprotected header (sd_claims, label 17), leaving the
-  // protected header, payload and signature untouched (no re-signing). Passing
-  // an empty selection omits the sd_claims header entirely. Mirrors the Python
-  // reference `present`. Throws std::runtime_error on a malformed token.
-  std::vector<uint8_t> present(
-    std::span<const uint8_t> token,
-    const std::vector<std::vector<uint8_t>>& selected);
 
   // Key Binding Token payload parameters (draft-08 s8.1). `aud` (the intended
   // verifier) is required; at least one of `iat`/`cti` MUST be set. `iss`/`sub`

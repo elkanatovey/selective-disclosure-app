@@ -1,0 +1,65 @@
+name: sd-cwt-wasm
+
+on:
+  push:
+    paths:
+      - "app/src/token/**"
+      - "app/wasm/**"
+      - "tools/sd_cwt/**"
+      - ".github/workflows/wasm.yml"
+  pull_request:
+    paths:
+      - "app/src/token/**"
+      - "app/wasm/**"
+      - "tools/sd_cwt/**"
+      - ".github/workflows/wasm.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tools/sd_cwt/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python conformance package
+        run: python -m pip install -e "./tools/sd_cwt[test]"
+      - name: Install pinned Emscripten SDK
+        run: |
+          git clone --depth 1 --branch 4.0.12 \
+            https://github.com/emscripten-core/emsdk.git /tmp/emsdk
+          /tmp/emsdk/emsdk install 4.0.12
+          /tmp/emsdk/emsdk activate 4.0.12
+      - name: Build and test
+        run: |
+          source /tmp/emsdk/emsdk_env.sh
+          started=$SECONDS
+          emcmake cmake -GNinja -S app/wasm -B /tmp/sd-cwt-wasm-build \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/sd-cwt-wasm-build
+          echo "Clean configure + build: $((SECONDS - started)) s"
+          node app/wasm/tests/conformance.mjs \
+            /tmp/sd-cwt-wasm-build/sd_cwt.mjs
+      - name: Report sizes
+        run: |
+          for file in \
+            /tmp/sd-cwt-wasm-build/sd_cwt.wasm \
+            /tmp/sd-cwt-wasm-build/sd_cwt.mjs \
+            /tmp/sd-cwt-wasm-build/sd_cwt_webcrypto.mjs; do
+            printf '%s raw=' "$(basename "$file")"
+            wc -c < "$file"
+            printf '%s gzip=' "$(basename "$file")"
+            gzip -9 -c "$file" | wc -c
+          done

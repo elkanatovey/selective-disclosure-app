@@ -80,8 +80,10 @@ jobs:
           gem install --no-document cddl
 
       - uses: actions/checkout@v5
-        # The CCF submodule is not needed: we build against the installed CCF
-        # development package, not from source.
+        with:
+          # The token adapter compiles against pinned EverCBOR headers while
+          # native cryptography still comes from the installed CCF package.
+          submodules: true
 
       - name: Work around git safe.directory in container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"

@@ -74,52 +74,50 @@ namespace sdcwt
 
     std::vector<uint8_t> encoded_key_bytes(const CborKey& key)
     {
-      return ccf::cbor::serialize(to_ccf_cbor(key));
+      return cbor::serialize(to_cbor(key));
     }
   }
 
-  ccf::cbor::Value bytes_value(std::span<const uint8_t> data)
+  cbor::Value bytes_value(std::span<const uint8_t> data)
   {
     if (data.empty())
     {
-      // Any valid address works: ccf::cbor checks the pointer, not the length.
       static constexpr std::array<uint8_t, 1> anchor{};
-      return ccf::cbor::make_bytes(std::span<const uint8_t>{anchor.data(), 0});
+      return cbor::make_bytes(std::span<const uint8_t>{anchor.data(), 0});
     }
-    return ccf::cbor::make_bytes(data);
+    return cbor::make_bytes(data);
   }
 
-  ccf::cbor::Value to_ccf_cbor(const CborKey& key)
+  cbor::Value to_cbor(const CborKey& key)
   {
     if (std::holds_alternative<int64_t>(key))
     {
-      return ccf::cbor::make_signed(std::get<int64_t>(key));
+      return cbor::make_signed(std::get<int64_t>(key));
     }
-    return ccf::cbor::make_string(std::get<std::string>(key));
+    return cbor::make_string(std::get<std::string>(key));
   }
 
-  ccf::cbor::Value to_ccf_cbor(const CborValue& v)
+  cbor::Value to_cbor(const CborValue& v)
   {
     switch (v.kind)
     {
       case CborValue::Kind::Int:
-        return ccf::cbor::make_signed(v.int_v);
+        return cbor::make_signed(v.int_v);
       case CborValue::Kind::Bytes:
         return bytes_value(v.bytes_v);
       case CborValue::Kind::Text:
-        return ccf::cbor::make_string(v.text_v);
+        return cbor::make_string(v.text_v);
       case CborValue::Kind::RedactedElement:
-        return ccf::cbor::make_tagged(
-          REDACTED_ELEMENT_TAG, bytes_value(v.bytes_v));
+        return cbor::make_tagged(REDACTED_ELEMENT_TAG, bytes_value(v.bytes_v));
       case CborValue::Kind::Array:
       {
-        std::vector<ccf::cbor::Value> items;
+        std::vector<cbor::Value> items;
         items.reserve(v.array_v.size());
         for (const auto& elem : v.array_v)
         {
-          items.push_back(to_ccf_cbor(elem));
+          items.push_back(to_cbor(elem));
         }
-        return ccf::cbor::make_array(std::move(items));
+        return cbor::make_array(std::move(items));
       }
       case CborValue::Kind::Map:
       {
@@ -140,28 +138,27 @@ namespace sdcwt
           return keys[a] < keys[b];
         });
 
-        std::vector<ccf::cbor::MapItem> items;
+        std::vector<cbor::MapItem> items;
         items.reserve(v.map_keys.size() + 1);
         for (const size_t idx : order)
         {
           items.emplace_back(
-            to_ccf_cbor(v.map_keys[idx]), to_ccf_cbor(v.map_vals[idx]));
+            to_cbor(v.map_keys[idx]), to_cbor(v.map_vals[idx]));
         }
 
         if (!v.redacted_hashes.empty())
         {
-          std::vector<ccf::cbor::Value> hashes;
+          std::vector<cbor::Value> hashes;
           hashes.reserve(v.redacted_hashes.size());
           for (const auto& dig : v.redacted_hashes)
           {
-            hashes.push_back(ccf::cbor::make_bytes(dig));
+            hashes.push_back(cbor::make_bytes(dig));
           }
           items.emplace_back(
-            ccf::cbor::make_simple(
-              static_cast<ccf::cbor::SimpleValue>(REDACTED_CLAIM_KEYS)),
-            ccf::cbor::make_array(std::move(hashes)));
+            cbor::make_simple(REDACTED_CLAIM_KEYS),
+            cbor::make_array(std::move(hashes)));
         }
-        return ccf::cbor::make_map(std::move(items));
+        return cbor::make_map(std::move(items));
       }
     }
     throw std::runtime_error("unhandled CborValue kind");
@@ -169,6 +166,6 @@ namespace sdcwt
 
   std::vector<uint8_t> encode_value(const CborValue& v)
   {
-    return ccf::cbor::serialize(to_ccf_cbor(v));
+    return cbor::serialize(to_cbor(v));
   }
 }

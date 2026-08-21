@@ -68,7 +68,7 @@ namespace sdcwt
     std::span<const uint8_t> encoded, HashAlg sd_alg)
   {
     // draft-08: hash the disclosure wrapped in a CBOR byte string.
-    const auto wrapped = ccf::cbor::serialize(bytes_value(encoded));
+    const auto wrapped = cbor::serialize(bytes_value(encoded));
     return ccf::crypto::make_hash_provider()->hash(
       wrapped.data(), wrapped.size(), md_for_hash_alg(sd_alg));
   }
@@ -77,11 +77,11 @@ namespace sdcwt
     int64_t cose_alg, HashAlg sd_alg)
   {
     // CDE key order: 1 (alg) < 16 (typ) < 170 (sd_alg).
-    return ccf::cbor::serialize(ccf::cbor::make_map(
-      {{ccf::cbor::make_signed(1), ccf::cbor::make_signed(cose_alg)},
-       {ccf::cbor::make_signed(TYP_LABEL), ccf::cbor::make_signed(SD_CWT_TYP)},
-       {ccf::cbor::make_signed(SD_ALG_LABEL),
-        ccf::cbor::make_signed(static_cast<int64_t>(sd_alg))}}));
+    return cbor::serialize(cbor::make_map(
+      {{cbor::make_signed(1), cbor::make_signed(cose_alg)},
+       {cbor::make_signed(TYP_LABEL), cbor::make_signed(SD_CWT_TYP)},
+       {cbor::make_signed(SD_ALG_LABEL),
+        cbor::make_signed(static_cast<int64_t>(sd_alg))}}));
   }
 
   namespace
@@ -90,24 +90,23 @@ namespace sdcwt
     std::vector<uint8_t> encode_map_disclosure(
       std::span<const uint8_t> salt, const CborValue& value, const CborKey& key)
     {
-      return ccf::cbor::serialize(ccf::cbor::make_array(
-        {ccf::cbor::make_bytes(salt), to_ccf_cbor(value), to_ccf_cbor(key)}));
+      return cbor::serialize(cbor::make_array(
+        {cbor::make_bytes(salt), to_cbor(value), to_cbor(key)}));
     }
 
     // cbor([salt, <value>]) for a redacted array element.
     std::vector<uint8_t> encode_elem_disclosure(
       std::span<const uint8_t> salt, const CborValue& value)
     {
-      return ccf::cbor::serialize(ccf::cbor::make_array(
-        {ccf::cbor::make_bytes(salt), to_ccf_cbor(value)}));
+      return cbor::serialize(
+        cbor::make_array({cbor::make_bytes(salt), to_cbor(value)}));
     }
 
     // cbor([salt]): a salt-only decoy disclosure that pads the redacted-hash
     // count.
     std::vector<uint8_t> encode_decoy_disclosure(std::span<const uint8_t> salt)
     {
-      return ccf::cbor::serialize(
-        ccf::cbor::make_array({ccf::cbor::make_bytes(salt)}));
+      return cbor::serialize(cbor::make_array({cbor::make_bytes(salt)}));
     }
 
     // RFC 8747 cnf {1: COSE_Key} with holder's EC2 public coords (kty, crv, x,
@@ -408,72 +407,6 @@ namespace sdcwt
       holder);
   }
 
-  std::vector<uint8_t> present(
-    std::span<const uint8_t> token,
-    const std::vector<std::vector<uint8_t>>& selected)
-  {
-    namespace cbor = ccf::cbor;
-
-    // Rebuild the COSE_Sign1, dropping only the sd_claims unprotected-header
-    // entry. Protected header, payload and signature are re-emitted unchanged
-    // so the signature stays valid.
-    cbor::Value root;
-    const cbor::Value* envelope = nullptr;
-    try
-    {
-      root = cbor::parse(token);
-      envelope = &root->tag_at(cbor::tag::COSE_SIGN_1);
-    }
-    catch (const std::exception&)
-    {
-      throw std::runtime_error("present: malformed COSE_Sign1 token");
-    }
-
-    if (!std::holds_alternative<cbor::Array>((*envelope)->value))
-    {
-      throw std::runtime_error("present: malformed COSE_Sign1 token");
-    }
-    const auto& parts = std::get<cbor::Array>((*envelope)->value).items;
-    if (parts.size() != 4)
-    {
-      throw std::runtime_error("present: malformed COSE_Sign1 token");
-    }
-    if (!std::holds_alternative<cbor::Map>(parts[1]->value))
-    {
-      throw std::runtime_error("present: malformed unprotected header");
-    }
-
-    std::vector<cbor::MapItem> uhdr;
-    for (const auto& [label, value] :
-         std::get<cbor::Map>(parts[1]->value).items)
-    {
-      const bool is_sd_claims =
-        std::holds_alternative<cbor::Signed>(label->value) &&
-        label->as_signed() == SD_CLAIMS_LABEL;
-      if (!is_sd_claims)
-      {
-        uhdr.emplace_back(label, value);
-      }
-    }
-    if (!selected.empty())
-    {
-      std::vector<cbor::Value> disclosures;
-      disclosures.reserve(selected.size());
-      for (const auto& d : selected)
-      {
-        disclosures.push_back(bytes_value(d));
-      }
-      uhdr.emplace_back(
-        cbor::make_signed(SD_CLAIMS_LABEL),
-        cbor::make_array(std::move(disclosures)));
-    }
-
-    return cbor::serialize(cbor::make_tagged(
-      cbor::tag::COSE_SIGN_1,
-      cbor::make_array(
-        {parts[0], cbor::make_map(std::move(uhdr)), parts[2], parts[3]})));
-  }
-
   std::vector<uint8_t> kbt_sign(
     std::span<const uint8_t> token,
     const std::vector<std::vector<uint8_t>>& selected,
@@ -492,45 +425,42 @@ namespace sdcwt
     // KBT protected header {1: alg, 13: <embedded presented SD-CWT>, 16: typ}.
     // Keys are emitted in CDE order (1, 13, 16). The embedded token is parsed
     // rather than spliced.
-    const auto phdr = ccf::cbor::serialize(ccf::cbor::make_map(
-      {{ccf::cbor::make_signed(1), ccf::cbor::make_signed(holder_alg)},
-       {ccf::cbor::make_signed(KCWT_LABEL), ccf::cbor::parse(presented)},
-       {ccf::cbor::make_signed(TYP_LABEL),
-        ccf::cbor::make_signed(KB_CWT_TYP)}}));
+    const auto phdr = cbor::serialize(cbor::make_map(
+      {{cbor::make_signed(1), cbor::make_signed(holder_alg)},
+       {cbor::make_signed(KCWT_LABEL), cbor::parse(presented)},
+       {cbor::make_signed(TYP_LABEL), cbor::make_signed(KB_CWT_TYP)}}));
 
     // KBT payload: aud plus whichever of exp/nbf/iat/cti/cnonce are set,
     // emitted in ascending (CDE) key order. iss/sub are forbidden and never
     // added.
-    std::vector<ccf::cbor::MapItem> claims;
+    std::vector<cbor::MapItem> claims;
     claims.emplace_back(
-      ccf::cbor::make_signed(CWT_AUD), ccf::cbor::make_string(params.aud));
+      cbor::make_signed(CWT_AUD), cbor::make_string(params.aud));
     if (params.exp.has_value())
     {
       claims.emplace_back(
-        ccf::cbor::make_signed(CWT_EXP), ccf::cbor::make_signed(*params.exp));
+        cbor::make_signed(CWT_EXP), cbor::make_signed(*params.exp));
     }
     if (params.nbf.has_value())
     {
       claims.emplace_back(
-        ccf::cbor::make_signed(CWT_NBF), ccf::cbor::make_signed(*params.nbf));
+        cbor::make_signed(CWT_NBF), cbor::make_signed(*params.nbf));
     }
     if (params.iat.has_value())
     {
       claims.emplace_back(
-        ccf::cbor::make_signed(CWT_IAT), ccf::cbor::make_signed(*params.iat));
+        cbor::make_signed(CWT_IAT), cbor::make_signed(*params.iat));
     }
     if (params.cti.has_value())
     {
-      claims.emplace_back(
-        ccf::cbor::make_signed(CWT_CTI), bytes_value(*params.cti));
+      claims.emplace_back(cbor::make_signed(CWT_CTI), bytes_value(*params.cti));
     }
     if (params.cnonce.has_value())
     {
       claims.emplace_back(
-        ccf::cbor::make_signed(CWT_CNONCE), bytes_value(*params.cnonce));
+        cbor::make_signed(CWT_CNONCE), bytes_value(*params.cnonce));
     }
-    const auto payload =
-      ccf::cbor::serialize(ccf::cbor::make_map(std::move(claims)));
+    const auto payload = cbor::serialize(cbor::make_map(std::move(claims)));
 
     return sign_cose_sign1(holder, phdr, payload);
   }

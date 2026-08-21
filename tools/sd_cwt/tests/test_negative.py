@@ -132,6 +132,14 @@ def test_validate_rejects_two_disclosures_same_key(signer):
         sd_cwt.validate(token, signer)
 
 
+def test_validate_rejects_short_disclosure_salt(signer):
+    encoded = cbor2.dumps([secrets.token_bytes(15), "secret", 500])
+    digest = hashlib.sha256(cbor2.dumps(encoded)).digest()
+    token = _sign(signer, {REDACTED_KEYS: [digest]}, {17: [encoded]})
+    with pytest.raises(ValueError, match="salt must be exactly 16 bytes"):
+        sd_cwt.validate(token, signer)
+
+
 def test_validate_allows_same_key_at_different_levels(signer):
     """A disclosed key equal to a clear key at another level is NOT a duplicate."""
     disc, dig = _map_disclosure("us", 1)  # key 1 nested inside 503

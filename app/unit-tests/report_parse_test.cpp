@@ -36,7 +36,7 @@ TEST(ReportParse, DecodesAllFields)
      {text("component"), text("parser")},
      {text("severity"), text("high")},
      {text("patch"), text("fixed")},
-     {text("fingerprint"), sdcwt::bytes_value(fp)},
+     {text("fingerprint"), cbor::make_bytes(fp)},
      {text("references"),
       cbor::make_array({text("CVE-2025-1"), text("CVE-2025-2")})},
      {text("patch_date"), cbor::make_signed(1700100000)}});
@@ -70,7 +70,7 @@ TEST(ReportParse, FingerprintIsBytes)
 {
   const std::vector<uint8_t> fp = {0x00, 0x01, 0x02, 0xff};
   const auto f =
-    parse_report_fields(body({{text("fingerprint"), sdcwt::bytes_value(fp)}}));
+    parse_report_fields(body({{text("fingerprint"), cbor::make_bytes(fp)}}));
   ASSERT_TRUE(f.fingerprint.has_value());
   EXPECT_EQ(*f.fingerprint, fp);
 }

@@ -36,10 +36,10 @@ TEST(SdCwt, DisclosureDigestMatchesPythonReference)
   }
 
   const auto value = sdcwt::value::text("heap overflow");
-  const auto encoded = ccf::cbor::serialize(ccf::cbor::make_array(
-    {ccf::cbor::make_bytes(salt),
-     sdcwt::to_ccf_cbor(value),
-     ccf::cbor::make_signed(1002)}));
+  const auto encoded = sdcwt::cbor::serialize(sdcwt::cbor::make_array(
+    {sdcwt::cbor::make_bytes(salt),
+     sdcwt::to_cbor(value),
+     sdcwt::cbor::make_signed(1002)}));
 
   EXPECT_EQ(
     to_hex(encoded),
@@ -182,7 +182,7 @@ TEST(SdCwt, PresentAttachesSelectedDisclosures)
 // them (mirrors the Python reference's dict(arr[1]) passthrough).
 TEST(SdCwt, PresentPreservesExistingUnprotectedHeader)
 {
-  namespace cbor = ccf::cbor;
+  namespace cbor = sdcwt::cbor;
   const std::vector<uint8_t> kid = {0xAB, 0xCD};
   const std::vector<uint8_t> cert = {0x01, 0x02, 0x03};
   const std::vector<uint8_t> disclosure = {0x81, 0x40}; // [h'']
@@ -192,7 +192,7 @@ TEST(SdCwt, PresentPreservesExistingUnprotectedHeader)
   // and an x5chain-like array (33). The signature/payload are placeholders;
   // present does not verify them.
   const auto token = cbor::serialize(cbor::make_tagged(
-    cbor::tag::COSE_SIGN_1,
+    cbor::COSE_SIGN_1_TAG,
     cbor::make_array(
       {sdcwt::bytes_value(empty), // phdr
        cbor::make_map(
@@ -208,7 +208,7 @@ TEST(SdCwt, PresentPreservesExistingUnprotectedHeader)
   // and now also sd_claims(17).
   const auto out = cbor::parse(presented);
   const auto& parts =
-    std::get<cbor::Array>(out->tag_at(cbor::tag::COSE_SIGN_1)->value).items;
+    std::get<cbor::Array>(out->tag_at(cbor::COSE_SIGN_1_TAG)->value).items;
   const auto& uhdr = parts[1];
 
   const auto got_kid = uhdr->map_at(cbor::make_signed(4))->as_bytes();
@@ -392,9 +392,10 @@ TEST(SdCwt, NestedAncestorDisclosure)
   EXPECT_EQ(a_enc.find("SECRET_CHILD"), std::string::npos);
 }
 
-// present() rebuilds the COSE_Sign1 through ccf::cbor, which enforces
-// definite-length encoding (draft-08 s5.1). A token whose unprotected header is
-// an indefinite-length map is therefore rejected rather than round-tripped.
+// present() rebuilds the COSE_Sign1 through the EverCBOR adapter, which
+// enforces definite-length encoding (draft-08 s5.1). A token whose unprotected
+// header is an indefinite-length map is therefore rejected rather than
+// round-tripped.
 //
 // This is a deliberate narrowing. The service is the sole signer and only ever
 // presents tokens it issued itself, all definite-length, so the rejected form
@@ -414,7 +415,7 @@ TEST(SdCwt, PresentRejectsIndefiniteLengthUnprotectedHeader)
   EXPECT_THROW((void)sdcwt::present(token, {disclosure}), std::runtime_error);
 }
 
-// ccf::cbor represents integers as int64_t, so a CBOR unsigned integer above
+// The adapter represents integers as int64_t, so a CBOR unsigned integer above
 // INT64_MAX cannot be held at all and is rejected at parse. A token whose
 // unprotected header uses such a label therefore cannot be presented.
 //
@@ -459,13 +460,13 @@ TEST(SdCwt, PresentRejectsLabelAboveInt64Max)
 // a stale entry surviving here would over-disclose.
 TEST(SdCwt, PresentReplacesExistingSdClaims)
 {
-  namespace cbor = ccf::cbor;
+  namespace cbor = sdcwt::cbor;
   const std::vector<uint8_t> empty;
   const std::vector<uint8_t> first = {0x81, 0x41, 0xAA}; // [h'AA']
   const std::vector<uint8_t> second = {0x81, 0x41, 0xBB}; // [h'BB']
 
   const auto token = cbor::serialize(cbor::make_tagged(
-    cbor::tag::COSE_SIGN_1,
+    cbor::COSE_SIGN_1_TAG,
     cbor::make_array(
       {sdcwt::bytes_value(empty), // phdr
        cbor::make_map({}), // uhdr
@@ -477,7 +478,7 @@ TEST(SdCwt, PresentReplacesExistingSdClaims)
 
   const auto out = cbor::parse(twice);
   const auto& parts =
-    std::get<cbor::Array>(out->tag_at(cbor::tag::COSE_SIGN_1)->value).items;
+    std::get<cbor::Array>(out->tag_at(cbor::COSE_SIGN_1_TAG)->value).items;
   const auto& sd_claims = parts[1]->map_at(cbor::make_signed(17));
 
   ASSERT_EQ(sd_claims->size(), 1u);
@@ -487,7 +488,7 @@ TEST(SdCwt, PresentReplacesExistingSdClaims)
 
 // The CDE (RFC 8949 §4.2) map-key order applied in cbor_value.cpp is
 // load-bearing: the C++ signer and the Python oracle must agree byte for byte,
-// and ccf::cbor::serialize preserves insertion order rather than sorting, so
+// and the CBOR serializer preserves insertion order rather than sorting, so
 // the ordering is ours to get right. Conformance covers it only indirectly.
 //
 // This also pins the invariant the sort relies on — that every int and text key

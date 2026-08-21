@@ -25,6 +25,9 @@ API contract.
 ## Layout
 - `app/` — the CCF application in C++: endpoints, token core, and confidential
   store.
+- `app/wasm/` — the standalone EverCBOR WebAssembly target for browser
+  presentation, WebCrypto signing, and disclosure verification. See
+  [`app/wasm/README.md`](app/wasm/README.md) for its API and measurements.
 - `tools/sd_cwt/` — a Python SD-CWT reference library that issues, redacts,
   presents, and verifies tokens. It is the conformance oracle for the C++ core
   and the researcher-side offline verifier of released unredacted tokens.
@@ -175,6 +178,13 @@ ninja -C app/build-test unit_tests && ./app/build-test/unit_tests
 
 # Python SD-CWT reference library:
 pip install -e "tools/sd_cwt[test]" && pytest tools/sd_cwt
+
+# Browser WebAssembly target and WebCrypto conformance:
+# See app/wasm/README.md for the pinned Emscripten setup.
+emcmake cmake -GNinja -S app/wasm -B /tmp/sd-cwt-wasm-build \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/sd-cwt-wasm-build
+node app/wasm/tests/conformance.mjs /tmp/sd-cwt-wasm-build/sd_cwt.mjs
 
 # End-to-end suite against a live sandbox node:
 INSTALL_DIR=$PWD/.ccf-install ./scripts/ci-e2e-tests.sh
