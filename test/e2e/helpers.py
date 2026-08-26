@@ -43,6 +43,12 @@ def uhdr(token: bytes) -> dict:
     return arr[1] or {}
 
 
+def body_text(chunks: dict) -> str:
+    """Join disclosed ``body`` chunks in index order. Withheld chunks are simply
+    absent, so this is the visible text, not the original."""
+    return "".join(chunks[i] for i in sorted(chunks))
+
+
 def bare_statement(transparent: bytes) -> bytes:
     """Reconstruct the original signed statement (empty unprotected header) from a
     transparent statement, by dropping the embedded receipt. The CCF claims digest

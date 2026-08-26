@@ -32,11 +32,16 @@ namespace sdcwt::statement
   // Garbage sentinel length for an absent content field.
   inline constexpr size_t PAD_LEN = 16;
 
+  // Redaction granularity of `body`: codepoints per Redacted Claim Hash, so the
+  // smallest span that can be withheld. Must match the Python oracle's
+  // BODY_CHUNK_CHARS or the two emit different payloads.
+  inline constexpr size_t BODY_CHUNK_CHARS = 6;
+
   // Schema/profile version this build implements. Bump on any change to the
   // content field set, their IDs, or the redaction/uniformity rules (DESIGN
   // §12.1). Surfaced by GET /version so a client knows which schema a live
   // service speaks; the authoritative binding remains the app code measurement.
-  inline constexpr int64_t SCHEMA_VERSION = 1;
+  inline constexpr int64_t SCHEMA_VERSION = 2;
 
   // A statement's content. Absent fields are garbage-padded so every statement
   // has an identical redacted shape (report and note are indistinguishable).
@@ -56,12 +61,13 @@ namespace sdcwt::statement
   // Build the strictly-uniform claim set: clear iss/iat + all 9 content fields
   // (real value when set, else a random `pad_len`-byte garbage sentinel).
   // Which claims are redacted is not encoded here — issue_statement() supplies
-  // that as redaction paths.
+  // that as redaction paths. `body` becomes a chunk map; see spec/statement.cddl.
   std::vector<Claim> build_claims(
     const std::string& iss,
     int64_t iat,
     const Fields& fields,
-    size_t pad_len = PAD_LEN);
+    size_t pad_len = PAD_LEN,
+    size_t chunk_chars = BODY_CHUNK_CHARS);
 
   // Build + sign a strictly-uniform statement token. The COSE signing algorithm
   // is derived from the key's curve; the redaction hash is `sd_alg` (default
@@ -75,5 +81,6 @@ namespace sdcwt::statement
     const Fields& fields,
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg = HashAlg::SHA_256,
-    size_t pad_len = PAD_LEN);
+    size_t pad_len = PAD_LEN,
+    size_t chunk_chars = BODY_CHUNK_CHARS);
 }

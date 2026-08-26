@@ -20,7 +20,8 @@ namespace sdcwt::statement::detail
     int64_t iat,
     const Fields& fields,
     const RandomSource& rng,
-    size_t pad_len = PAD_LEN);
+    size_t pad_len = PAD_LEN,
+    size_t chunk_chars = BODY_CHUNK_CHARS);
 
   IssuedToken issue_statement(
     const std::string& iss,
@@ -29,5 +30,6 @@ namespace sdcwt::statement::detail
     const ccf::crypto::ECKeyPair& key,
     HashAlg sd_alg,
     const RandomSource& rng,
-    size_t pad_len = PAD_LEN);
+    size_t pad_len = PAD_LEN,
+    size_t chunk_chars = BODY_CHUNK_CHARS);
 }

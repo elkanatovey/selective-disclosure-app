@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SD-CWT statement redaction</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ v }}">
+</head>
+<body>
+<header>
+  <h1>SD-CWT statement redaction</h1>
+  <p class="lead">
+    Withhold parts of a statement's body without re-signing it.
+  </p>
+</header>
+
+<main>
+  <section class="panel" id="panel-load">
+    <h2><span class="step">1</span> Load</h2>
+    <p class="hint">From <code>GET /operator/statements/{txid}</code>. Without the
+      certificate the receipt is not checked.</p>
+    <div class="row">
+      <label class="file">statement .cose<input id="token" type="file"></label>
+      <label class="file">service_cert.pem<input id="cert" type="file"></label>
+      <button id="btn-load" class="primary">Load</button>
+    </div>
+    <details class="sample">
+      <summary>No ledger to hand? Issue a sample locally</summary>
+      <textarea id="sample-text" spellcheck="false" aria-label="sample body text">A malformed JPEG in a document preview overflows a fixed 4096-byte buffer in parse_thumbnail().
+
+Reporter: Dana Whitfield, dana.whitfield@example-research.org, +1 555 0142.
+Affected customer: Northwind Traders, tenant 4d9f-2211, notified 5 March.
+
+Clamp the declared thumbnail length to the remaining input before the copy.</textarea>
+      <button id="btn-sample">Issue sample</button>
+      <p class="hint">No receipt &mdash; only the service can issue one.</p>
+    </details>
+    <div id="load-out" class="out"></div>
+  </section>
+
+  <section class="panel is-hidden" id="panel-redact">
+    <h2><span class="step">2</span> Redact</h2>
+    <p class="hint">Withholding is one-way: hatched chunks arrived without an
+      opening and cannot be restored.</p>
+    <div id="fields" class="fields"></div>
+    <div class="row toolbar">
+      <button id="btn-reveal-sel">Reveal selection</button>
+      <button id="btn-hide-sel">Withhold selection</button>
+      <span class="sep"></span>
+      <button id="btn-all">Reveal all</button>
+      <button id="btn-none">Withhold all</button>
+      <button id="btn-invert">Invert</button>
+      <span class="sep"></span>
+      <span id="counter" class="counter"></span>
+      <button id="btn-export" class="primary">Export .cose</button>
+    </div>
+    <div id="doc" class="doc" aria-label="statement body with redactions"></div>
+  </section>
+
+  <section class="panel" id="panel-verify">
+    <h2><span class="step">3</span> Verify</h2>
+    <div class="row">
+      <label class="file">statement .cose<input id="vtoken" type="file"></label>
+      <label class="file">service_cert.pem<input id="vcert" type="file"></label>
+      <button id="btn-verify-current">Verify current selection</button>
+    </div>
+    <div id="verify-out" class="out"></div>
+    <div id="verify-doc" class="doc"></div>
+  </section>
+</main>
+
+<script src="/static/app.js?v={{ v }}"></script>
+</body>
+</html>
