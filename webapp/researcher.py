@@ -83,7 +83,7 @@ def public_state() -> dict[str, Any]:
                 {
                     "role": "issuer",
                     "name": "MSRC Researcher CA",
-                    "path": f"{MSRC_URL}/issuer/endorse",
+                    "path": "/msrc/issuer/endorse",
                 },
                 {
                     "role": "registry",
@@ -93,7 +93,7 @@ def public_state() -> dict[str, Any]:
                 {
                     "role": "holder",
                     "name": "MSRC",
-                    "path": f"{MSRC_URL}/deliveries",
+                    "path": "/msrc/deliveries",
                 },
             ],
             "ledger": {
@@ -104,6 +104,39 @@ def public_state() -> dict[str, Any]:
         }
     except Exception as exc:
         raise HTTPException(503, f"MSRC public configuration is unavailable: {exc}") from exc
+
+
+def proxy_response(upstream: requests.Response) -> Response:
+    media_type = upstream.headers.get("content-type", "application/json").partition(";")[0]
+    return Response(upstream.content, status_code=upstream.status_code, media_type=media_type)
+
+
+@app.post("/msrc/issuer/endorse")
+async def endorse(request: Request) -> Response:
+    try:
+        upstream = requests.post(
+            f"{MSRC_URL}/issuer/endorse",
+            data=await request.body(),
+            headers={"content-type": "application/json"},
+            timeout=5,
+        )
+        return proxy_response(upstream)
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"MSRC endorsement is unavailable: {exc}") from exc
+
+
+@app.post("/msrc/deliveries")
+async def deliver(request: Request) -> Response:
+    try:
+        upstream = requests.post(
+            f"{MSRC_URL}/deliveries",
+            data=await request.body(),
+            headers={"content-type": "application/cose"},
+            timeout=30,
+        )
+        return proxy_response(upstream)
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"MSRC delivery is unavailable: {exc}") from exc
 
 
 @app.post("/entries")

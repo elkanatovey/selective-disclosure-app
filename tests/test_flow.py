@@ -289,6 +289,47 @@ def test_apps_have_distinct_routes_and_private_state():
     assert "d" not in public["msrcJwk"]
 
 
+def test_researcher_proxies_browser_requests_to_msrc(monkeypatch):
+    monkeypatch.setattr(
+        researcher_service,
+        "msrc_public",
+        lambda: {"issuer": "issuer", "msrcJwk": {}},
+    )
+    calls = []
+
+    class Upstream:
+        status_code = 200
+        content = b'{"ok":true}'
+        headers = {"content-type": "application/json"}
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Upstream()
+
+    monkeypatch.setattr(researcher_service.requests, "post", post)
+    client = TestClient(researcher_service.app)
+
+    state = client.get("/api/state").json()
+    parties = {party["role"]: party["path"] for party in state["parties"]}
+    assert parties["issuer"] == "/msrc/issuer/endorse"
+    assert parties["holder"] == "/msrc/deliveries"
+
+    endorsement = client.post("/msrc/issuer/endorse", json={"public_jwk": {}})
+    delivery = client.post(
+        "/msrc/deliveries",
+        content=b"statement",
+        headers={"content-type": "application/cose"},
+    )
+
+    assert endorsement.json() == {"ok": True}
+    assert delivery.json() == {"ok": True}
+    assert calls[0][0].endswith("/issuer/endorse")
+    assert calls[0][1]["headers"] == {"content-type": "application/json"}
+    assert calls[1][0].endswith("/deliveries")
+    assert calls[1][1]["data"] == b"statement"
+    assert calls[1][1]["headers"] == {"content-type": "application/cose"}
+
+
 def test_endorsed_chain_has_scitt_didx509_extensions():
     owner = authority()
     _, _, _, leaf = browser_style_report(owner)
