@@ -4,6 +4,8 @@ An end-to-end prototype for submitting a vulnerability report as a selectively
 disclosable SD-CWT, registering it in SCITT, and presenting only the fields
 chosen by MSRC.
 
+**[View the interactive project poster](https://elkanatovey.github.io/selective-disclosure-poster/)**
+
 ## Architecture
 
 Each role runs as an independent application with its own process and origin:
@@ -42,9 +44,8 @@ environment.
 
 ## Development
 
-The repository is self-contained and does not fetch Python code from another
-branch. Local checks require Python 3.11 or newer, Node.js, and ShellCheck.
-Create the Python environment and run all checks with:
+Local checks require Python 3.11 or newer, Node.js, and ShellCheck. Create the
+Python environment and run all checks with:
 
 ```bash
 ./scripts/setup-dev.sh
