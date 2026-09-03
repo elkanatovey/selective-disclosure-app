@@ -34,6 +34,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes shellcheck
           python -m pip install --disable-pip-version-check -e '.[test]'
+          scripts/install-biome.sh
       - name: Run checks
         env:
           PYTHON: python
@@ -50,6 +51,7 @@ jobs:
         run: |
           docker run --rm scitt-selective-disclosure-dev python3 --version
           docker run --rm scitt-selective-disclosure-dev node --version
+          docker run --rm scitt-selective-disclosure-dev biome --version
           docker run --rm scitt-selective-disclosure-dev shellcheck --version
 
   real-scitt:

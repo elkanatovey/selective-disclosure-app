@@ -6,6 +6,7 @@ VENV=${VENV:-$ROOT/.venv}
 
 python3 -m venv "$VENV"
 "$VENV/bin/python" -m pip install --disable-pip-version-check -e "${ROOT}[test]"
+"$ROOT/scripts/install-biome.sh"
 
 printf '\nDevelopment environment ready. Run checks with:\n\n'
 printf '    PYTHON=%q scripts/check.sh\n' "$VENV/bin/python"

@@ -58,7 +58,7 @@ $("composer").addEventListener("submit",async event=>{
   finally{$("send").disabled=false}
 });
 
-document.querySelectorAll('[name="key-mode"]').forEach(input=>input.onchange=()=>{const upload=input.form.elements["key-mode"].value==="upload";$("issuer-key").disabled=!upload;$("key-state").textContent=upload?"Select a private P-256 key":"Generated when submitted"});
+document.querySelectorAll('[name="key-mode"]').forEach(input=>{input.onchange=()=>{const upload=input.form.elements["key-mode"].value==="upload";$("issuer-key").disabled=!upload;$("key-state").textContent=upload?"Select a private P-256 key":"Generated when submitted"}});
 $("issuer-key").onchange=()=>$("key-state").textContent=$("issuer-key").files[0]?.name||"Select a private key.";
 $("reset").onclick=()=>{for(const [id,value] of Object.entries(defaults))$(id==="patchDate"?"patch-date":id).value=value};
 $("download-redacted").onclick=()=>download(artifacts.redacted,"redacted-statement.cose");

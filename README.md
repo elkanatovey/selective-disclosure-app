@@ -51,8 +51,9 @@ Create the Python environment and run all checks with:
 PYTHON=.venv/bin/python ./scripts/check.sh
 ```
 
-The check script runs Ruff linting and formatting checks, unit tests,
-JavaScript syntax checks, Bash syntax checks, and ShellCheck.
+The check script runs Ruff linting and formatting checks, Biome JavaScript
+linting, unit tests, JavaScript syntax checks, Bash syntax checks, and
+ShellCheck.
 
 For an Azure Linux 3 environment with the real-SCITT system dependencies,
 reopen the repository in its VS Code dev container. Alternatively, with Docker
@@ -181,6 +182,7 @@ Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.
 - [webapp/static/sdcwt.js](webapp/static/sdcwt.js): Browser SD-CWT issuance and disclosure parsing.
 - [sd_cwt](sd_cwt): Bundled Python SD-CWT reference implementation.
 - [scripts/setup-dev.sh](scripts/setup-dev.sh): Local development environment setup.
+- [scripts/install-biome.sh](scripts/install-biome.sh): Pinned JavaScript linter installation.
 - [scripts/check.sh](scripts/check.sh): Shared local and CI quality gate.
 - [scripts/run-mock-demo.sh](scripts/run-mock-demo.sh): Split mock launcher.
 - [scripts/run-real-demo.sh](scripts/run-real-demo.sh): Split real-SCITT launcher.

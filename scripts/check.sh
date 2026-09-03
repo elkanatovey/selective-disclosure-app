@@ -19,6 +19,14 @@ command -v node >/dev/null || {
   echo "node is required" >&2
   exit 1
 }
+if command -v biome >/dev/null; then
+  BIOME=(biome)
+elif [[ -x "$ROOT/.tools/bin/biome" ]]; then
+  BIOME=("$ROOT/.tools/bin/biome")
+else
+  echo "biome is required; run scripts/install-biome.sh" >&2
+  exit 1
+fi
 if command -v ruff >/dev/null; then
   RUFF=(ruff)
 elif "$PYTHON" -c "import ruff" >/dev/null 2>&1; then
@@ -30,6 +38,7 @@ fi
 
 "${RUFF[@]}" check "${PYTHON_SOURCES[@]}"
 "${RUFF[@]}" format --check "${PYTHON_SOURCES[@]}"
+"${BIOME[@]}" lint "${JAVASCRIPT_SOURCES[@]}"
 "$PYTHON" -m pytest -q
 
 for source in "${JAVASCRIPT_SOURCES[@]}"; do
