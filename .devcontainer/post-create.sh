@@ -2,43 +2,40 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Codespaces / dev-container post-create: make the interactive web demo runnable
-# out of the box. The base image (../Dockerfile) ships only the build toolchain,
-# so this installs a matching CCF release and points ./.ccf-install at it — the
-# one prerequisite run_web_demo.sh needs beyond the app build. Mirrors the CCF
-# install step in .github/workflows/e2e.yml.
-#
-# Override the release with CCF_VERSION. Safe to re-run: each step is idempotent.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CCF_VERSION="${CCF_VERSION:-7.0.6}"
+CCF_VERSION="${CCF_VERSION:-7.0.10}"
+CCF_RPM_SHA256="${CCF_RPM_SHA256:-4c7f31109aba8893015f4466071d5d964f7117ae0233dd074c96e47eadafe1bc}"
 
-if ! rpm -q "ccf_devel-${CCF_VERSION}" >/dev/null 2>&1; then
+if ! rpm -q "ccf_devel-${CCF_VERSION}-1.x86_64" >/dev/null 2>&1; then
   echo "== Installing CCF ${CCF_VERSION} (devel RPM) =="
-  rpm_url="https://github.com/microsoft/CCF/releases/download/ccf-${CCF_VERSION}/ccf_devel_${CCF_VERSION//-/_}_x86_64.rpm"
+  rpm_url="https://github.com/microsoft/CCF/releases/download/ccf-${CCF_VERSION}/ccf_devel_${CCF_VERSION}_x86_64.rpm"
   tmp_rpm="$(mktemp --suffix=.rpm)"
   curl -fsSL "$rpm_url" -o "$tmp_rpm"
+  echo "${CCF_RPM_SHA256}  ${tmp_rpm}" | sha256sum -c -
   tdnf -y install "$tmp_rpm"
   rm -f "$tmp_rpm"
 fi
 
-# Point ./.ccf-install at the RPM's install prefix (the dir holding bin/sandbox.sh).
-if [ ! -e .ccf-install ]; then
-  cfg="$(rpm -ql ccf_devel | grep -m1 '/ccf-config\.cmake$')"
-  prefix="$(dirname "$(dirname "$cfg")")"
-  ln -s "$prefix" .ccf-install
-  echo "== Linked ./.ccf-install -> ${prefix} =="
-fi
-
-echo "== Building the app =="
-./docker/build-app.sh
+./scripts/setup-dev.sh
 
 cat <<'EOF'
 
-Ready. Start the interactive web demo with:
+Ready. Run checks with:
 
-    ./demo/run_web_demo.sh        # serves http://127.0.0.1:8080
+  PYTHON=.venv/bin/python ./scripts/check.sh
 
-The forwarded port opens in your browser; pop out each role window from the nav.
+Start the mock demo with:
+
+  ./scripts/run-mock-demo.sh
+
+Start the real-ledger demo with:
+
+  ./scripts/run-real-demo.sh
+
+Demo URLs:
+    http://127.0.0.1:8090/  Researcher
+    http://127.0.0.1:8091/  MSRC
+    http://127.0.0.1:8092/  Verifier
 EOF

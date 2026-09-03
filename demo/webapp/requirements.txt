@@ -1,6 +1,0 @@
-# Web demo extras, layered on top of the shared sandbox venv (CCF + sd_cwt).
-fastapi
-uvicorn[standard]
-jinja2
-python-multipart
-websockets

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Independent Verifier - Disclosure Review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/entity.css?v=1">
+  <link rel="stylesheet" href="/static/verify.css?v=2">
+</head>
+<body>
+  <header class="entity-header">
+    <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="badge-check"></i></span><div class="entity-title"><p>Verifier service - Relying party</p><h1>Independent Verifier</h1></div></div>
+  </header>
+  <main>
+    <form id="verify-form" class="import-view">
+      <div class="import-heading"><p>Signed artifact review</p><h2>Verify a signed disclosure</h2></div>
+      <label class="drop-zone" id="drop-zone"><input id="token-file" type="file" accept=".cose,application/cose,application/kb+cwt"><i data-lucide="file-check-2"></i><strong id="file-title">Choose a signed disclosure</strong><span id="file-detail">Load a `.kbt.cose` file</span></label>
+      <label class="audience-field">Expected audience<input id="audience" value="https://researcher.example/verifier" required></label>
+      <button id="verify" type="submit" disabled><i data-lucide="shield-check"></i>Verify disclosure</button>
+      <div id="verify-error" role="alert"></div>
+    </form>
+
+    <section class="results" id="results" hidden>
+      <div class="report-pane">
+        <div class="report-head"><div><p>Disclosure contents</p><h2 id="report-subject"></h2></div><div><span>SCITT transaction</span><code id="report-txid"></code></div></div>
+        <div id="field-list" class="field-list"></div>
+        <section class="body-section"><div class="section-head"><strong>Body</strong><small>Redacted spans remain hidden</small></div><div id="body-preview" class="body-preview"></div></section>
+        <section class="references-section"><div class="section-head"><strong>References</strong></div><div id="references"></div></section>
+      </div>
+      <aside class="checks-pane">
+        <section class="overall" id="overall"><i data-lucide="shield"></i><div><strong id="overall-title"></strong><small id="overall-detail"></small></div></section>
+        <section><p class="eyebrow">Verification checks</p><div id="checks" class="checks"></div></section>
+        <section><button type="button" id="verify-another"><i data-lucide="file-up"></i>Verify another file</button></section>
+      </aside>
+    </section>
+  </main>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script type="module" src="/static/verify.js?v=3"></script>
+</body>
+</html>

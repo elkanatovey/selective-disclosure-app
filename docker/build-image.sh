@@ -1,11 +1,11 @@
 #!/bin/bash
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-# Build the dev image (toolchain only). Run from the repo root.
+# Build the SCITT demo development image. Run from the repo root.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IMAGE_TAG=${IMAGE_TAG:-sda-dev}
+IMAGE_TAG=${IMAGE_TAG:-scitt-selective-disclosure-dev}
 
 echo "Building dev image '$IMAGE_TAG'..."
 docker build -t "$IMAGE_TAG" -f Dockerfile .

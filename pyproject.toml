@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bug-report-submission"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "cbor2>=5.6,<6",
+  "cryptography>=48,<50",
+  "fastapi>=0.115,<1",
+  "pycose>=1.1,<2",
+  "requests>=2.32,<3",
+  "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+test = ["httpx2>=2,<3", "pytest>=8,<10", "ruff==0.16.5"]
+real-scitt = [
+  "ccf==7.0.10",
+  "certifi",
+  "httpx==0.23.*",
+  "jinja2>=3.1,<4",
+  "jwcrypto>=1.5,<2",
+  "loguru>=0.7,<0.8",
+  "matplotlib>=3.10,<4",
+  "pandas>=2,<3",
+  "pyasn1>=0.6,<0.7",
+  "pyjwt>=2.10,<3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools]
+packages = ["sd_cwt", "webapp"]
+
+[tool.setuptools.package-data]
+webapp = ["static/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
