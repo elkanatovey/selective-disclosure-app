@@ -100,7 +100,9 @@ def inspect_statement(statement: bytes, require_all: bool) -> dict[str, Any]:
     )
     receipt = verify_transparent_statement(statement, receipt_trust())
     presented = parts(statement)[1].get(SD_CLAIMS, [])
-    fields = resolve_all(payload, presented) if require_all else resolve_selected(payload, presented)
+    fields = (
+        resolve_all(payload, presented) if require_all else resolve_selected(payload, presented)
+    )
     protected = cbor2.loads(parts(statement)[0])
     return {
         "txid": receipt["txid"],

@@ -8,22 +8,49 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - run: pip install -e '.[test]'
-      - run: pytest -q
-      - run: node --check webapp/static/app.js && node --check webapp/static/sdcwt.js && node --check webapp/static/msrc.js && node --check webapp/static/verify.js
-      - run: bash -n scripts/run-mock-demo.sh scripts/run-real-demo.sh scripts/ci-scitt.sh
+      - name: Install checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          python -m pip install --disable-pip-version-check -e '.[test]'
+      - name: Run checks
+        env:
+          PYTHON: python
+        run: scripts/check.sh
+
+  dev-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build development image
+        run: docker build --tag scitt-selective-disclosure-dev .
+      - name: Check development tools
+        run: |
+          docker run --rm scitt-selective-disclosure-dev python3 --version
+          docker run --rm scitt-selective-disclosure-dev node --version
+          docker run --rm scitt-selective-disclosure-dev shellcheck --version
 
   real-scitt:
     runs-on: ubuntu-24.04
@@ -35,9 +62,9 @@ jobs:
           gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
           tdnf update -y
           tdnf install -y --disablerepo azurelinux-official-ms-non-oss build-essential ca-certificates curl git jq rpm-build python3-pip nodejs procps tar util-linux zstd
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache built SCITT
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/scitt-ci/install
           key: scitt-install-28a3458f5c3ec2c2a00c868a97515fc278150546-ccf-7.0.10-azurelinux-3.0-${{ runner.arch }}
@@ -45,7 +72,7 @@ jobs:
         run: ./scripts/ci-scitt.sh
       - name: Upload integration artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-scitt-artifacts
           path: ${{ runner.temp }}/scitt-ci/artifacts

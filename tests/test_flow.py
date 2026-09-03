@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import cbor2
 import pytest
-import sd_cwt
 from cbor2 import CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -16,6 +15,7 @@ from pycose.algorithms import Es256
 from pycose.headers import Algorithm
 from pycose.messages import Sign1Message
 
+import sd_cwt
 import webapp.mock_scitt as mock_scitt_service
 import webapp.msrc as msrc_service
 import webapp.researcher as researcher_service
@@ -25,16 +25,14 @@ from webapp.crypto import (
     SCITT_RECEIPTS,
     SD_CLAIMS,
     ReceiptTrust,
-    b64,
     cbor,
     cert,
     create_mock_receipt,
     issuer_for_ca,
     parts,
     private_cose,
-    public_cose_map,
     public_cose,
-    public_jwk,
+    public_cose_map,
     resolve_all,
     sign_kbt,
     verify_bundle,
@@ -186,7 +184,9 @@ def test_verifier_uses_cnf_and_rejects_wrong_audience_or_key():
     assert result["report"]["txid"] == txid
     assert result["report"]["fields"]["title"] == "private title"
     assert result["report"]["body"]["chunks"][0] == "Café\n1"
-    assert not verify_bundle(kbt, "https://wrong.example", owner.ca_cert, owner.issuer, trust)["valid"]
+    assert not verify_bundle(kbt, "https://wrong.example", owner.ca_cert, owner.issuer, trust)[
+        "valid"
+    ]
 
     presented = cbor2.loads(parts(kbt)[0])[13]
     forged = Sign1Message(
@@ -199,9 +199,12 @@ def test_verifier_uses_cnf_and_rejects_wrong_audience_or_key():
         forged.encode(tag=True), audience, owner.ca_cert, owner.issuer, trust
     )
     assert not forged_result["valid"]
-    assert next(
-        check for check in forged_result["checks"] if check["name"] == "KBT proof and audience"
-    )["status"] == "fail"
+    assert (
+        next(
+            check for check in forged_result["checks"] if check["name"] == "KBT proof and audience"
+        )["status"]
+        == "fail"
+    )
 
 
 def test_researcher_completion_requires_verified_receipts(monkeypatch):
@@ -265,7 +268,9 @@ def test_researcher_completion_requires_verified_receipts(monkeypatch):
 
 
 def test_apps_have_distinct_routes_and_private_state():
-    routes = lambda service: {route.path for route in service.app.routes}
+    def routes(service):
+        return {route.path for route in service.app.routes}
+
     researcher_routes = routes(researcher_service)
     msrc_routes = routes(msrc_service)
     verifier_routes = routes(verifier_service)

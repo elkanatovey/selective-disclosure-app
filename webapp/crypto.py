@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import cbor2
-import sd_cwt
 from cbor2 import CBORSimpleValue, CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -18,6 +17,8 @@ from pycose.algorithms import Es256
 from pycose.headers import Algorithm
 from pycose.keys import CoseKey
 from pycose.messages import Sign1Message
+
+import sd_cwt
 
 RCK = CBORSimpleValue(59)
 SD_CLAIMS = 17
@@ -189,9 +190,7 @@ def verify_issuer(
         raise ValueError("issuer certificate is outside its validity period")
     if leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
         raise ValueError("issuer leaf certificate must not be a CA")
-    if leaf.subject != x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, "Web Statement Issuer")]
-    ):
+    if leaf.subject != x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Web Statement Issuer")]):
         raise ValueError("issuer certificate subject does not match did:x509")
     ca.public_key().verify(
         leaf.signature,
@@ -318,10 +317,7 @@ def sign_kbt(
     if expected != holder_key.public_key().public_numbers():
         raise ValueError("signing key does not match the statement cnf")
     resolve_selected(payload, selected)
-    disclosures = [
-        sd_cwt.Disclosure(salt=b"", value=None, encoded=encoded)
-        for encoded in selected
-    ]
+    disclosures = [sd_cwt.Disclosure(salt=b"", value=None, encoded=encoded) for encoded in selected]
     return sd_cwt.kbt_sign(
         statement,
         disclosures,
@@ -344,15 +340,12 @@ def describe_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[s
     fields = {}
     for key, name in names.items():
         value = selected.get(key)
-        fields[name] = None if value is None else (
-            value.hex() if isinstance(value, bytes) else value
+        fields[name] = (
+            None if value is None else (value.hex() if isinstance(value, bytes) else value)
         )
     body = selected.get(1002)
     if isinstance(body, dict):
-        openings = {
-            hashlib.sha256(cbor(item)).digest(): cbor2.loads(item)
-            for item in presented
-        }
+        openings = {hashlib.sha256(cbor(item)).digest(): cbor2.loads(item) for item in presented}
         count = 0
         for digest in payload[RCK]:
             opening = openings.get(digest)

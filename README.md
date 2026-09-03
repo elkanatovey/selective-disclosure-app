@@ -27,12 +27,11 @@ Verifier :8092
 | SCITT | Ledger and receipt key | MSRC holder key |
 
 The three applications share only [webapp/crypto.py](webapp/crypto.py), a
-state-free adapter over the repository's Python `sd_cwt` reference package.
-That package is pinned to commit
-`9cf54783f2cb505b6bfed88cd8657c1e03bcd3c4` and performs strict draft-08
-decoding, issuer signature checks, disclosure matching, and KBT signing and
-verification. The Verifier derives the holder key from the signed statement's
-`cnf` claim. The MSRC private key is never returned by an HTTP endpoint.
+state-free adapter over the bundled Python [sd_cwt](sd_cwt) reference package.
+It performs strict draft-08 decoding, issuer signature checks, disclosure
+matching, and KBT signing and verification. The Verifier derives the holder key
+from the signed statement's `cnf` claim. The MSRC private key is never returned
+by an HTTP endpoint.
 
 Browser issuance remains in JavaScript so the Researcher private key can stay
 non-exportable in WebCrypto. CI verifies those browser-generated artifacts with
@@ -40,6 +39,29 @@ the Python reference. Real CCF receipt verification uses the official
 `ccf.cose.verify_receipt` implementation. SD-CWT 0.0.2 supports `cbor2` 5.6
 through 5.x, so the reference verifier and CCF tooling share one Python
 environment.
+
+## Development
+
+The repository is self-contained and does not fetch Python code from another
+branch. Local checks require Python 3.11 or newer, Node.js, and ShellCheck.
+Create the Python environment and run all checks with:
+
+```bash
+./scripts/setup-dev.sh
+PYTHON=.venv/bin/python ./scripts/check.sh
+```
+
+The check script runs Ruff linting and formatting checks, unit tests,
+JavaScript syntax checks, Bash syntax checks, and ShellCheck.
+
+For an Azure Linux 3 environment with the real-SCITT system dependencies,
+reopen the repository in its VS Code dev container. Alternatively, with Docker
+installed:
+
+```bash
+./docker/build-image.sh
+./docker/dev.sh
+```
 
 ## Researcher completion gate
 
@@ -61,8 +83,7 @@ MSRC or displaying **Submission complete**.
 Requires Python 3.11 or newer and a browser with WebCrypto support.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[test]'
+./scripts/setup-dev.sh
 ./scripts/run-mock-demo.sh
 ```
 
@@ -102,8 +123,8 @@ system tools:
 gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
 tdnf update -y
 tdnf install -y --disablerepo azurelinux-official-ms-non-oss \
-  build-essential ca-certificates curl git jq rpm-build python3-pip \
-  nodejs procps tar util-linux zstd
+      build-essential ca-certificates cmake curl git gnupg2 jq ninja-build \
+      nodejs procps python3 python3-pip rpm-build tar util-linux xz zstd
 ```
 
 Run those package commands as root, then start the persistent demo:
@@ -128,10 +149,10 @@ The browser does not connect directly to SCITT TLS. The Researcher backend uses
 CCF's generated service certificate as an explicit CA and validates the node's
 `127.0.0.1` identity. TLS verification is never disabled.
 
-## Tests
+## Checks
 
 ```bash
-.venv/bin/python -m pytest -q
+PYTHON=.venv/bin/python ./scripts/check.sh
 ```
 
 The tests cover fixed-shape SD-CWT issuance, disclosure reconstruction,
@@ -158,6 +179,9 @@ Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.
 - [webapp/mock_scitt.py](webapp/mock_scitt.py): Standalone in-memory SCITT mock.
 - [webapp/crypto.py](webapp/crypto.py): Shared state-free cryptographic operations.
 - [webapp/static/sdcwt.js](webapp/static/sdcwt.js): Browser SD-CWT issuance and disclosure parsing.
+- [sd_cwt](sd_cwt): Bundled Python SD-CWT reference implementation.
+- [scripts/setup-dev.sh](scripts/setup-dev.sh): Local development environment setup.
+- [scripts/check.sh](scripts/check.sh): Shared local and CI quality gate.
 - [scripts/run-mock-demo.sh](scripts/run-mock-demo.sh): Split mock launcher.
 - [scripts/run-real-demo.sh](scripts/run-real-demo.sh): Split real-SCITT launcher.
 - [scripts/ci-scitt.sh](scripts/ci-scitt.sh): Full real-ledger integration.

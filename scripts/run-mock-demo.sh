@@ -19,11 +19,11 @@ cleanup(){
 trap cleanup EXIT
 
 if [[ ! -x "$PYTHON" ]]; then
-  printf 'Create the demo environment first: python3 -m venv .venv && .venv/bin/python -m pip install -e .\n' >&2
+  printf 'Create the demo environment first: ./scripts/setup-dev.sh\n' >&2
   exit 1
 fi
 if ! "$PYTHON" -c "import sd_cwt" >/dev/null 2>&1; then
-  printf 'Install the current project first: .venv/bin/python -m pip install -e .\n' >&2
+  printf 'Install the current project first: ./scripts/setup-dev.sh\n' >&2
   exit 1
 fi
 mkdir -p "$WORK"
@@ -68,4 +68,4 @@ printf '  MSRC:       http://127.0.0.1:8091/\n'
 printf '  Verifier:   http://127.0.0.1:8092/\n'
 printf '  Mock SCITT: http://127.0.0.1:8000/\n'
 printf '\nKeep this process running. Press Ctrl+C to stop all services.\n'
-wait "$RESEARCHER_PID"
+wait -n "$RESEARCHER_PID" "$MSRC_PID" "$VERIFIER_PID" "$SCITT_PID"

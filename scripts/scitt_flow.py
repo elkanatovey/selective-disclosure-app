@@ -12,12 +12,13 @@ from pathlib import Path
 import cbor2
 import ccf.cose
 import requests
-import sd_cwt
 from cbor2 import CBORSimpleValue, CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pycose.keys import CoseKey
+
+import sd_cwt
 
 RCK = CBORSimpleValue(59)
 
@@ -133,14 +134,20 @@ def verify_certificates(phdr, issuer):
         raise AssertionError("unsupported SD-CWT profile")
     leaf = x509.load_der_x509_certificate(phdr[33][0])
     root = x509.load_der_x509_certificate(phdr[33][1])
-    root.public_key().verify(root.signature, root.tbs_certificate_bytes, ec.ECDSA(root.signature_hash_algorithm))
-    root.public_key().verify(leaf.signature, leaf.tbs_certificate_bytes, ec.ECDSA(leaf.signature_hash_algorithm))
+    root.public_key().verify(
+        root.signature, root.tbs_certificate_bytes, ec.ECDSA(root.signature_hash_algorithm)
+    )
+    root.public_key().verify(
+        leaf.signature, leaf.tbs_certificate_bytes, ec.ECDSA(leaf.signature_hash_algorithm)
+    )
     now = datetime.now(UTC)
     if not leaf.not_valid_before_utc <= now <= leaf.not_valid_after_utc:
         raise AssertionError("issuer certificate is outside its validity period")
     if not root.extensions.get_extension_for_class(x509.KeyUsage).value.key_cert_sign:
         raise AssertionError("root cannot sign certificates")
-    expected = base64.urlsafe_b64decode(re.match(r"did:x509:0:sha256:([^:]+)", issuer).group(1) + "==")
+    expected = base64.urlsafe_b64decode(
+        re.match(r"did:x509:0:sha256:([^:]+)", issuer).group(1) + "=="
+    )
     if root.fingerprint(hashes.SHA256()) != expected:
         raise AssertionError("did:x509 root fingerprint mismatch")
     return leaf
@@ -152,13 +159,21 @@ def verify(args):
     kbt = (output / "disclosure.kbt.cose").read_bytes()
     kbt_protected, _, _, _ = parts(kbt)
     kbt_phdr = cbor2.loads(kbt_protected)
-    if kbt_phdr.get(1) != -7 or kbt_phdr.get(16) != 294 or not isinstance(kbt_phdr.get(13), CBORTag):
+    if (
+        kbt_phdr.get(1) != -7
+        or kbt_phdr.get(16) != 294
+        or not isinstance(kbt_phdr.get(13), CBORTag)
+    ):
         raise AssertionError("invalid KBT profile")
     statement = cbor2.dumps(kbt_phdr[13], canonical=True)
     protected, uhdr, payload_bytes, _ = parts(statement)
     payload = cbor2.loads(payload_bytes)
     leaf = verify_certificates(cbor2.loads(protected), payload[1])
-    issuer_pem = leaf.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    issuer_pem = (
+        leaf.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
     issuer_key = CoseKey.from_pem_public_key(issuer_pem)
     result = sd_cwt.kbt_verify(kbt, issuer_key, expected_aud=metadata["audience"])
     if len(payload[RCK]) != 9:
@@ -173,9 +188,24 @@ def verify(args):
     selected = dict(result.claims.disclosed)
     if set(selected) != {1001, 1002, 1006}:
         raise AssertionError(f"unexpected disclosed fields: {sorted(selected)}")
-    if selected[1001] != metadata["title"] or selected[1002] != {0: metadata["firstBodyChunk"]} or selected[1006] != [metadata["reference"]]:
+    if (
+        selected[1001] != metadata["title"]
+        or selected[1002] != {0: metadata["firstBodyChunk"]}
+        or selected[1006] != [metadata["reference"]]
+    ):
         raise AssertionError("selective disclosure values are inconsistent")
-    print(json.dumps({"phase": "verify", "txid": txid, "fields": sorted(selected), "actualReceipt": True, "kbtVerified": True, "sdCwtVerifier": "reference"}))
+    print(
+        json.dumps(
+            {
+                "phase": "verify",
+                "txid": txid,
+                "fields": sorted(selected),
+                "actualReceipt": True,
+                "kbtVerified": True,
+                "sdCwtVerifier": "reference",
+            }
+        )
+    )
 
 
 parser = argparse.ArgumentParser()

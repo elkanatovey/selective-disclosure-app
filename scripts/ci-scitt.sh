@@ -9,7 +9,8 @@ WORK=${SCITT_CI_WORK:-${RUNNER_TEMP:-/tmp}/scitt-ci}
 SCITT_SRC=${SCITT_SRC:-$WORK/scitt-ccf-ledger}
 SCITT_INSTALL=${SCITT_INSTALL:-$WORK/install}
 VENV=${SCITT_CI_VENV:-$WORK/venv}
-VENV_STAMP=$VENV/.scitt-runtime-v5
+RUNTIME_HASH=$(sha256sum "$ROOT/pyproject.toml" | cut -d' ' -f1)
+VENV_STAMP=$VENV/.scitt-runtime-$RUNTIME_HASH
 NETWORK=$WORK/network
 ARTIFACTS=$WORK/artifacts
 COMMON=$NETWORK/ci_common
@@ -59,8 +60,8 @@ fi
 
 if [[ ! -x "$VENV/bin/python" || ! -f "$VENV_STAMP" ]]; then
   [[ -x "$VENV/bin/python" ]] || python3 -m venv "$VENV"
-  "$VENV/bin/python" -m pip install --disable-pip-version-check -q -U pip
-  "$VENV/bin/python" -m pip install --disable-pip-version-check -q -e "$ROOT" "ccf==$CCF_VERSION" "httpx==0.23.*" "loguru>=0.7,<0.8" "jwcrypto>=1.5,<2" "PyJWT>=2.10,<3" "pyasn1>=0.6,<0.7" "Jinja2>=3.1,<4" "matplotlib>=3.10,<4" "pandas>=2,<3" certifi
+  "$VENV/bin/python" -m pip install --disable-pip-version-check -q -e "${ROOT}[real-scitt]"
+  rm -f "$VENV"/.scitt-runtime-*
   touch "$VENV_STAMP"
 fi
 PYTHON=$VENV/bin/python
@@ -157,7 +158,7 @@ if [[ ${SCITT_DEMO:-0} == 1 ]]; then
   printf '  Verifier:   http://127.0.0.1:8092/\n'
   printf '  SCITT:      https://127.0.0.1:8000\n'
   printf '\nKeep this process running. Press Ctrl+C to stop the demo.\n'
-  wait "$RESEARCHER_PID"
+  wait -n "$RESEARCHER_PID" "$MSRC_PID" "$VERIFIER_PID" "$SCITT_PID"
   exit
 fi
 
