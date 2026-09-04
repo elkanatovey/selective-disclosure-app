@@ -60,7 +60,7 @@ fi
 
 if [[ ! -x "$VENV/bin/python" || ! -f "$VENV_STAMP" ]]; then
   [[ -x "$VENV/bin/python" ]] || python3 -m venv "$VENV"
-  "$VENV/bin/python" -m pip install --disable-pip-version-check -q -e "${ROOT}[real-scitt]"
+  "$VENV/bin/python" -m pip install --disable-pip-version-check -q -e "${ROOT}[mst]"
   rm -f "$VENV"/.scitt-runtime-*
   touch "$VENV_STAMP"
 fi
@@ -152,11 +152,11 @@ client.governance.propose(proposal, must_pass=True)
 PY
 
 if [[ ${SCITT_DEMO:-0} == 1 ]]; then
-  printf '\nReal SCITT demo is ready:\n'
+  printf '\nMST demo is ready:\n'
   printf '  Researcher: http://127.0.0.1:8090/\n'
   printf '  MSRC:       http://127.0.0.1:8091/\n'
   printf '  Verifier:   http://127.0.0.1:8092/\n'
-  printf '  SCITT:      https://127.0.0.1:8000\n'
+  printf '  MST:        https://127.0.0.1:8000\n'
   printf '\nKeep this process running. Press Ctrl+C to stop the demo.\n'
   wait -n "$RESEARCHER_PID" "$MSRC_PID" "$VERIFIER_PID" "$SCITT_PID"
   exit
@@ -182,7 +182,7 @@ response = requests.post(
 )
 response.raise_for_status()
 if not response.json()["valid"]:
-  raise AssertionError("independent verifier rejected the real SCITT disclosure")
+  raise AssertionError("independent verifier rejected the MST disclosure")
 print(json.dumps({"phase": "verifier-app", "valid": True}))
 PY
 SCITT_URL=https://127.0.0.1:8000 SCITT_CA="$COMMON/service_cert.pem" \
@@ -207,4 +207,4 @@ kill -- "-$FOREIGN_MSRC_PID" 2>/dev/null || true
 wait "$FOREIGN_MSRC_PID" 2>/dev/null || true
 FOREIGN_MSRC_PID=
 "$PYTHON" "$ROOT/scripts/scitt_flow.py" reject --cacert "$COMMON/service_cert.pem" --output "$ARTIFACTS/foreign"
-printf 'Real SCITT integration passed. Artifacts: %s\n' "$ARTIFACTS"
+printf 'MST integration passed. Artifacts: %s\n' "$ARTIFACTS"

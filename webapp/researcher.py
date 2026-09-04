@@ -77,7 +77,7 @@ def health() -> dict[str, str]:
 def public_state() -> dict[str, Any]:
     try:
         public = msrc_public()
-        real = bool(SCITT_CA)
+        mst = bool(SCITT_CA)
         return {
             "parties": [
                 {
@@ -87,7 +87,7 @@ def public_state() -> dict[str, Any]:
                 },
                 {
                     "role": "registry",
-                    "name": "Microsoft Signing Transparency Ledger" if real else "Mock SCITT",
+                    "name": "Microsoft Signing Transparency" if mst else "Mock SCITT",
                     "path": "/entries",
                 },
                 {
@@ -97,8 +97,8 @@ def public_state() -> dict[str, Any]:
                 },
             ],
             "ledger": {
-                "mode": "real" if real else "mock",
-                "name": "Microsoft Signing Transparency Ledger" if real else "Mock SCITT",
+                "mode": "mst" if mst else "mock",
+                "name": "Microsoft Signing Transparency" if mst else "Mock SCITT",
             },
             **public,
         }

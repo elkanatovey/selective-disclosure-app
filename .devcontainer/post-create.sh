@@ -30,9 +30,9 @@ Start the mock demo with:
 
   ./scripts/run-mock-demo.sh
 
-Start the real-ledger demo with:
+Start the MST demo with:
 
-  ./scripts/run-real-demo.sh
+  ./scripts/run-mst-demo.sh
 
 Demo URLs:
     http://127.0.0.1:8090/  Researcher

@@ -13,7 +13,7 @@ const postForCose=async(path,body)=>{const response=await fetch(url(path),{metho
 const metadataPath=join(output,"expected.json");
 
 if(mode==="issue"||mode==="issue-foreign"){
-  const foreign=mode==="issue-foreign",state=await json(foreign?`${appUrl}/api/public`:`${appUrl}/api/state`),issuerPath=foreign?`${appUrl}/issuer/endorse`:state.parties.find(item=>item.role==="issuer").path,report={title:"CI browser-issued report",body:"Browser SD-CWT registered by a real SCITT node.",component:"ci",severity:"high",fingerprint:"deadbeef",references:["CVE-2026-4242"]},subject="ci-real-scitt",audience="https://ci.example/verifier";
+  const foreign=mode==="issue-foreign",state=await json(foreign?`${appUrl}/api/public`:`${appUrl}/api/state`),issuerPath=foreign?`${appUrl}/issuer/endorse`:state.parties.find(item=>item.role==="issuer").path,report={title:"CI browser-issued report",body:"Browser SD-CWT registered by MST.",component:"ci",severity:"high",fingerprint:"deadbeef",references:["CVE-2026-4242"]},subject="ci-mst",audience="https://ci.example/verifier";
   const issued=await issueReport(subject,report,state.msrcJwk,jwk=>post(issuerPath,{public_jwk:jwk}));
   await writeFile(join(output,"statement.cose"),issued.token);
   await writeFile(join(output,"disclosures.cbor"),encode(issued.disclosures));

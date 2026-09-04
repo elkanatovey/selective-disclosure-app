@@ -54,7 +54,7 @@ jobs:
           docker run --rm scitt-selective-disclosure-dev biome --version
           docker run --rm scitt-selective-disclosure-dev shellcheck --version
 
-  real-scitt:
+  mst:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container: mcr.microsoft.com/azurelinux/base/core:3.0
@@ -76,5 +76,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: real-scitt-artifacts
+          name: mst-artifacts
           path: ${{ runner.temp }}/scitt-ci/artifacts

@@ -180,7 +180,7 @@ def verify(args):
         raise AssertionError("report shape is invalid")
     receipt_list = uhdr.get(394, [])
     if len(receipt_list) != 1:
-        raise AssertionError("real SCITT receipt missing from KBT")
+        raise AssertionError("MST receipt missing from KBT")
     txid = verify_receipt(receipt_list[0], bare(statement), service_key(args.cacert))
     claims = result.kbt_claims or {}
     if not isinstance(claims.get(6), int):

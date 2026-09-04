@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["httpx2>=2,<3", "pytest>=8,<10", "ruff==0.16.5"]
-real-scitt = [
+mst = [
   "ccf==7.0.10",
   "certifi",
   "httpx==0.23.*",

@@ -1,8 +1,8 @@
 # Evidence via Limited Disclosure
 
 An end-to-end prototype for submitting a vulnerability report as a selectively
-disclosable SD-CWT, registering it in SCITT, and presenting only the fields
-chosen by MSRC.
+disclosable SD-CWT, registering it with a Transparency Service, and allowing a
+Disclosure Authority to release limited evidence to an Independent Verifier.
 
 **[View the interactive project poster](https://elkanatovey.github.io/selective-disclosure-poster/)**
 
@@ -11,33 +11,37 @@ chosen by MSRC.
 Each role runs as an independent application with its own process and origin:
 
 ```text
-Researcher :8090  --->  SCITT :8000
-      |                    |
-      v                    | receipt
-MSRC :8091 <---------------+
+Researcher :8090  --->  Transparency Service :8000
+      |                           |
+      v                           | receipt
+Disclosure Authority :8091 <-----+
       |
       | signed KBT
       v
-Verifier :8092
+Independent Verifier :8092
 ```
 
-| Service | Owns | Does not own |
-| --- | --- | --- |
-| Researcher | UI, submitted statement bytes, SCITT receipt verification | MSRC or SCITT private keys |
-| MSRC | Researcher CA, holder key, delivery inbox, KBT signing | SCITT ledger state |
-| Verifier | Public trust configuration only | Any private key or shared process state |
-| SCITT | Ledger and receipt key | MSRC holder key |
+In this prototype, MSRC acts as the Disclosure Authority, while Microsoft
+Signing Transparency (MST) provides the Transparency Service.
 
-The three applications share only [webapp/crypto.py](webapp/crypto.py), a
-state-free adapter over the bundled Python [sd_cwt](sd_cwt) reference package.
-It performs strict draft-08 decoding, issuer signature checks, disclosure
-matching, and KBT signing and verification. The Verifier derives the holder key
-from the signed statement's `cnf` claim. The MSRC private key is never returned
-by an HTTP endpoint.
+| Role | Owns | Does not own |
+| --- | --- | --- |
+| Researcher | UI, submitted statement bytes, SCITT receipt verification | Disclosure Authority or Transparency Service private keys |
+| Disclosure Authority | Researcher CA, holder key, delivery inbox, KBT signing | Transparency Service state |
+| Independent Verifier | Public trust configuration only | Any private key or shared process state |
+| Transparency Service | Ledger and receipt key | Disclosure Authority holder key |
+
+The Researcher, Disclosure Authority, and Independent Verifier applications
+share only [webapp/crypto.py](webapp/crypto.py), a state-free adapter over the
+bundled Python [sd_cwt](sd_cwt) reference package. It performs strict draft-08
+decoding, issuer signature checks, disclosure matching, and KBT signing and
+verification. The Independent Verifier derives the holder key from the signed
+statement's `cnf` claim. The MSRC private key is never returned by an HTTP
+endpoint.
 
 Browser issuance remains in JavaScript so the Researcher private key can stay
 non-exportable in WebCrypto. CI verifies those browser-generated artifacts with
-the Python reference. Real CCF receipt verification uses the official
+the Python reference. MST receipt verification uses the official
 `ccf.cose.verify_receipt` implementation. SD-CWT 0.0.2 supports `cbor2` 5.6
 through 5.x, so the reference verifier and CCF tooling share one Python
 environment.
@@ -56,9 +60,8 @@ The check script runs Ruff linting and formatting checks, Biome JavaScript
 linting, unit tests, JavaScript syntax checks, Bash syntax checks, and
 ShellCheck.
 
-For an Azure Linux 3 environment with the real-SCITT system dependencies,
-reopen the repository in its VS Code dev container. Alternatively, with Docker
-installed:
+For an Azure Linux 3 environment with the MST system dependencies, reopen the
+repository in its VS Code dev container. Alternatively, with Docker installed:
 
 ```bash
 ./docker/build-image.sh
@@ -108,18 +111,18 @@ Walk through the roles while the launcher remains running:
 For a negative check, enter a different audience in the Verifier. The KBT proof
 and audience check fails and the overall result is **Verification failed**.
 
-Mock SCITT uses the same raw `application/cose` API as real SCITT:
+Mock SCITT uses the same raw `application/cose` API as MST:
 `POST /entries` returns a COSE receipt and
 `GET /entries/{txid}/statement` returns a transparent COSE statement. Its
 ledger and all service keys are in memory and disappear when the launcher
 stops. Mock receipts have no Merkle proof, so that check is reported as
 unavailable.
 
-## Real SCITT demo
+## MST demo
 
-The real-ledger launcher is supported on x86-64 Azure Linux 3, matching CI. It
-requires permission to install the pinned CCF RPM, network access, and these
-system tools:
+The MST launcher is supported on x86-64 Azure Linux 3, matching CI. It requires
+permission to install the pinned CCF RPM, network access, and these system
+tools:
 
 ```bash
 gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
@@ -132,24 +135,24 @@ tdnf install -y --disablerepo azurelinux-official-ms-non-oss \
 Run those package commands as root, then start the persistent demo:
 
 ```bash
-./scripts/run-real-demo.sh
+./scripts/run-mst-demo.sh
 ```
 
-The first run downloads and verifies CCF `7.0.10`, builds SCITT commit
-`28a3458f5c3ec2c2a00c868a97515fc278150546`, and creates a Python environment
-for the applications and CCF tooling. Later runs reuse those installations. Wait for
-`Real SCITT demo is ready`, then use the same three app URLs listed above. The
-SCITT node is `https://127.0.0.1:8000`.
+The first run downloads and verifies CCF `7.0.10`, builds the SCITT service at
+commit `28a3458f5c3ec2c2a00c868a97515fc278150546`, and creates a Python
+environment for the applications and CCF tooling. Later runs reuse those installations.
+Wait for `MST demo is ready`, then use the same three app URLs listed above. The
+MST endpoint is `https://127.0.0.1:8000`.
 
-The launcher submits a real CCF governance proposal restricting registration
-to `did:x509` identities rooted in that run's MSRC Researcher CA. SCITT verifies
+The launcher submits a CCF governance proposal restricting registration to
+`did:x509` identities rooted in that run's MSRC Researcher CA. SCITT verifies
 the COSE signature and certificate chain before applying the policy. CI also
 submits an otherwise valid statement from a foreign CA and requires SCITT to
 reject it.
 
-The browser does not connect directly to SCITT TLS. The Researcher backend uses
-CCF's generated service certificate as an explicit CA and validates the node's
-`127.0.0.1` identity. TLS verification is never disabled.
+The browser does not connect directly to the MST endpoint. The Researcher
+backend uses CCF's generated service certificate as an explicit CA and
+validates the node's `127.0.0.1` identity. TLS verification is never disabled.
 
 ## Checks
 
@@ -162,7 +165,7 @@ The tests cover fixed-shape SD-CWT issuance, disclosure reconstruction,
 corrupted receipt rejection, public-only MSRC metadata, and route/state
 separation across all apps.
 
-Run the complete real-ledger integration on Azure Linux 3 with:
+Run the complete MST integration on Azure Linux 3 with:
 
 ```bash
 ./scripts/ci-scitt.sh
@@ -175,7 +178,7 @@ Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.
 
 ## Project layout
 
-- [webapp/researcher.py](webapp/researcher.py): Researcher UI and verified SCITT proxy.
+- [webapp/researcher.py](webapp/researcher.py): Researcher UI and verified Transparency Service proxy.
 - [webapp/msrc.py](webapp/msrc.py): MSRC CA, delivery validation, and KBT signing.
 - [webapp/verifier.py](webapp/verifier.py): Stateless independent verification.
 - [webapp/mock_scitt.py](webapp/mock_scitt.py): Standalone in-memory SCITT mock.
@@ -186,8 +189,8 @@ Artifacts are written to `${RUNNER_TEMP:-/tmp}/scitt-ci/artifacts`.
 - [scripts/install-biome.sh](scripts/install-biome.sh): Pinned JavaScript linter installation.
 - [scripts/check.sh](scripts/check.sh): Shared local and CI quality gate.
 - [scripts/run-mock-demo.sh](scripts/run-mock-demo.sh): Split mock launcher.
-- [scripts/run-real-demo.sh](scripts/run-real-demo.sh): Split real-SCITT launcher.
-- [scripts/ci-scitt.sh](scripts/ci-scitt.sh): Full real-ledger integration.
+- [scripts/run-mst-demo.sh](scripts/run-mst-demo.sh): Split MST launcher.
+- [scripts/ci-scitt.sh](scripts/ci-scitt.sh): Full MST integration.
 
 ## Prototype boundaries
 
