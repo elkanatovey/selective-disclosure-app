@@ -1,0 +1,62 @@
+name: Deploy browser demo
+
+on:
+  push:
+    branches:
+      - feat/browser-pages-demo
+    paths:
+      - browser-demo/**
+      - .github/workflows/browser-demo-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: browser-demo-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}browser-demo/
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build Pages artifact
+        run: |
+          mkdir -p _site/browser-demo
+          cp -R browser-demo/. _site/browser-demo/
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evidence via Limited Disclosure</title></head>
+          <body><p><a href="browser-demo/">Open the browser-local demo</a></p></body>
+          </html>
+          HTML
+          touch _site/.nojekyll
+      - name: Run browser self-test
+        run: |
+          python3 -m http.server 4173 --directory _site >/tmp/browser-demo-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          curl --fail --silent --show-error --retry 20 --retry-connrefused \
+            --retry-delay 1 http://127.0.0.1:4173/browser-demo/tests/ >/dev/null
+          browser=$(command -v google-chrome || command -v google-chrome-stable)
+          "$browser" --headless --disable-gpu --no-sandbox \
+            --user-data-dir=/tmp/browser-demo-chrome \
+            --virtual-time-budget=5000 --dump-dom \
+            http://127.0.0.1:4173/browser-demo/tests/ >/tmp/browser-demo-self-test.html
+          grep -q 'data-state="passed"' /tmp/browser-demo-self-test.html
+      - uses: actions/configure-pages@v6
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Independent Researcher - Browser Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/entity.css">
+  <link rel="stylesheet" href="assets/researcher.css">
+  <link rel="stylesheet" href="assets/demo.css">
+</head>
+<body>
+  <header class="entity-header">
+    <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="user-round"></i></span><div class="entity-title"><p>Researcher - Submitter</p><h1>Independent Researcher</h1></div></div>
+    <div class="entity-actions"><a id="launcher-link" href="index.html">Launcher</a><a id="next-link" href="authority.html">Open Authority</a></div>
+  </header>
+  <div class="simulation-bar"><strong>Browser-local Transparency Service simulation</strong><code id="session-id"></code></div>
+
+  <main>
+    <form id="composer" class="workspace">
+      <section class="editor">
+        <div class="page-heading">
+          <div><p>New submission</p><h2>Security report</h2></div>
+          <button type="button" class="icon-button" id="reset" title="Reset form" aria-label="Reset form"><i data-lucide="rotate-ccw"></i></button>
+        </div>
+        <div class="field-grid">
+          <label class="wide">Subject<input id="subject" value="case-1042" required></label>
+          <label class="wide">Title<input id="title" value="Parser crash in malformed archive"></label>
+          <label>Component<input id="component" value="archive-parser"></label>
+          <label>Severity<select id="severity"><option value="">Not set</option><option>low</option><option>medium</option><option selected>high</option><option>critical</option></select></label>
+          <label class="wide">Body<textarea id="body">A crafted header causes an out-of-bounds read.</textarea></label>
+          <label class="wide">Fingerprint <small>hex</small><input id="fingerprint" value="f59f8e5c2488d8908652e86f3db35c35" pattern="[0-9a-fA-F]*"></label>
+          <label class="wide">References <small>one per line</small><textarea id="references">CVE-2026-1042</textarea></label>
+          <label>Patch<input id="patch"></label>
+          <label>Patch date<input id="patch-date" type="date"></label>
+        </div>
+      </section>
+
+      <aside class="submission-panel">
+        <section>
+          <div class="trust-boundary"><i data-lucide="key-round"></i><div><strong>Researcher-controlled key</strong><small>Private key remains in this browser tab</small></div></div>
+          <p class="eyebrow">Signing identity</p>
+          <fieldset class="key-source">
+            <div class="key-options">
+              <label><input type="radio" name="key-mode" value="generate" checked>Generate key</label>
+              <label><input type="radio" name="key-mode" value="upload">Upload key</label>
+            </div>
+            <input id="issuer-key" type="file" accept=".pem,.key,.json,application/x-pem-file,application/json" disabled aria-label="Issuer private key">
+            <small id="key-state">Generated when submitted</small>
+          </fieldset>
+        </section>
+
+        <section class="submit-section">
+          <button type="submit" id="send"><i data-lucide="send"></i>Submit report</button>
+          <div class="submission-status" id="submission-status" data-state="idle"><span></span><div><strong id="status-title">Ready to submit</strong><small id="status-detail">No submission in progress</small></div></div>
+          <div id="error" role="alert"></div>
+        </section>
+
+        <section class="confirmation" id="confirmation" hidden>
+          <div class="confirmation-head"><span>Local SCITT transaction</span><code id="txid"></code></div>
+          <div class="artifact-row"><div><strong>Redacted statement</strong><small id="redacted-size"></small></div><button type="button" class="icon-button" id="download-redacted" title="Download redacted COSE" aria-label="Download redacted COSE"><i data-lucide="download"></i></button></div>
+          <div class="artifact-row"><div><strong>Authority delivery</strong><small id="full-size"></small></div><button type="button" class="icon-button" id="download-full" title="Download transparent statement" aria-label="Download transparent statement"><i data-lucide="download"></i></button></div>
+        </section>
+      </aside>
+    </form>
+  </main>
+  <script src="assets/lucide.min.js"></script>
+  <script type="module" src="assets/researcher.js"></script>
+</body>
+</html>

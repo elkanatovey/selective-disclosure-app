@@ -7,6 +7,17 @@ cd "$ROOT"
 PYTHON=${PYTHON:-python3}
 PYTHON_SOURCES=(webapp tests scripts/scitt_flow.py)
 JAVASCRIPT_SOURCES=(webapp/static/*.js scripts/scitt_flow.mjs)
+if [[ -d browser-demo ]]; then
+  JAVASCRIPT_SOURCES+=(
+    browser-demo/assets/authority.js
+    browser-demo/assets/launcher.js
+    browser-demo/assets/researcher.js
+    browser-demo/assets/sdcwt.js
+    browser-demo/assets/simulator.js
+    browser-demo/assets/verifier.js
+    browser-demo/tests/self-test.js
+  )
+fi
 SHELL_SOURCES=(scripts/*.sh)
 [[ ! -d .devcontainer ]] || SHELL_SOURCES+=(.devcontainer/*.sh)
 [[ ! -d docker ]] || SHELL_SOURCES+=(docker/*.sh)
