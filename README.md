@@ -1,4 +1,4 @@
-# Bug Report Submission
+# Evidence via Limited Disclosure
 
 An end-to-end prototype for submitting a vulnerability report as a selectively
 disclosable SD-CWT, registering it in SCITT, and presenting only the fields
