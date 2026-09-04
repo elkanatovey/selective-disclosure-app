@@ -26,6 +26,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
       - name: Build Pages artifact
         run: |
           mkdir -p _site/browser-demo
@@ -47,13 +50,15 @@ jobs:
             --retry-delay 1 http://127.0.0.1:4173/browser-demo/tests/ >/dev/null
           browser=$(command -v google-chrome || command -v google-chrome-stable)
           "$browser" --headless --disable-gpu --disable-dev-shm-usage --no-sandbox \
+            --no-first-run --no-default-browser-check \
+            --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+            --remote-allow-origins='*' \
             --user-data-dir=/tmp/browser-demo-chrome \
-            --virtual-time-budget=30000 --dump-dom \
-            http://127.0.0.1:4173/browser-demo/tests/ >/tmp/browser-demo-self-test.html
-          if ! grep -q 'data-state="passed"' /tmp/browser-demo-self-test.html; then
-            cat /tmp/browser-demo-self-test.html
-            exit 1
-          fi
+            http://127.0.0.1:4173/browser-demo/tests/ \
+            >/tmp/browser-demo-chrome.log 2>&1 &
+          browser_pid=$!
+          trap 'kill "$browser_pid" "$server_pid" 2>/dev/null || true' EXIT
+          node browser-demo/tests/wait-for-result.mjs
       - uses: actions/configure-pages@v6
         with:
           enablement: true

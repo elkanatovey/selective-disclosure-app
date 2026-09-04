@@ -16,6 +16,7 @@ if [[ -d browser-demo ]]; then
     browser-demo/assets/simulator.js
     browser-demo/assets/verifier.js
     browser-demo/tests/self-test.js
+    browser-demo/tests/wait-for-result.mjs
   )
 fi
 SHELL_SOURCES=(scripts/*.sh)
