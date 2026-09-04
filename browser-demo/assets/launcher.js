@@ -10,7 +10,19 @@ import {
 const session = getSession();
 const byId = id => document.getElementById(id);
 const roleUrls = ["researcher.html", "authority.html", "verifier.html"];
+const roleNames = ["Researcher", "Authority", "Verifier"];
 const sessionUrl = path => `${path}?session=${encodeURIComponent(session)}`;
+let blockedRoles = [];
+
+function openRole(index) {
+  return window.open(sessionUrl(roleUrls[index]), `evld-${session}-${index}`);
+}
+
+function updateOpenNext() {
+  const button = byId("open-next");
+  button.hidden = blockedRoles.length === 0;
+  if (blockedRoles.length) button.textContent = `Open ${roleNames[blockedRoles[0]]}`;
+}
 
 async function refreshCounts() {
   const [deliveries, disclosures] = await Promise.all([
@@ -27,10 +39,24 @@ for (const [role, path] of [["researcher", roleUrls[0]], ["authority", roleUrls[
 }
 
 byId("open-all").onclick = () => {
-  const opened = roleUrls.map((path, index) => window.open(sessionUrl(path), `evld-${session}-${index}`));
-  if (opened.some(tab => !tab)) {
-    byId("message").textContent = "Your browser blocked one or more tabs. Use the individual role links instead.";
+  byId("message").textContent = "";
+  blockedRoles = roleUrls.map((_, index) => index).filter(index => !openRole(index));
+  updateOpenNext();
+  if (blockedRoles.length) {
+    byId("message").textContent = "Pop-ups blocked. Allow pop-ups for this site and try again, or open the remaining roles one at a time.";
   }
+};
+
+byId("open-next").onclick = () => {
+  const index = blockedRoles[0];
+  if (index === undefined) return;
+  if (!openRole(index)) {
+    byId("message").textContent = "Pop-up blocked. Allow pop-ups for this site or use the role links below.";
+    return;
+  }
+  blockedRoles.shift();
+  updateOpenNext();
+  byId("message").textContent = blockedRoles.length ? `${blockedRoles.length} role tab${blockedRoles.length === 1 ? "" : "s"} remaining.` : "All role tabs opened.";
 };
 
 byId("reset").onclick = async () => {

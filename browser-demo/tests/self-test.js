@@ -33,6 +33,28 @@ async function submit(subject, configuration) {
   return registered;
 }
 
+async function verifyPopupFallback() {
+  const frame = document.createElement("iframe");
+  frame.hidden = true;
+  frame.src = `../?session=${encodeURIComponent(session)}`;
+  document.body.append(frame);
+  await new Promise((resolve, reject) => {
+    frame.onload = resolve;
+    frame.onerror = () => reject(new Error("launcher test frame did not load"));
+  });
+
+  const launcher = frame.contentDocument;
+  const results = [{}, null, null, {}, {}];
+  frame.contentWindow.open = () => results.shift();
+  launcher.getElementById("open-all").click();
+  assert(launcher.getElementById("open-next").textContent === "Open Authority", "popup fallback did not select Authority");
+  launcher.getElementById("open-next").click();
+  assert(launcher.getElementById("open-next").textContent === "Open Verifier", "popup fallback did not select Verifier");
+  launcher.getElementById("open-next").click();
+  assert(launcher.getElementById("open-next").hidden, "popup fallback did not finish");
+  frame.remove();
+}
+
 async function run() {
   const configuration = await simulator.publicConfiguration(session);
   const first = await submit("case-one", configuration);
@@ -65,12 +87,14 @@ async function run() {
 
   assert((await simulator.listDeliveries(session)).length === 2, "deliveries were not persisted");
   assert((await simulator.listDisclosures(session)).length === 1, "disclosure was not persisted");
+  await verifyPopupFallback();
 
   return {
     txids: [first.txid, second.txid],
     checks: valid.checks.map(check => check.name),
     wrongAudienceRejected: true,
     tamperingRejected: true,
+    popupFallback: true,
   };
 }
 
