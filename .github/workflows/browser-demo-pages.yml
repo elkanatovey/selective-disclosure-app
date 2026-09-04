@@ -41,6 +41,22 @@ jobs:
           </html>
           HTML
           touch _site/.nojekyll
+          python3 - "$GITHUB_SHA" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          root = Path("_site/browser-demo")
+          version = sys.argv[1]
+          asset = re.compile(r'(?P<quote>["\'])(?P<path>(?:(?:\.\.?/)|assets/)?[A-Za-z0-9_./-]+\.(?:js|css))(?P=quote)')
+          for path in (*root.rglob("*.html"), *root.rglob("*.js")):
+              text = path.read_text()
+              text = asset.sub(
+                  lambda match: f'{match.group("quote")}{match.group("path")}?v={version}{match.group("quote")}',
+                  text,
+              )
+              path.write_text(text)
+          PY
       - name: Run browser self-test
         run: |
           python3 -m http.server 4173 --directory _site >/tmp/browser-demo-server.log 2>&1 &
