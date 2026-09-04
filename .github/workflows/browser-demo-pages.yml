@@ -22,7 +22,7 @@ jobs:
   deploy:
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}browser-demo/
+      url: https://elkanatovey.github.io/selective-disclosure-app/browser-demo/
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -46,11 +46,14 @@ jobs:
           curl --fail --silent --show-error --retry 20 --retry-connrefused \
             --retry-delay 1 http://127.0.0.1:4173/browser-demo/tests/ >/dev/null
           browser=$(command -v google-chrome || command -v google-chrome-stable)
-          "$browser" --headless --disable-gpu --no-sandbox \
+          "$browser" --headless --disable-gpu --disable-dev-shm-usage --no-sandbox \
             --user-data-dir=/tmp/browser-demo-chrome \
-            --virtual-time-budget=5000 --dump-dom \
+            --virtual-time-budget=30000 --dump-dom \
             http://127.0.0.1:4173/browser-demo/tests/ >/tmp/browser-demo-self-test.html
-          grep -q 'data-state="passed"' /tmp/browser-demo-self-test.html
+          if ! grep -q 'data-state="passed"' /tmp/browser-demo-self-test.html; then
+            cat /tmp/browser-demo-self-test.html
+            exit 1
+          fi
       - uses: actions/configure-pages@v6
         with:
           enablement: true
