@@ -16,13 +16,13 @@
     <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="shield"></i></span><div class="entity-title"><p>Authority - Selective disclosure</p><h1>Disclosure Authority</h1></div></div>
     <div class="entity-actions"><a id="launcher-link" href="index.html">Launcher</a><a id="next-link" href="verifier.html">Open Verifier</a></div>
   </header>
-  <div class="simulation-bar"><strong>Acts as MSRC in this browser-local simulation</strong><code id="session-id"></code></div>
+  <div class="simulation-bar"><strong>Local simulation · MSRC role</strong><code id="session-id"></code></div>
 
   <main>
     <section class="import-view" id="import-view">
       <div class="import-heading"><p>Submitted reports</p><h2>Select a verified delivery</h2></div>
       <div class="available" id="delivery-area">
-        <div class="available-head"><strong>Authority inbox</strong><small>Updates across tabs</small></div>
+        <div class="available-head"><strong>Authority inbox</strong><small>New reports appear here</small></div>
         <div class="available-list" id="delivery-list"></div>
       </div>
       <div id="load-error" role="alert"></div>
@@ -30,7 +30,7 @@
 
     <section class="review" id="review" hidden>
       <div class="report-pane">
-        <div class="report-head"><div><p>Verified submission</p><h2 id="report-subject"></h2></div><div><span>Local SCITT transaction</span><code id="report-txid"></code></div></div>
+        <div class="report-head"><div><p>Verified submission</p><h2 id="report-subject"></h2></div><div><span>Transaction ID</span><code id="report-txid"></code></div></div>
         <div class="selection-tools"><strong>Information to disclose</strong><div><button type="button" class="text-button" id="select-all">Include all</button><button type="button" class="text-button" id="clear-all">Clear</button></div></div>
         <div id="field-list" class="field-list"></div>
         <section class="body-review" id="body-review" hidden><div class="field-heading"><label><input id="body-all" type="checkbox" checked><span>Body</span></label><small id="body-count"></small></div><div class="chunks" id="body-chunks"></div></section>
@@ -38,10 +38,10 @@
       </div>
 
       <aside class="action-pane">
-        <section><p class="eyebrow">Presentation</p><label>Audience<input id="audience" value="https://researcher.example/verifier" required></label><div class="selection-summary"><strong id="selection-count">0 items selected</strong><small>Unchecked content stays redacted</small></div></section>
-        <section><button type="button" id="sign"><i data-lucide="pen-line"></i>Sign disclosure</button><div class="sign-status" id="sign-status" data-state="idle"><i></i><div><strong id="sign-title">Ready to sign</strong><small id="sign-detail">KBT uses the authority key bound in cnf</small></div></div><div id="sign-error" role="alert"></div></section>
+        <section><p class="eyebrow">Presentation</p><label>Audience<input id="audience" value="https://researcher.example/verifier" required></label><div class="selection-summary"><strong id="selection-count">0 items disclosed</strong><small>Unchecked information remains hidden</small></div></section>
+        <section><button type="button" id="sign"><i data-lucide="pen-line"></i>Sign disclosure</button><div class="sign-status" id="sign-status" data-state="idle"><i></i><div><strong id="sign-title">Ready to sign</strong><small id="sign-detail">Ready for the selected audience</small></div></div><div id="sign-error" role="alert"></div></section>
         <section class="export-result" id="export-result"><div><span>Key Binding Token</span><code id="kbt-size">Not signed</code></div><button type="button" id="export" disabled><i data-lucide="download"></i>Download signed disclosure</button></section>
-        <section><button type="button" id="back" style="width:100%;background:transparent;color:var(--ink);border-color:var(--line)">Other submissions</button></section>
+        <section><button type="button" class="secondary-button" id="back">Other reports</button></section>
       </aside>
     </section>
   </main>

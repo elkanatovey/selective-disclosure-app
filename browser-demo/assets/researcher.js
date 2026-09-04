@@ -45,7 +45,7 @@ function report() {
 async function signer() {
   if (document.querySelector('[name="key-mode"]:checked').value === "generate") return undefined;
   const file = byId("issuer-key").files[0];
-  if (!file) throw new Error("select a private P-256 JWK or PKCS#8 PEM");
+  if (!file) throw new Error("Select a PEM or JSON private key file");
   return importSigner(await file.text());
 }
 
@@ -67,8 +67,9 @@ byId("composer").addEventListener("submit", async event => {
   byId("error").textContent = "";
   byId("send").disabled = true;
   byId("confirmation").hidden = true;
+  artifacts = {};
   try {
-    status("working", "Preparing submission", "Signing selectively disclosable report");
+    status("working", "Preparing submission", "Signing report");
     const issued = await issueReport(
       byId("subject").value,
       report(),
@@ -76,12 +77,12 @@ byId("composer").addEventListener("submit", async event => {
       publicJwk => endorseIssuer(session, publicJwk),
       await signer(),
     );
-    status("working", "Submitting report", "Appending commitment to the local transparency log");
+    status("working", "Submitting report", "Recording commitment");
     const registered = await registerStatement(session, issued.token);
     const transparent = present(b64(registered.transparent), issued);
-    status("working", "Completing submission", "Delivering the verified statement to the Authority tab");
+    status("working", "Completing submission", "Sending verified statement to Authority");
     const delivered = await deliverToAuthority(session, transparent);
-    status("success", "Submission complete", "Registered locally and delivered to the Disclosure Authority");
+    status("success", "Submission complete", "Registered and sent to the Disclosure Authority");
     artifacts = {redacted: b64(issued.token), full: b64(transparent)};
     byId("txid").textContent = delivered.txid;
     byId("redacted-size").textContent = `${issued.token.length.toLocaleString()} B`;
@@ -99,12 +100,21 @@ document.querySelectorAll('[name="key-mode"]').forEach(input => {
   input.onchange = () => {
     const upload = input.form.elements["key-mode"].value === "upload";
     byId("issuer-key").disabled = !upload;
-    byId("key-state").textContent = upload ? "Select a private P-256 key" : "Generated when submitted";
+    byId("key-state").textContent = upload ? "Select a private key file" : "Key generated on submit";
+    if (upload) byId("issuer-key").focus();
   };
 });
 byId("issuer-key").onchange = () => byId("key-state").textContent = byId("issuer-key").files[0]?.name || "Select a private key";
 byId("reset").onclick = () => {
   for (const [id, value] of Object.entries(defaults)) byId(id === "patchDate" ? "patch-date" : id).value = value;
+  document.querySelector('[name="key-mode"][value="generate"]').checked = true;
+  byId("issuer-key").value = "";
+  byId("issuer-key").disabled = true;
+  byId("key-state").textContent = "Key generated on submit";
+  byId("confirmation").hidden = true;
+  byId("error").textContent = "";
+  artifacts = {};
+  status("idle", "Ready to submit", "No submission in progress");
 };
 byId("download-redacted").onclick = () => download(artifacts.redacted, "redacted-statement.cose");
 byId("download-full").onclick = () => download(artifacts.full, "authority-transparent-statement.cose");

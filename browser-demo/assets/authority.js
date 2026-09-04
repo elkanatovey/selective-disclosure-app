@@ -33,14 +33,14 @@ function status(state, title, detail) {
 
 function updateCount() {
   const selected = choices.filter(choice => choice.input.checked).length;
-  byId("selection-count").textContent = `${selected} item${selected === 1 ? "" : "s"} selected`;
+  byId("selection-count").textContent = `${selected} item${selected === 1 ? "" : "s"} disclosed`;
 }
 
 function invalidate() {
   kbt = undefined;
   byId("export").disabled = true;
   byId("kbt-size").textContent = "Not signed";
-  status("idle", "Ready to sign", "KBT uses the authority key bound in cnf");
+  status("idle", "Ready to sign", "Ready for the selected audience");
   updateCount();
 }
 
@@ -48,6 +48,7 @@ function checkbox(choice, label, value, absent = false) {
   const row = document.createElement("div");
   row.className = `field-row${absent ? " absent" : ""}`;
   const input = document.createElement("input");
+  input.id = `field-${choice.field.key}`;
   input.type = "checkbox";
   input.checked = !absent;
   input.disabled = absent;
@@ -55,6 +56,7 @@ function checkbox(choice, label, value, absent = false) {
   choice.input = input;
   choices.push(choice);
   const name = document.createElement("label");
+  name.htmlFor = input.id;
   name.textContent = label;
   const content = document.createElement(value.length > 80 ? "span" : "code");
   content.textContent = value;
@@ -114,6 +116,7 @@ function render() {
     label.append(input, span);
     byId("body-chunks").append(label);
   }
+  byId("body-all").checked = body.children.length > 0;
   byId("body-count").textContent = `${body.children.length} × 6-character chunks`;
 
   const references = model.fields.get(1006);
@@ -134,6 +137,7 @@ function render() {
     label.append(input, document.createTextNode(child.value));
     byId("reference-list").append(label);
   }
+  byId("references-all").checked = references.children.length > 0;
   updateCount();
 }
 
@@ -163,6 +167,7 @@ async function load(txid) {
   byId("report-subject").textContent = inspected.verified.subject;
   byId("report-txid").textContent = inspected.receipt.txid;
   render();
+  invalidate();
   byId("import-view").hidden = true;
   byId("review").hidden = false;
   lucide.createIcons();
@@ -174,7 +179,7 @@ async function refreshDeliveries(autoOpen = false) {
   if (!deliveries.length) {
     const empty = document.createElement("div");
     empty.className = "available-empty";
-    empty.textContent = "Waiting for a Researcher tab to submit a report";
+    empty.textContent = "No reports yet. Submit one in the Researcher tab.";
     byId("delivery-list").append(empty);
     return;
   }
@@ -221,13 +226,19 @@ for (const [master, kind] of [["body-all", "body"], ["references-all", "referenc
 }
 byId("audience").oninput = invalidate;
 byId("sign").onclick = async () => {
+  const audience = byId("audience").value.trim();
+  if (!audience) {
+    byId("sign-error").textContent = "Enter an audience before signing";
+    byId("audience").focus();
+    return;
+  }
   try {
     byId("sign").disabled = true;
     byId("export").disabled = true;
     byId("kbt-size").textContent = "Signing";
     byId("sign-error").textContent = "";
-    status("working", "Signing disclosure", "Creating audience-bound Key Binding Token");
-    const result = await createDisclosure(session, activeTxid, selectedOpenings(), byId("audience").value);
+    status("working", "Signing disclosure", "Binding disclosure to the selected audience");
+    const result = await createDisclosure(session, activeTxid, selectedOpenings(), audience);
     kbt = result.token;
     status("success", "Disclosure signed", `Verified against ${verified.receipt.txid}`);
     byId("kbt-size").textContent = `${kbt.length.toLocaleString()} B`;
@@ -242,12 +253,13 @@ byId("sign").onclick = async () => {
   }
 };
 byId("export").onclick = () => {
+  if (!kbt) return;
   const url = URL.createObjectURL(new Blob([kbt], {type: "application/kb+cwt"}));
   const link = document.createElement("a");
   link.href = url;
   link.download = `disclosure-${verified.receipt.txid}.kbt.cose`;
   link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 byId("back").onclick = () => {
   byId("review").hidden = true;

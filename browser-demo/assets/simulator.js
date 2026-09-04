@@ -495,14 +495,14 @@ export async function verifyDisclosure(session, token, expectedAudience) {
     if (protectedHeader.get(1) !== -7 || protectedHeader.get(16) !== 294 || !(protectedHeader.get(13) instanceof Tag)) {
       throw new Error("unsupported KBT profile");
     }
-    passed("COSE envelopes and algorithms", "KBT and SD-CWT use the expected browser-demo profiles");
+    passed("COSE envelopes and algorithms", "Expected KBT and SD-CWT profiles");
 
     const statement = encode(protectedHeader.get(13));
     const statementVerification = await verifyStatement(statement, configuration);
-    passed("Issuer trust and signature", "Local authority endorsement and researcher signature verified");
+    passed("Issuer trust and signature", "Authority endorsement and researcher signature");
 
     const receipt = await verifyReceipt(statement, configuration);
-    passed("Transparency receipt", "Service signature and exact statement digest verified");
+    passed("Transparency receipt", "Signed receipt matches the registered statement");
 
     const authorityKey = statementVerification.payload.get(8)?.get(1);
     if (!(authorityKey instanceof Map) || !equalBytes(encode(authorityKey), encode(coseKey(configuration.authorityPublicJwk)))) {
@@ -514,12 +514,12 @@ export async function verifyDisclosure(session, token, expectedAudience) {
     if (!await verify(authorityVerifier, signature, toBeSigned)) throw new Error("KBT signature is invalid");
     if (kbtPayload.get(3) !== expectedAudience.trim()) throw new Error("KBT audience does not match");
     if (!Number.isSafeInteger(kbtPayload.get(6))) throw new Error("KBT issued-at claim is invalid");
-    passed("KBT proof and audience", "Authority proof-of-possession, audience, and issued-at verified");
+    passed("KBT proof and audience", "Authority signature, audience, and issued-at");
 
     await disclosureConsistency(statement);
     const model = await inspectStatement(statement, false);
-    passed("Disclosure consistency", "Presented openings match reachable hashes in the fixed report schema");
-    passed("Merkle inclusion", "Browser-local append-only log inclusion proof verified");
+    passed("Disclosure consistency", "Disclosures match the signed report");
+    passed("Merkle inclusion", "Receipt proves inclusion in the local log");
 
     return {
       valid: true,

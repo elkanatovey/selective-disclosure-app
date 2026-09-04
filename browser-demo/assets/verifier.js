@@ -78,7 +78,7 @@ function renderChecks(result) {
   }
   byId("overall").className = `overall ${result.valid ? "pass" : "fail"}`;
   byId("overall-title").textContent = result.valid ? "Disclosure verified" : "Verification failed";
-  byId("overall-detail").textContent = result.valid ? "All browser-local checks passed" : "Do not rely on disclosed contents";
+  byId("overall-detail").textContent = result.valid ? "All checks passed" : "Do not rely on disclosed contents";
   lucide.createIcons();
 }
 
@@ -97,7 +97,7 @@ async function refreshDisclosures(autoLoad = false) {
   if (!disclosures.length) {
     const empty = document.createElement("div");
     empty.className = "available-empty";
-    empty.textContent = "Waiting for the Authority tab to sign a disclosure";
+    empty.textContent = "No disclosures yet. Sign one in the Authority tab.";
     byId("disclosure-list").append(empty);
     return;
   }
@@ -158,8 +158,8 @@ byId("verify-another").onclick = () => {
   byId("token-file").value = "";
   token = undefined;
   byId("verify").disabled = true;
-  byId("file-title").textContent = "Or choose a signed disclosure file";
-  byId("file-detail").textContent = "Load a `.kbt.cose` file from this session";
+  byId("file-title").textContent = "Or choose a disclosure file";
+  byId("file-detail").textContent = "Select a `.kbt.cose` file";
   refreshDisclosures().catch(error => byId("verify-error").textContent = error.message);
 };
 byId("session-id").textContent = `Session ${session.slice(0, 8)}`;

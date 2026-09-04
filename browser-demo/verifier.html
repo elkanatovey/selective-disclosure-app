@@ -16,16 +16,16 @@
     <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="badge-check"></i></span><div class="entity-title"><p>Verifier - Relying party</p><h1>Independent Verifier</h1></div></div>
     <div class="entity-actions"><a id="launcher-link" href="index.html">Launcher</a><a id="previous-link" href="authority.html">Open Authority</a></div>
   </header>
-  <div class="simulation-bar"><strong>Verifies browser-local cryptographic evidence</strong><code id="session-id"></code></div>
+  <div class="simulation-bar"><strong>Local simulation · Independent verification</strong><code id="session-id"></code></div>
 
   <main>
     <form id="verify-form" class="import-view">
       <div class="import-heading"><p>Signed artifact review</p><h2>Verify a signed disclosure</h2></div>
       <div class="available">
-        <div class="available-head"><strong>Authority disclosures</strong><small>Updates across tabs</small></div>
+        <div class="available-head"><strong>Authority disclosures</strong><small>New disclosures appear here</small></div>
         <div class="available-list" id="disclosure-list"></div>
       </div>
-      <label class="drop-zone" id="drop-zone"><input id="token-file" type="file" accept=".cose,application/cose,application/kb+cwt"><i data-lucide="file-check-2"></i><strong id="file-title">Or choose a signed disclosure file</strong><span id="file-detail">Load a `.kbt.cose` file from this session</span></label>
+      <label class="drop-zone" id="drop-zone"><input id="token-file" type="file" accept=".cose,application/cose,application/kb+cwt"><i data-lucide="file-check-2"></i><strong id="file-title">Or choose a disclosure file</strong><span id="file-detail">Select a `.kbt.cose` file</span></label>
       <label class="audience-field">Expected audience<input id="audience" value="https://researcher.example/verifier" required></label>
       <button id="verify" type="submit" disabled><i data-lucide="shield-check"></i>Verify disclosure</button>
       <div id="verify-error" role="alert"></div>
@@ -33,7 +33,7 @@
 
     <section class="results" id="results" hidden>
       <div class="report-pane">
-        <div class="report-head"><div><p>Disclosure contents</p><h2 id="report-subject"></h2></div><div><span>Local SCITT transaction</span><code id="report-txid"></code></div></div>
+        <div class="report-head"><div><p>Disclosure contents</p><h2 id="report-subject"></h2></div><div><span>Transaction ID</span><code id="report-txid"></code></div></div>
         <div id="field-list" class="field-list"></div>
         <section class="body-section"><div class="section-head"><strong>Body</strong><small>Redacted spans remain hidden</small></div><div id="body-preview" class="body-preview"></div></section>
         <section class="references-section"><div class="section-head"><strong>References</strong></div><div id="references"></div></section>

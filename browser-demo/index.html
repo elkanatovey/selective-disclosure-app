@@ -12,9 +12,9 @@
 <body>
   <header class="top">
     <h1>Evidence via Limited Disclosure</h1>
-    <p>Browser-local demonstration of report registration, selective disclosure, and independent verification across three role-specific tabs.</p>
+    <p>Run the submission, disclosure, and verification workflow across three tabs.</p>
   </header>
-  <div class="warning"><strong>Local simulation:</strong> this page models a Transparency Service in your browser. It does not provide MST, CCF governance, consensus, shared service persistence, or hardware-backed guarantees.</div>
+  <div class="warning"><strong>Local simulation:</strong> all state stays in this browser. This is not MST and does not provide CCF governance, consensus, shared persistence, or hardware-backed guarantees.</div>
 
   <main class="workspace">
     <section class="session" aria-labelledby="session-title">
@@ -31,23 +31,23 @@
     <section class="roles" aria-label="Demo roles">
       <article class="role researcher">
         <div class="role-mark" aria-hidden="true"><i data-lucide="user-round"></i></div>
-        <div><h2>Independent Researcher</h2><p>Signs a selectively disclosable report, registers its commitment, and delivers the verified statement.</p></div>
-        <a id="researcher-link" href="researcher.html"><i data-lucide="external-link"></i>Open Researcher</a>
+        <div><h2>Independent Researcher</h2><p>Signs and submits a selectively disclosable report.</p></div>
+          <a id="researcher-link" href="researcher.html" target="_blank" rel="noopener"><i data-lucide="external-link"></i>Open Researcher</a>
       </article>
       <article class="role authority">
         <div class="role-mark" aria-hidden="true"><i data-lucide="shield"></i></div>
-        <div><h2>Disclosure Authority</h2><p>Receives submitted reports, chooses the minimum evidence, and signs an audience-bound disclosure.</p></div>
-        <a id="authority-link" href="authority.html"><i data-lucide="external-link"></i>Open Authority</a>
+        <div><h2>Disclosure Authority</h2><p>Chooses and signs the evidence to disclose.</p></div>
+          <a id="authority-link" href="authority.html" target="_blank" rel="noopener"><i data-lucide="external-link"></i>Open Authority</a>
       </article>
       <article class="role verifier">
         <div class="role-mark" aria-hidden="true"><i data-lucide="badge-check"></i></div>
-        <div><h2>Independent Verifier</h2><p>Checks signatures, audience binding, disclosed values, receipt integrity, and local Merkle inclusion.</p></div>
-        <a id="verifier-link" href="verifier.html"><i data-lucide="external-link"></i>Open Verifier</a>
+        <div><h2>Independent Verifier</h2><p>Verifies the disclosure, receipt, and Merkle inclusion.</p></div>
+          <a id="verifier-link" href="verifier.html" target="_blank" rel="noopener"><i data-lucide="external-link"></i>Open Verifier</a>
       </article>
     </section>
 
     <section class="status" aria-labelledby="status-title">
-      <div class="status-head"><strong id="status-title">Browser-local state</strong><small>Stored only in this browser profile</small></div>
+      <div class="status-head"><strong id="status-title">Session state</strong><small>Stored in this browser</small></div>
       <div class="metrics">
         <div class="metric"><span>Reports delivered</span><strong id="delivery-count">0</strong></div>
         <div class="metric"><span>Disclosures signed</span><strong id="disclosure-count">0</strong></div>

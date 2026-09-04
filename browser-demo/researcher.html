@@ -16,7 +16,7 @@
     <div class="entity-brand"><span class="entity-mark" aria-hidden="true"><i data-lucide="user-round"></i></span><div class="entity-title"><p>Researcher - Submitter</p><h1>Independent Researcher</h1></div></div>
     <div class="entity-actions"><a id="launcher-link" href="index.html">Launcher</a><a id="next-link" href="authority.html">Open Authority</a></div>
   </header>
-  <div class="simulation-bar"><strong>Browser-local Transparency Service simulation</strong><code id="session-id"></code></div>
+  <div class="simulation-bar"><strong>Local Transparency Service</strong><code id="session-id"></code></div>
 
   <main>
     <form id="composer" class="workspace">
@@ -48,7 +48,7 @@
               <label><input type="radio" name="key-mode" value="upload">Upload key</label>
             </div>
             <input id="issuer-key" type="file" accept=".pem,.key,.json,application/x-pem-file,application/json" disabled aria-label="Issuer private key">
-            <small id="key-state">Generated when submitted</small>
+            <small id="key-state">Key generated on submit</small>
           </fieldset>
         </section>
 
@@ -59,7 +59,7 @@
         </section>
 
         <section class="confirmation" id="confirmation" hidden>
-          <div class="confirmation-head"><span>Local SCITT transaction</span><code id="txid"></code></div>
+          <div class="confirmation-head"><span>Transaction ID</span><code id="txid"></code></div>
           <div class="artifact-row"><div><strong>Redacted statement</strong><small id="redacted-size"></small></div><button type="button" class="icon-button" id="download-redacted" title="Download redacted COSE" aria-label="Download redacted COSE"><i data-lucide="download"></i></button></div>
           <div class="artifact-row"><div><strong>Authority delivery</strong><small id="full-size"></small></div><button type="button" class="icon-button" id="download-full" title="Download transparent statement" aria-label="Download transparent statement"><i data-lucide="download"></i></button></div>
         </section>
