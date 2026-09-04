@@ -10,6 +10,11 @@ Disclosure Authority to release limited evidence to an Independent Verifier.
 
 **[View the interactive project poster](https://elkanatovey.github.io/selective-disclosure-poster/)**
 
+**[Try the browser-local demo](https://elkanatovey.github.io/selective-disclosure-app/browser-demo/)**
+
+The browser-local demo simulates the Transparency Service. For the MST-backed
+demo, follow the instructions below.
+
 ## Architecture
 
 Each role runs as an independent application with its own process and origin:
