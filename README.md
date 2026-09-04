@@ -4,6 +4,10 @@ An end-to-end prototype for submitting a vulnerability report as a selectively
 disclosable SD-CWT, registering it with a Transparency Service, and allowing a
 Disclosure Authority to release limited evidence to an Independent Verifier.
 
+> [!WARNING]
+> This is a research library and prototype. It has not been hardened or
+> reviewed for production use and must not be used in production systems.
+
 **[View the interactive project poster](https://elkanatovey.github.io/selective-disclosure-poster/)**
 
 ## Architecture
@@ -23,6 +27,9 @@ Independent Verifier :8092
 
 In this prototype, MSRC acts as the Disclosure Authority, while Microsoft
 Signing Transparency (MST) provides the Transparency Service.
+MST exposes the SCITT API. In this README, **MST** names the deployed
+Transparency Service, while **SCITT** names its protocol, endpoints, and receipt
+format.
 
 | Role | Owns | Does not own |
 | --- | --- | --- |
@@ -70,7 +77,7 @@ repository in its VS Code dev container. Alternatively, with Docker installed:
 
 ## Researcher completion gate
 
-The researcher page does not report success merely because SCITT returned an
+The researcher page does not report success merely because MST returned an
 HTTP response. Its backend must:
 
 1. Verify the standalone SCITT receipt against the exact submitted statement.
