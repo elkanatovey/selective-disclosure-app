@@ -16,6 +16,7 @@ if [[ -d browser-demo ]]; then
     browser-demo/assets/simulator.js
     browser-demo/assets/verifier.js
     browser-demo/tests/self-test.js
+    browser-demo/tests/*.test.mjs
     browser-demo/tests/wait-for-result.mjs
   )
 fi
@@ -52,6 +53,9 @@ fi
 "${RUFF[@]}" format --check "${PYTHON_SOURCES[@]}"
 "${BIOME[@]}" lint "${JAVASCRIPT_SOURCES[@]}"
 "$PYTHON" -m pytest -q
+if [[ -d browser-demo ]]; then
+  node --test browser-demo/tests/*.test.mjs
+fi
 
 for source in "${JAVASCRIPT_SOURCES[@]}"; do
   node --check "$source"

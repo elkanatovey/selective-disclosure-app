@@ -15,6 +15,8 @@ let verified;
 let kbt;
 let choices = [];
 let bodyPaint;
+let pendingSigning;
+let loadRevision = 0;
 
 const sessionUrl = path => `${path}?session=${encodeURIComponent(session)}`;
 const hex = bytes => [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
@@ -37,8 +39,12 @@ function updateCount() {
 }
 
 function invalidate() {
+  pendingSigning?.abort();
+  pendingSigning = undefined;
   kbt = undefined;
+  byId("sign").disabled = false;
   byId("export").disabled = true;
+  byId("sign-error").textContent = "";
   byId("kbt-size").textContent = "Not signed";
   status("idle", "Ready to sign", "Ready for the selected audience");
   updateCount();
@@ -159,8 +165,13 @@ function selectedOpenings() {
 }
 
 async function load(txid) {
+  const revision = ++loadRevision;
+  invalidate();
+  byId("review").hidden = true;
+  byId("import-view").hidden = false;
   byId("load-error").textContent = "";
   const inspected = await inspectDelivery(session, txid);
+  if (revision !== loadRevision) return;
   activeTxid = txid;
   verified = inspected;
   model = inspected.model;
@@ -232,24 +243,33 @@ byId("sign").onclick = async () => {
     byId("audience").focus();
     return;
   }
+  pendingSigning?.abort();
+  const controller = new AbortController();
+  pendingSigning = controller;
+  kbt = undefined;
   try {
     byId("sign").disabled = true;
     byId("export").disabled = true;
     byId("kbt-size").textContent = "Signing";
     byId("sign-error").textContent = "";
     status("working", "Signing disclosure", "Binding disclosure to the selected audience");
-    const result = await createDisclosure(session, activeTxid, selectedOpenings(), audience);
+    const result = await createDisclosure(session, activeTxid, selectedOpenings(), audience, controller.signal);
+    if (pendingSigning !== controller) return;
     kbt = result.token;
     status("success", "Disclosure signed", `Verified against ${verified.receipt.txid}`);
     byId("kbt-size").textContent = `${kbt.length.toLocaleString()} B`;
     byId("export").disabled = false;
   } catch (error) {
+    if (pendingSigning !== controller || controller.signal.aborted) return;
     kbt = undefined;
     byId("kbt-size").textContent = "Not signed";
     byId("sign-error").textContent = error.message;
     status("error", "Signing failed", "No token was created");
   } finally {
-    byId("sign").disabled = false;
+    if (pendingSigning === controller) {
+      pendingSigning = undefined;
+      byId("sign").disabled = false;
+    }
   }
 };
 byId("export").onclick = () => {
@@ -262,6 +282,8 @@ byId("export").onclick = () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 byId("back").onclick = () => {
+  loadRevision += 1;
+  invalidate();
   byId("review").hidden = true;
   byId("import-view").hidden = false;
   refreshDeliveries().catch(error => byId("load-error").textContent = error.message);

@@ -19,7 +19,15 @@ export function encode(value){
 export function decode(bytes){
   let at=0;const take=n=>{if(at+n>bytes.length)throw new Error("truncated CBOR");const out=bytes.slice(at,at+n);at+=n;return out};
   const uint=(ai)=>{if(ai<24)return ai;const sizes={24:1,25:2,26:4,27:8},size=sizes[ai];if(!size)throw new Error("indefinite CBOR is unsupported");const data=take(size),view=new DataView(data.buffer,data.byteOffset,size);return size===1?data[0]:size===2?view.getUint16(0):size===4?view.getUint32(0):Number(view.getBigUint64(0))};
-  const read=()=>{const first=take(1)[0],major=first>>5,ai=first&31;if(major===7){if(ai===20)return false;if(ai===21)return true;if(ai===22)return null;if(ai===24)return new Simple(take(1)[0]);throw new Error("unsupported CBOR simple value")}const n=uint(ai);if(major===0)return n;if(major===1)return-1-n;if(major===2)return take(n);if(major===3)return text.decode(take(n));if(major===4)return Array.from({length:n},read);if(major===5){const map=new Map();for(let i=0;i<n;i++)map.set(read(),read());return map}if(major===6)return new Tag(n,read());throw new Error("unsupported CBOR")};
+  const read=()=>{const first=take(1)[0],major=first>>5,ai=first&31;if(major===7){if(ai===20)return false;if(ai===21)return true;if(ai===22)return null;if(ai===24)return new Simple(take(1)[0]);throw new Error("unsupported CBOR simple value")}const n=uint(ai);if(major===0)return n;if(major===1)return-1-n;if(major===2)return take(n);if(major===3)return text.decode(take(n));if(major===4)return Array.from({length:n},read);if(major===5){
+    const map=new Map(),keys=new Set();
+    for(let index=0;index<n;index++){
+      const key=read(),identity=b64(encode(key));
+      if(keys.has(identity))throw new Error("duplicate CBOR map key");
+      keys.add(identity);map.set(key,read());
+    }
+    return map;
+  }if(major===6)return new Tag(n,read());throw new Error("unsupported CBOR")};
   const value=read();if(at!==bytes.length)throw new Error("trailing CBOR");return value;
 }
 export const b64=bytes=>{let value="";for(let i=0;i<bytes.length;i+=32768)value+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(value).replaceAll("+","-").replaceAll("/","_").replace(/=+$/g,"")};
@@ -71,10 +79,53 @@ export function present(transparent,issued){
 }
 const redKey=map=>[...map.keys()].find(key=>key instanceof Simple&&key.value===59);
 export async function inspectStatement(statement,requireAll=true){
-  const tagged=decode(statement);if(!(tagged instanceof Tag)||tagged.tag!==18)throw new Error("file is not a COSE Sign1 statement");const parts=tagged.value,headers=parts[1];if(!(headers instanceof Map)||!headers.has(394)||!headers.has(17))throw new Error("file must contain a SCITT receipt and full disclosures");const payload=decode(parts[2]),root=redKey(payload),raw= headers.get(17),openings=new Map();
-  for(const encoded of raw)openings.set(b64(await digest(encoded)),{encoded,value:decode(encoded)});
-  const fields=new Map();for(const hash of payload.get(root)){const opening=openings.get(b64(hash));if(!opening){if(requireAll)throw new Error("top-level disclosure is missing");continue}const [,value,key]=opening.value,field={key,name:FIELDS.find(([,id])=>id===key)?.[0],opening:opening.encoded,value,children:[]};if(value instanceof Map){const nested=redKey(value);for(const hash of value.get(nested)||[]){const child=openings.get(b64(hash));if(child)field.children.push({index:child.value[2],value:child.value[1],opening:child.encoded})}field.children.sort((a,b)=>a.index-b.index)}else if(Array.isArray(value)){for(const [index,item] of value.entries())if(item instanceof Tag&&item.tag===60){const child=openings.get(b64(item.value));if(child)field.children.push({index,value:child.value[1],opening:child.encoded})}}fields.set(key,field)}
-  if(requireAll&&fields.size!==9)throw new Error("statement does not contain the report schema");return{statement,fields,payload};
+  const tagged=decode(statement);
+  if(!(tagged instanceof Tag)||tagged.tag!==18)throw new Error("file is not a COSE Sign1 statement");
+  const parts=tagged.value,headers=parts[1];
+  if(!(headers instanceof Map)||!headers.has(394)||!headers.has(17))throw new Error("file must contain a SCITT receipt and full disclosures");
+  const payload=decode(parts[2]),root=redKey(payload),openings=new Map();
+  for(const encoded of headers.get(17))openings.set(b64(await digest(encoded)),{encoded,value:decode(encoded)});
+
+  function requireOpening(hash){
+    const opening=openings.get(b64(hash));
+    if(!opening)throw new Error("disclosure is missing from the full report");
+    requireComplete(opening.value[1]);
+  }
+  function requireComplete(value){
+    if(value instanceof Map){
+      const marker=redKey(value);
+      for(const hash of value.get(marker)||[])requireOpening(hash);
+      for(const [key,child] of value)if(key!==marker)requireComplete(child);
+    }else if(Array.isArray(value)){
+      for(const child of value)requireComplete(child);
+    }else if(value instanceof Tag&&value.tag===60){
+      requireOpening(value.value);
+    }
+  }
+  if(requireAll)requireComplete(payload);
+
+  const fields=new Map();
+  for(const hash of payload.get(root)){
+    const opening=openings.get(b64(hash));
+    if(!opening)continue;
+    const [,value,key]=opening.value;
+    const field={key,name:FIELDS.find(([,id])=>id===key)?.[0],opening:opening.encoded,value,children:[]};
+    if(value instanceof Map){
+      for(const hash of value.get(redKey(value))||[]){
+        const child=openings.get(b64(hash));
+        if(child)field.children.push({index:child.value[2],value:child.value[1],opening:child.encoded});
+      }
+      field.children.sort((left,right)=>left.index-right.index);
+    }else if(Array.isArray(value)){
+      for(const [index,item] of value.entries())if(item instanceof Tag&&item.tag===60){
+        const child=openings.get(b64(item.value));
+        if(child)field.children.push({index,value:child.value[1],opening:child.encoded});
+      }
+    }
+    fields.set(key,field);
+  }
+  if(requireAll&&fields.size!==9)throw new Error("statement does not contain the report schema");
+  return{statement,fields,payload};
 }
 export async function signKbt(model,selected,signer,audience){
   if(!audience.trim())throw new TypeError("audience is required");if(!selected.length)throw new TypeError("select at least one disclosure");const cnf=model.payload.get(8)?.get(1),same=(left,right)=>compare(left,right)===0;if(!(cnf instanceof Map)||!same(cnf.get(-2),unb64(signer.publicJwk.x))||!same(cnf.get(-3),unb64(signer.publicJwk.y)))throw new Error("signing key does not match the statement cnf");const tagged=decode(model.statement),parts=tagged.value,headers=new Map(parts[1]);headers.set(17,selected);const presented=new Tag(18,[parts[0],headers,parts[2],parts[3]]),protectedBytes=encode(new Map([[1,-7],[13,presented],[16,294]])),payloadBytes=encode(new Map([[3,audience.trim()],[6,Math.floor(Date.now()/1000)]])),toSign=encode(["Signature1",protectedBytes,new Uint8Array(),payloadBytes]),signature=new Uint8Array(await crypto.subtle.sign({name:"ECDSA",hash:"SHA-256"},signer.privateKey,toSign));return encode(new Tag(18,[protectedBytes,new Map(),payloadBytes,signature]))

@@ -28,4 +28,6 @@ The demo requires a current browser with WebCrypto, IndexedDB, BroadcastChannel,
 
 ## Self-test
 
-With the local server running, open <http://127.0.0.1:8008/browser-demo/tests/>. A passing result exercises a two-entry log, selective disclosure, all six verification checks, wrong-audience rejection, tamper rejection, and IndexedDB persistence.
+With the local server running, open <http://127.0.0.1:8008/browser-demo/tests/>. A passing result exercises a two-entry log, selective disclosure, all six verification checks, wrong-audience rejection, tamper rejection, and IndexedDB persistence. It also rejects incomplete full deliveries and duplicate CBOR keys, and checks that changing selection, audience, or report cancels obsolete signing requests without storing or exporting their tokens.
+
+Run `node --test browser-demo/tests/*.test.mjs` for the decoder and full-report regression tests without a browser. Both suites run before Pages deployment.

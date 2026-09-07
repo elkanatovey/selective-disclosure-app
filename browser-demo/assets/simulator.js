@@ -82,20 +82,30 @@ async function readAll(session, storeName) {
   return result;
 }
 
-async function writeRecord(session, storeName, value) {
+async function writeRecord(session, storeName, value, signal) {
   const database = await openDatabase(session);
-  const transaction = database.transaction(storeName, "readwrite");
-  const done = transactionDone(transaction);
-  transaction.objectStore(storeName).put(value);
-  await done;
-  database.close();
+  try {
+    signal?.throwIfAborted();
+    const transaction = database.transaction(storeName, "readwrite");
+    const done = transactionDone(transaction);
+    const abort = () => transaction.abort();
+    signal?.addEventListener("abort", abort, {once: true});
+    try {
+      transaction.objectStore(storeName).put(value);
+      await done;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+  } finally {
+    database.close();
+  }
 }
 
-async function withLock(session, name, operation) {
+async function withLock(session, name, operation, signal) {
   if (!navigator.locks) {
     throw new Error("This demo requires the Web Locks API. Use a current version of Chrome, Edge, Firefox, or Safari.");
   }
-  return navigator.locks.request(`${DATABASE_PREFIX}:${session}:${name}`, operation);
+  return navigator.locks.request(`${DATABASE_PREFIX}:${session}:${name}`, {signal}, operation);
 }
 
 async function generateSigner() {
@@ -389,15 +399,17 @@ export async function inspectDelivery(session, txid) {
   return {delivery, verified, receipt, model};
 }
 
-export async function createDisclosure(session, txid, selected, audience) {
+export async function createDisclosure(session, txid, selected, audience, signal) {
   return withLock(session, `disclosure:${txid}`, async () => {
     const inspected = await inspectDelivery(session, txid);
     const configuration = await ensureConfiguration(session);
+    signal?.throwIfAborted();
     const signer = {
       privateKey: configuration.authorityPrivateKey,
       publicJwk: configuration.authorityPublicJwk,
     };
     const token = await signKbt(inspected.model, selected, signer, audience);
+    signal?.throwIfAborted();
     const id = `${txid}:${crypto.randomUUID()}`;
     await writeRecord(session, "disclosures", {
       id,
@@ -406,10 +418,10 @@ export async function createDisclosure(session, txid, selected, audience) {
       audience: audience.trim(),
       token,
       createdAt: Date.now(),
-    });
+    }, signal);
     announce(session, "disclosure-created", {id, txid});
     return {id, token};
-  });
+  }, signal);
 }
 
 export async function listDisclosures(session) {

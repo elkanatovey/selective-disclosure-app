@@ -29,6 +29,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+      - name: Run token regression tests
+        run: node --test browser-demo/tests/*.test.mjs
       - name: Build Pages artifact
         run: |
           mkdir -p _site/browser-demo
