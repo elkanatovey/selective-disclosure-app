@@ -44,11 +44,15 @@ format.
 | Transparency Service | Ledger and receipt key | Disclosure Authority holder key |
 
 The Researcher, Disclosure Authority, and Independent Verifier applications
-share only [webapp/crypto.py](webapp/crypto.py), a state-free adapter over the
-bundled Python [sd_cwt](sd_cwt) reference package. It performs strict draft-08
-decoding, issuer signature checks, disclosure matching, and KBT signing and
-verification. The Independent Verifier derives the holder key from the signed
-statement's `cnf` claim. The MSRC private key is never returned by an HTTP
+share a state-free [cryptographic adapter](webapp/crypto.py) over the bundled
+Python [sd_cwt](sd_cwt) reference package and [HTTP helpers](webapp/http.py) for
+public trust lookup and request parsing. Blocking HTTP and verification work
+runs in FastAPI's thread pool; private keys and mutable state remain role-local.
+The adapter applies the demo profile to issuer verification, disclosure matching,
+and KBT signing and verification. Full deliveries must open every reachable
+commitment, including nested body chunks and references; selective presentations
+may omit openings. The Independent Verifier derives the holder key from the
+signed statement's `cnf` claim. The MSRC private key is never returned by an HTTP
 endpoint.
 
 Browser issuance remains in JavaScript so the Researcher private key can stay
@@ -68,9 +72,9 @@ Python environment and run all checks with:
 PYTHON=.venv/bin/python ./scripts/check.sh
 ```
 
-The check script runs Ruff linting and formatting checks, Biome JavaScript
-linting, unit tests, JavaScript syntax checks, Bash syntax checks, and
-ShellCheck.
+The check script runs Ruff linting and formatting checks (including `sd_cwt`),
+Biome JavaScript linting and JavaScript/CSS formatting checks, Python and Node.js
+unit tests, JavaScript syntax checks, Bash syntax checks, and ShellCheck.
 
 For an Azure Linux 3 environment with the MST system dependencies, reopen the
 repository in its VS Code dev container. Alternatively, with Docker installed:

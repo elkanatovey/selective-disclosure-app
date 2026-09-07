@@ -5,6 +5,8 @@
 mandatory claims (cnf/iss/sub) and Key Binding Token presentation.
 """
 
+from unittest.mock import patch
+
 import pytest
 from pycose.keys import EC2Key
 from pycose.keys.curves import P256
@@ -62,6 +64,15 @@ def test_kbt_roundtrip_discloses_selected(signer, holder):
     assert result.aud == AUD
     assert result.claims.disclosed[501] == "RCE"
     assert 500 not in result.claims.disclosed
+
+
+def test_kbt_verifies_issuer_signature_once(signer, holder):
+    token, disclosures = sd_cwt.issue({1: "iss", 501: "secret"}, [(501,)], signer, cnf=holder)
+    kbt = sd_cwt.kbt_sign(token, disclosures, holder, aud=AUD, iat=1725244237)
+    with patch.object(sd_cwt.core, "verify", wraps=sd_cwt.verify) as verify:
+        result = sd_cwt.kbt_verify(kbt, signer, expected_aud=AUD)
+    verify.assert_called_once()
+    assert result.claims.disclosed == {501: "secret"}
 
 
 def test_kbt_rejects_wrong_holder_key(signer, holder):
@@ -140,10 +151,21 @@ def test_verify_rejects_indefinite_length_payload(signer):
         sd_cwt.verify(token, signer)
 
 
-def test_verify_rejects_duplicate_map_keys(signer):
-    dup = bytes.fromhex("a201616101616a")  # map(2){1:"a", 1:"j"}
-    token = _sign_raw_payload(signer, dup)
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        "a201616101616a",
+        "a20161611801616a",
+        "a2182a0119002a02",
+        "a22061613800616a",
+        "a261610178016102",
+        "a1182aa20100180101",
+    ],
+    ids=["identical", "uint-short", "uint-long", "negative", "text", "nested"],
+)
+def test_verify_rejects_duplicate_map_keys(signer, encoded):
+    token = _sign_raw_payload(signer, bytes.fromhex(encoded))
+    with pytest.raises(ValueError, match="duplicate map key"):
         sd_cwt.verify(token, signer)
 
 

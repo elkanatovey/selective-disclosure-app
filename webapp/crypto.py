@@ -19,6 +19,7 @@ from pycose.keys import CoseKey
 from pycose.messages import Sign1Message
 
 import sd_cwt
+from sd_cwt.statement import BODY, CONTENT_FIELDS, NAME_BY_FIELD, PARENT, REFERENCES
 
 RCK = CBORSimpleValue(59)
 SD_CLAIMS = 17
@@ -205,7 +206,7 @@ def verify_issuer(
     public_key_from_cnf(payload.get(8))
     if holder_key is not None and payload[8] != {1: public_cose_map(holder_key)}:
         raise ValueError("statement is bound to a different holder key")
-    if set(payload) != {1, 6, 8, RCK} or len(payload[RCK]) != 9:
+    if set(payload) != {1, 6, 8, RCK} or len(payload[RCK]) != len(CONTENT_FIELDS):
         raise ValueError("statement does not have the uniform report shape")
     return payload
 
@@ -284,16 +285,16 @@ def verify_transparent_statement(
 
 
 def resolve_all(payload: dict[Any, Any], presented: list[bytes]) -> dict[int, Any]:
-    result = dict(sd_cwt.match_disclosures(payload, presented).disclosed)
-    if set(result) != set(range(1000, 1009)):
+    result = dict(sd_cwt.match_disclosures(payload, presented, require_all=True).disclosed)
+    if set(result) != set(CONTENT_FIELDS):
         raise ValueError("disclosures do not match the report schema")
-    if isinstance(result[1002], dict):
-        chunks = result[1002]
+    if isinstance(result[BODY], dict):
+        chunks = result[BODY]
         if sorted(chunks) != list(range(len(chunks))) or not all(
             isinstance(chunk, str) for chunk in chunks.values()
         ):
             raise ValueError("body chunks are invalid")
-        result[1002] = "".join(chunks[index] for index in range(len(chunks)))
+        result[BODY] = "".join(chunks[index] for index in range(len(chunks)))
     return result
 
 
@@ -327,29 +328,27 @@ def sign_kbt(
     )
 
 
-def describe_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[str, Any]:
-    selected = resolve_selected(payload, presented)
-    names = {
-        1001: "title",
-        1003: "component",
-        1004: "severity",
-        1005: "fingerprint",
-        1007: "patch",
-        1008: "patch_date",
-    }
+def describe_selected(
+    payload: dict[Any, Any],
+    presented: list[bytes],
+    *,
+    selected: dict[int, Any] | None = None,
+) -> dict[str, Any]:
+    if selected is None:
+        selected = resolve_selected(payload, presented)
     fields = {}
-    for key, name in names.items():
+    for key, name in NAME_BY_FIELD.items():
+        if key in (PARENT, BODY, REFERENCES):
+            continue
         value = selected.get(key)
-        fields[name] = (
-            None if value is None else (value.hex() if isinstance(value, bytes) else value)
-        )
-    body = selected.get(1002)
+        fields[name] = value.hex() if isinstance(value, bytes) else value
+    body = selected.get(BODY)
     if isinstance(body, dict):
         openings = {hashlib.sha256(cbor(item)).digest(): cbor2.loads(item) for item in presented}
         count = 0
         for digest in payload[RCK]:
             opening = openings.get(digest)
-            if opening is not None and len(opening) == 3 and opening[2] == 1002:
+            if opening is not None and len(opening) == 3 and opening[2] == BODY:
                 count = len(opening[1].get(RCK, []))
                 break
         body_view = {"known": True, "chunks": [body.get(index) for index in range(count)]}
@@ -358,7 +357,7 @@ def describe_selected(payload: dict[Any, Any], presented: list[bytes]) -> dict[s
     return {
         "fields": fields,
         "body": body_view,
-        "references": selected.get(1006),
+        "references": selected.get(REFERENCES),
     }
 
 
@@ -416,9 +415,9 @@ def verify_bundle(
         return {"valid": False, "checks": checks, "report": None}
 
     payload = None
-    txid = None
-    selected = None
+    receipt_info = None
     kbt_result = None
+    report = None
     try:
         payload = verify_issuer(statement, ca, issuer)
         result(
@@ -430,7 +429,6 @@ def verify_bundle(
         result("Issuer trust and signature", "fail", str(exc))
     try:
         receipt_info = verify_transparent_statement(statement, receipt_trust)
-        txid = receipt_info["txid"]
         result(
             "SCITT receipt",
             "pass",
@@ -442,12 +440,12 @@ def verify_bundle(
         if payload is None:
             raise ValueError("issuer payload is not trusted")
         leaf = x509.load_der_x509_certificate(statement_protected[33][0])
-        kbt_result = sd_cwt.kbt_verify(
+        verified_kbt = sd_cwt.kbt_verify(
             token,
             public_cose(leaf.public_key()),
             expected_aud=audience,
         )
-        claims = kbt_result.kbt_claims or {}
+        claims = verified_kbt.kbt_claims or {}
         if not isinstance(claims.get(6), int):
             raise ValueError("KBT claims are invalid")
         now = int(time.time())
@@ -457,6 +455,7 @@ def verify_bundle(
             raise ValueError("KBT is not yet valid")
         if 4 in claims and now >= claims[4]:
             raise ValueError("KBT has expired")
+        kbt_result = verified_kbt
         result(
             "KBT proof and audience",
             "pass",
@@ -465,14 +464,20 @@ def verify_bundle(
     except Exception as exc:
         result("KBT proof and audience", "fail", str(exc))
     try:
-        if payload is None:
-            raise ValueError("issuer payload is not trusted")
         if kbt_result is None:
             raise ValueError("KBT is not trusted")
         presented = statement_value[1].get(SD_CLAIMS, [])
-        selected = dict(kbt_result.claims.disclosed)
-        if not set(selected).issubset(set(range(1000, 1009))):
+        selected = kbt_result.claims.disclosed
+        if not set(selected).issubset(CONTENT_FIELDS):
             raise ValueError("disclosed fields are outside the report schema")
+        report = describe_selected(payload, presented, selected=selected)
+        report.update(
+            {
+                "subject": statement_protected.get(15, {}).get(2, ""),
+                "txid": receipt_info["txid"] if receipt_info else None,
+                "audience": audience,
+            }
+        )
         result(
             "Disclosure consistency",
             "pass",
@@ -480,20 +485,12 @@ def verify_bundle(
         )
     except Exception as exc:
         result("Disclosure consistency", "fail", str(exc))
-    if receipt_trust.merkle and "receipt_info" in locals():
-        result("SCITT Merkle inclusion", "pass", "CCF Merkle inclusion proof verified")
-    else:
+    if not receipt_trust.merkle:
         result("SCITT Merkle inclusion", "unavailable", "The mock receipt has no Merkle proof")
-    report = None
-    if payload is not None and selected is not None:
-        report = describe_selected(payload, statement_value[1].get(SD_CLAIMS, []))
-        report.update(
-            {
-                "subject": statement_protected.get(15, {}).get(2, ""),
-                "txid": txid,
-                "audience": audience,
-            }
-        )
+    elif receipt_info is None:
+        result("SCITT Merkle inclusion", "skipped", "Blocked by invalid SCITT receipt")
+    else:
+        result("SCITT Merkle inclusion", "pass", "CCF Merkle inclusion proof verified")
     return {
         "valid": all(check["status"] in {"pass", "unavailable"} for check in checks),
         "checks": checks,

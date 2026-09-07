@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
+from threading import Lock
 from typing import Any
 
 import cbor2
-import requests
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 
 from .crypto import (
@@ -20,6 +20,7 @@ from .crypto import (
     verify_issuer,
     with_uhdr,
 )
+from .http import CoseBody, msrc_public
 
 MSRC_URL = os.getenv("MSRC_URL", "http://127.0.0.1:8091")
 
@@ -29,26 +30,11 @@ class State:
         self.signing_key = ec.generate_private_key(ec.SECP256R1())
         self.entries: dict[str, bytes] = {}
         self.seqno = 0
+        self.lock = Lock()
 
 
 state = State()
 app = FastAPI(title="Mock SCITT")
-
-
-def msrc_public() -> dict[str, Any]:
-    response = requests.get(f"{MSRC_URL}/api/public", timeout=5)
-    response.raise_for_status()
-    return response.json()
-
-
-async def cose_body(request: Request) -> bytes:
-    content_type = request.headers.get("content-type", "").partition(";")[0]
-    if content_type.lower() != "application/cose":
-        raise HTTPException(415, "SCITT entries require application/cose")
-    value = await request.body()
-    if not value:
-        raise HTTPException(400, "SCITT entry is empty")
-    return value
 
 
 @app.get("/api/health")
@@ -62,24 +48,24 @@ def trust() -> dict[str, Any]:
 
 
 @app.post("/entries")
-async def register(
-    request: Request,
+def register(
+    token: CoseBody,
     wait_for_commit: bool = Query(True, alias="waitForCommit"),
 ) -> Response:
     del wait_for_commit
     try:
-        token = await cose_body(request)
         if parts(token)[1]:
             raise ValueError("SCITT only accepts the fully redacted envelope")
-        public = msrc_public()
+        public = msrc_public(MSRC_URL)
         verify_issuer(
             token,
             x509.load_der_x509_certificate(unb64(public["ca"])),
             public["issuer"],
             public_key_from_jwk(public["msrcJwk"]),
         )
-        state.seqno += 1
-        txid = f"1.{state.seqno}"
+        with state.lock:
+            state.seqno += 1
+            txid = f"1.{state.seqno}"
         receipt = create_mock_receipt(token, txid, state.signing_key)
         state.entries[txid] = with_uhdr(
             token,

@@ -12,7 +12,7 @@ parent exists until the holder discloses it.
 
 Visibility
 ----------
-* **Clear** (standard CWT keys, service-set): ``iss`` (1), ``iat`` (6). Plus the
+* **Clear** (standard CWT keys, issuer-set): ``iss`` (1), ``iat`` (6). Plus the
   ``sd_alg`` machinery header added by the token core.
 * **Selectively-disclosable** (all content, application-specific keys):
   ``parent`` and every other field below.
@@ -26,11 +26,13 @@ same clear keys and the same, constant redacted-hash count regardless of how
 much content it actually carries -- leaking neither field presence nor the
 report-vs-note distinction.
 
-This module is format-only: it produces inputs for :func:`sd_cwt.issue` and
-validates decoded statements. It knows nothing about the on-chain service. Since
-the transparency service (a TEE) is the sole signer, the authoritative statement
-construction lives in the C++ enclave; this Python module is the reference
-oracle and the researcher-side verification tooling.
+This module provides shared field labels and format-only reference helpers for
+:func:`sd_cwt.issue` and decoded statements. The live web app signs statements
+in the Researcher browser; the transparency service registers those signed
+bytes and returns receipts. The browser profile adds a clear ``cnf`` claim and
+nested body-chunk commitments in ``webapp/static/sdcwt.js``, with application
+validation in ``webapp/crypto.py``. These reference constructors retain a plain
+string body and do not manage deployment identities or trust.
 """
 
 from typing import Any, Optional
@@ -181,8 +183,7 @@ def issue_statement(
     # Every content field is redacted whole (strict uniformity). Additionally
     # redact each `references` element individually so a single reference can
     # later be disclosed without revealing its siblings. Only when present as a
-    # list (an absent field is a garbage sentinel with no elements). Mirrors the
-    # C++ token core (statement.cpp).
+    # list (an absent field is a garbage sentinel with no elements).
     redact_paths: list[tuple] = [(k,) for k in CONTENT_FIELDS]
     if references is not None:
         redact_paths += [(REFERENCES, i) for i in range(len(references))]

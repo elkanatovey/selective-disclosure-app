@@ -5,8 +5,8 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 PYTHON=${PYTHON:-python3}
-PYTHON_SOURCES=(webapp tests scripts/scitt_flow.py)
-JAVASCRIPT_SOURCES=(webapp/static/*.js scripts/scitt_flow.mjs)
+PYTHON_SOURCES=(sd_cwt webapp tests scripts/scitt_flow.py)
+JAVASCRIPT_SOURCES=(webapp/static/*.js scripts/scitt_flow.mjs tests/js/*.mjs)
 SHELL_SOURCES=(scripts/*.sh)
 [[ ! -d .devcontainer ]] || SHELL_SOURCES+=(.devcontainer/*.sh)
 [[ ! -d docker ]] || SHELL_SOURCES+=(docker/*.sh)
@@ -39,7 +39,9 @@ fi
 "${RUFF[@]}" check "${PYTHON_SOURCES[@]}"
 "${RUFF[@]}" format --check "${PYTHON_SOURCES[@]}"
 "${BIOME[@]}" lint "${JAVASCRIPT_SOURCES[@]}"
+"${BIOME[@]}" format "${JAVASCRIPT_SOURCES[@]}" webapp/static/*.css
 "$PYTHON" -m pytest -q
+node --test tests/js/*.mjs
 
 for source in "${JAVASCRIPT_SOURCES[@]}"; do
   node --check "$source"

@@ -5,18 +5,16 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from cryptography import x509
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .crypto import (
-    ReceiptTrust,
-    public_key_from_jwk,
     verify_standalone_receipt,
     verify_transparent_statement,
     with_uhdr,
 )
+from .http import CoseBody, RequestBody, msrc_public, receipt_trust
 
 ROOT = Path(__file__).parent
 MSRC_URL = os.getenv("MSRC_URL", "http://127.0.0.1:8091")
@@ -38,31 +36,6 @@ def scitt_verify() -> Path | bool:
     return Path(SCITT_CA) if SCITT_CA else True
 
 
-def receipt_trust() -> ReceiptTrust:
-    if SCITT_CA:
-        ca = x509.load_pem_x509_certificate(Path(SCITT_CA).read_bytes())
-        return ReceiptTrust(real_ca=ca)
-    response = requests.get(f"{SCITT_URL}/api/trust", timeout=5)
-    response.raise_for_status()
-    return ReceiptTrust(mock_key=public_key_from_jwk(response.json()["publicJwk"]))
-
-
-def msrc_public() -> dict[str, Any]:
-    response = requests.get(f"{MSRC_URL}/api/public", timeout=5)
-    response.raise_for_status()
-    return response.json()
-
-
-async def cose_body(request: Request) -> bytes:
-    content_type = request.headers.get("content-type", "").partition(";")[0]
-    if content_type.lower() != "application/cose":
-        raise HTTPException(415, "SCITT entries require application/cose")
-    value = await request.body()
-    if not value:
-        raise HTTPException(400, "SCITT entry is empty")
-    return value
-
-
 @app.get("/")
 def home() -> FileResponse:
     return FileResponse(ROOT / "static" / "index.html")
@@ -76,7 +49,7 @@ def health() -> dict[str, str]:
 @app.get("/api/state")
 def public_state() -> dict[str, Any]:
     try:
-        public = msrc_public()
+        public = msrc_public(MSRC_URL)
         mst = bool(SCITT_CA)
         return {
             "parties": [
@@ -112,11 +85,11 @@ def proxy_response(upstream: requests.Response) -> Response:
 
 
 @app.post("/msrc/issuer/endorse")
-async def endorse(request: Request) -> Response:
+def endorse(body: RequestBody) -> Response:
     try:
         upstream = requests.post(
             f"{MSRC_URL}/issuer/endorse",
-            data=await request.body(),
+            data=body,
             headers={"content-type": "application/json"},
             timeout=5,
         )
@@ -126,11 +99,11 @@ async def endorse(request: Request) -> Response:
 
 
 @app.post("/msrc/deliveries")
-async def deliver(request: Request) -> Response:
+def deliver(body: RequestBody) -> Response:
     try:
         upstream = requests.post(
             f"{MSRC_URL}/deliveries",
-            data=await request.body(),
+            data=body,
             headers={"content-type": "application/cose"},
             timeout=30,
         )
@@ -140,12 +113,11 @@ async def deliver(request: Request) -> Response:
 
 
 @app.post("/entries")
-async def register(
-    request: Request,
+def register(
+    token: CoseBody,
     wait_for_commit: bool = Query(True, alias="waitForCommit"),
 ) -> Response:
     try:
-        token = await cose_body(request)
         upstream = requests.post(
             f"{SCITT_URL}/entries",
             params={"waitForCommit": str(wait_for_commit).lower()},
@@ -159,7 +131,9 @@ async def register(
         txid = upstream.headers.get("x-ms-ccf-transaction-id")
         if not txid:
             raise ValueError("SCITT response has no transaction ID")
-        receipt_txid = verify_standalone_receipt(upstream.content, token, receipt_trust())
+        receipt_txid = verify_standalone_receipt(
+            upstream.content, token, receipt_trust(SCITT_URL, SCITT_CA)
+        )
         if receipt_txid != txid:
             raise ValueError("SCITT receipt transaction ID does not match")
         state.entries[txid] = token
@@ -195,7 +169,7 @@ def statement(txid: str) -> Response:
             raise ValueError("researcher has no matching submitted statement")
         if with_uhdr(upstream.content, {}) != original:
             raise ValueError("SCITT returned different signed bytes")
-        receipt = verify_transparent_statement(upstream.content, receipt_trust())
+        receipt = verify_transparent_statement(upstream.content, receipt_trust(SCITT_URL, SCITT_CA))
         if receipt["txid"] != txid:
             raise ValueError("SCITT receipt transaction ID does not match")
         return Response(

@@ -3,6 +3,7 @@ import secrets
 import time
 import unicodedata
 from dataclasses import dataclass
+from threading import get_ident
 
 import cbor2
 import pytest
@@ -10,12 +11,14 @@ from cbor2 import CBORTag
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from fastapi import Request
 from fastapi.testclient import TestClient
 from pycose.algorithms import Es256
 from pycose.headers import Algorithm
 from pycose.messages import Sign1Message
 
 import sd_cwt
+import webapp.crypto as crypto_service
 import webapp.mock_scitt as mock_scitt_service
 import webapp.msrc as msrc_service
 import webapp.researcher as researcher_service
@@ -25,6 +28,7 @@ from webapp.crypto import (
     SCITT_RECEIPTS,
     SD_CLAIMS,
     ReceiptTrust,
+    b64,
     cbor,
     cert,
     create_mock_receipt,
@@ -41,6 +45,7 @@ from webapp.crypto import (
     verify_transparent_statement,
     with_uhdr,
 )
+from webapp.http import request_body
 
 
 @dataclass
@@ -158,6 +163,30 @@ def test_report_and_receipts_round_trip_without_shared_state():
         verify_issuer(redacted, foreign.ca_cert, foreign.issuer)
 
 
+@pytest.mark.parametrize("missing", ["last_body_chunk", "body", "references", "nested"])
+def test_full_report_requires_all_nested_disclosures(missing):
+    owner = authority()
+    redacted, disclosures, _, _ = browser_style_report(owner)
+    payload = verify_issuer(redacted, owner.ca_cert, owner.issuer)
+    decoded = [cbor2.loads(encoded) for encoded in disclosures]
+    chunk_keys = {item[2] for item in decoded if len(item) == 3 and item[2] < 1000}
+    missing_keys = {
+        "last_body_chunk": {max(chunk_keys)},
+        "body": chunk_keys,
+        "references": {None},
+        "nested": chunk_keys | {None},
+    }[missing]
+    presented = [
+        encoded
+        for encoded, item in zip(disclosures, decoded)
+        if (item[2] if len(item) == 3 else None) not in missing_keys
+    ]
+
+    assert set(sd_cwt.match_disclosures(payload, presented).disclosed) == set(range(1000, 1009))
+    with pytest.raises(ValueError, match="missing disclosure"):
+        resolve_all(payload, presented)
+
+
 def test_verifier_uses_cnf_and_rejects_wrong_audience_or_key():
     owner = authority()
     redacted, disclosures, _, _, _, transparent, trust, txid = transparent_statement(owner)
@@ -207,6 +236,70 @@ def test_verifier_uses_cnf_and_rejects_wrong_audience_or_key():
     )
 
 
+@pytest.mark.parametrize("label,offset", [(6, -3601), (6, 61), (5, 1), (4, 0)])
+def test_verifier_does_not_render_kbt_outside_time_window(monkeypatch, label, offset):
+    owner = authority()
+    _, disclosures, _, _, _, transparent, trust, _ = transparent_statement(owner)
+    audience = "https://verifier.example"
+    token = sign_kbt(transparent, disclosures, owner.holder_key, audience)
+    value = parts(token)
+    claims = cbor2.loads(value[2])
+    now = int(time.time())
+    claims[label] = now + offset
+    message = Sign1Message(phdr_encoded=value[0], uhdr={}, payload=cbor(claims))
+    message.key = private_cose(owner.holder_key)
+    monkeypatch.setattr(crypto_service.time, "time", lambda: now)
+
+    result = verify_bundle(message.encode(tag=True), audience, owner.ca_cert, owner.issuer, trust)
+    assert not result["valid"]
+    assert result["report"] is None
+    statuses = {check["name"]: check["status"] for check in result["checks"]}
+    assert statuses["KBT proof and audience"] == "fail"
+    assert statuses["Disclosure consistency"] == "fail"
+
+
+def test_failed_real_receipt_is_not_reported_as_mock(monkeypatch):
+    owner = authority()
+    _, disclosures, _, _, _, transparent, _, _ = transparent_statement(owner)
+    audience = "https://verifier.example"
+    token = sign_kbt(transparent, disclosures, owner.holder_key, audience)
+
+    def invalid_receipt(*args):
+        raise ValueError("invalid CCF receipt")
+
+    monkeypatch.setattr(crypto_service, "verify_transparent_statement", invalid_receipt)
+    result = verify_bundle(
+        token, audience, owner.ca_cert, owner.issuer, ReceiptTrust(real_ca=owner.ca_cert)
+    )
+    assert not result["valid"]
+    merkle = next(check for check in result["checks"] if check["name"] == "SCITT Merkle inclusion")
+    assert merkle["status"] == "skipped"
+    assert merkle["detail"] == "Blocked by invalid SCITT receipt"
+
+
+def test_authority_disclosure_route_checks_selected_openings(monkeypatch):
+    owner = authority()
+    _, disclosures, _, _, _, transparent, trust, _ = transparent_statement(owner)
+    statement = with_uhdr(transparent, {**parts(transparent)[1], SD_CLAIMS: disclosures})
+    audience = "https://verifier.example"
+    monkeypatch.setattr(msrc_service, "state", owner)
+    monkeypatch.setattr(msrc_service, "receipt_trust", lambda *args: trust)
+    client = TestClient(msrc_service.app)
+    body = {
+        "statement": b64(statement),
+        "selected": [b64(encoded) for encoded in disclosures],
+        "audience": audience,
+    }
+    response = client.post("/api/disclosures", json=body)
+    assert response.status_code == 200
+    assert verify_bundle(response.content, audience, owner.ca_cert, owner.issuer, trust)["valid"]
+
+    body["selected"] = [b64(opening("not committed", 1001)[0])]
+    response = client.post("/api/disclosures", json=body)
+    assert response.status_code == 400
+    assert "does not match any redacted hash" in response.json()["detail"]
+
+
 def test_researcher_completion_requires_verified_receipts(monkeypatch):
     owner = authority()
     redacted, _, _, _, receipt, transparent, trust, txid = transparent_statement(owner)
@@ -219,7 +312,7 @@ def test_researcher_completion_requires_verified_receipts(monkeypatch):
             self.text = ""
             self.reason = ""
 
-    monkeypatch.setattr(researcher_service, "receipt_trust", lambda: trust)
+    monkeypatch.setattr(researcher_service, "receipt_trust", lambda *args: trust)
     monkeypatch.setattr(
         researcher_service.requests,
         "post",
@@ -298,7 +391,7 @@ def test_researcher_proxies_browser_requests_to_msrc(monkeypatch):
     monkeypatch.setattr(
         researcher_service,
         "msrc_public",
-        lambda: {"issuer": "issuer", "msrcJwk": {}},
+        lambda *args: {"issuer": "issuer", "msrcJwk": {}},
     )
     calls = []
 
@@ -333,6 +426,47 @@ def test_researcher_proxies_browser_requests_to_msrc(monkeypatch):
     assert calls[1][0].endswith("/deliveries")
     assert calls[1][1]["data"] == b"statement"
     assert calls[1][1]["headers"] == {"content-type": "application/cose"}
+
+
+def test_researcher_proxy_runs_off_event_loop(monkeypatch):
+    threads = {}
+
+    async def read_body(request: Request):
+        threads["event_loop"] = get_ident()
+        return await request_body(request)
+
+    class Upstream:
+        status_code = 200
+        content = b'{"ok":true}'
+        headers = {"content-type": "application/json"}
+
+    def post(*args, **kwargs):
+        threads["upstream"] = get_ident()
+        return Upstream()
+
+    monkeypatch.setitem(researcher_service.app.dependency_overrides, request_body, read_body)
+    monkeypatch.setattr(researcher_service.requests, "post", post)
+    response = TestClient(researcher_service.app).post(
+        "/msrc/issuer/endorse", json={"public_jwk": {}}
+    )
+    assert response.status_code == 200
+    assert threads["upstream"] != threads["event_loop"]
+
+
+@pytest.mark.parametrize(
+    "service,path",
+    [
+        (researcher_service, "/entries"),
+        (msrc_service, "/deliveries"),
+        (msrc_service, "/api/inspect"),
+        (verifier_service, "/api/verify?audience=test"),
+        (mock_scitt_service, "/entries"),
+    ],
+)
+def test_cose_routes_reject_invalid_request_bodies(service, path):
+    client = TestClient(service.app)
+    assert client.post(path, content=b"not cose").status_code == 415
+    assert client.post(path, headers={"content-type": "application/cose"}).status_code == 400
 
 
 def test_endorsed_chain_has_scitt_didx509_extensions():

@@ -112,10 +112,7 @@ def _cde(obj: Any) -> Any:
     the ordering is done explicitly here.
     """
     if isinstance(obj, dict):
-        return {
-            k: _cde(v)
-            for k, v in sorted(obj.items(), key=lambda kv: cbor2.dumps(kv[0]))
-        }
+        return {k: _cde(v) for k, v in sorted(obj.items(), key=lambda kv: cbor2.dumps(kv[0]))}
     if isinstance(obj, list):
         return [_cde(v) for v in obj]
     return obj
@@ -142,9 +139,7 @@ class Disclosure:
     salt: bytes
     value: Any
     key: Optional[ClaimKey] = None
-    encoded: bytes = (
-        b""  # cbor([salt, value, key]) / cbor([salt, value]) / cbor([salt])
-    )
+    encoded: bytes = b""  # cbor([salt, value, key]) / cbor([salt, value]) / cbor([salt])
     digest: bytes = b""  # sd_alg(bstr .cbor encoded) -- hash of the wrapped disclosure
 
 
@@ -318,14 +313,14 @@ def _scan_cbor(data: bytes, off: int, depth: int, is_key: bool = False) -> int:
             off = _scan_cbor(data, off, depth + 1)
         return off
     if mt == 5:  # map
-        seen: set[bytes] = set()
+        seen: set[Any] = set()
         for _ in range(arg):
             key_start = off
             off = _scan_cbor(data, off, depth + 1, is_key=True)
-            key_bytes = data[key_start:off]
-            if key_bytes in seen:
+            key = cbor2.loads(data[key_start:off])
+            if key in seen:
                 raise ValueError("duplicate map key (draft-08 s5.4)")
-            seen.add(key_bytes)
+            seen.add(key)
             off = _scan_cbor(data, off, depth + 1)
         return off
     # mt == 6: tag — scan the single tagged item (tag itself is not a claims level)
@@ -370,25 +365,12 @@ def _validate_redaction_path(root: Any, path: tuple) -> None:
     node = root
     for elem in path:
         if isinstance(node, dict):
-            if (
-                isinstance(elem, bool)
-                or not isinstance(elem, (int, str))
-                or elem not in node
-            ):
-                raise ValueError(
-                    "redact_path does not resolve to an existing claim/element"
-                )
+            if isinstance(elem, bool) or not isinstance(elem, (int, str)) or elem not in node:
+                raise ValueError("redact_path does not resolve to an existing claim/element")
             node = node[elem]
         elif isinstance(node, list):
-            if (
-                isinstance(elem, bool)
-                or not isinstance(elem, int)
-                or elem < 0
-                or elem >= len(node)
-            ):
-                raise ValueError(
-                    "redact_path does not resolve to an existing claim/element"
-                )
+            if isinstance(elem, bool) or not isinstance(elem, int) or elem < 0 or elem >= len(node):
+                raise ValueError("redact_path does not resolve to an existing claim/element")
             node = node[elem]
         else:
             raise ValueError("redaction path descends into a non-container value")
@@ -415,18 +397,14 @@ def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> 
         digests: list[bytes] = []
         for key, value in node.items():
             child = (
-                _redact_node(value, deeper[key], sd_alg, disclosures)
-                if key in deeper
-                else value
+                _redact_node(value, deeper[key], sd_alg, disclosures) if key in deeper else value
             )
             if key in direct:
                 salt = csprng(SALT_LEN)
                 encoded = cbor2.dumps(_cde([salt, child, key]))
                 dig = _disclosure_digest(sd_alg, encoded)
                 disclosures.append(
-                    Disclosure(
-                        salt=salt, value=child, key=key, encoded=encoded, digest=dig
-                    )
+                    Disclosure(salt=salt, value=child, key=key, encoded=encoded, digest=dig)
                 )
                 digests.append(dig)
             else:
@@ -439,19 +417,13 @@ def _redact_node(node: Any, paths: list, sd_alg: HashAlg, disclosures: list) -> 
     if isinstance(node, list):
         out_list: list[Any] = []
         for i, elem in enumerate(node):
-            child = (
-                _redact_node(elem, deeper[i], sd_alg, disclosures)
-                if i in deeper
-                else elem
-            )
+            child = _redact_node(elem, deeper[i], sd_alg, disclosures) if i in deeper else elem
             if i in direct:
                 salt = csprng(SALT_LEN)
                 encoded = cbor2.dumps(_cde([salt, child]))
                 dig = _disclosure_digest(sd_alg, encoded)
                 disclosures.append(
-                    Disclosure(
-                        salt=salt, value=child, key=None, encoded=encoded, digest=dig
-                    )
+                    Disclosure(salt=salt, value=child, key=None, encoded=encoded, digest=dig)
                 )
                 out_list.append(CBORTag(REDACTED_ELEMENT_TAG, dig))
             else:
@@ -526,9 +498,7 @@ def issue(
     if protected_extra:
         phdr.update(protected_extra)
 
-    msg = Sign1Message(
-        phdr=_cde_header(phdr), uhdr={}, payload=cbor2.dumps(_cde(payload))
-    )
+    msg = Sign1Message(phdr=_cde_header(phdr), uhdr={}, payload=cbor2.dumps(_cde(payload)))
     msg.key = signer
     return msg.encode(), disclosures
 
@@ -584,6 +554,7 @@ def match_disclosures(
     presented: list,
     *,
     sd_alg: HashAlg = HashAlg.SHA_256,
+    require_all: bool = False,
 ) -> ValidatedClaims:
     """Hash-match presented disclosures against an already-trusted claims payload.
 
@@ -603,6 +574,9 @@ def match_disclosures(
     disclosures populate `disclosed`; everything else (clear claims, arrays,
     nested maps) resolves under `clear`. Raw Redacted Claim Hashes (the
     `simple(59)` array and `tag(60)` wrappers) are never surfaced.
+
+    With `require_all=True`, every reachable Redacted Claim Hash must have an
+    opening, including decoys. The default allows partial disclosure.
     """
     redacted_key = CBORSimpleValue(REDACTED_CLAIM_KEYS)
 
@@ -641,7 +615,8 @@ def match_disclosures(
                     out[key] = resolve(value)
                 elif dig in by_decoy:
                     consumed.add(dig)
-                # undisclosed redacted map key (or undisclosed decoy) -> omitted
+                elif require_all:
+                    raise ValueError("missing disclosure for a redacted map claim")
             for key, value in node.items():
                 if key == redacted_key:
                     continue
@@ -661,7 +636,8 @@ def match_disclosures(
                         out_list.append(resolve(by_elem[elem.value]))
                     elif elem.value in by_decoy:
                         consumed.add(elem.value)
-                    # undisclosed redacted element (or decoy) -> omitted
+                    elif require_all:
+                        raise ValueError("missing disclosure for a redacted array element")
                 else:
                     out_list.append(resolve(elem))
             return out_list
@@ -767,9 +743,7 @@ def kbt_sign(
         if value is not None:
             payload[label] = value
 
-    msg = Sign1Message(
-        phdr=_cde_header(phdr), uhdr={}, payload=cbor2.dumps(_cde(payload))
-    )
+    msg = Sign1Message(phdr=_cde_header(phdr), uhdr={}, payload=cbor2.dumps(_cde(payload)))
     msg.key = holder
     return msg.encode()
 
@@ -790,10 +764,10 @@ def kbt_verify(
     optional `cnonce`; finally hash-match the presented disclosures into the
     validated claim set.
     """
+    _check_cbor(kbt)
     outer = cbor2.loads(kbt)
     if not isinstance(outer, CBORTag) or not isinstance(outer.value, list):
         raise ValueError("KBT is not a tagged COSE_Sign1")
-    _check_cbor(kbt)
     kbt_arr = outer.value
     if kbt_arr[0]:
         _check_cbor(kbt_arr[0])  # KBT protected header (embeds the SD-CWT)
@@ -840,7 +814,11 @@ def kbt_verify(
     if expected_cnonce is not None and cnonce != expected_cnonce:
         raise ValueError("KBT cnonce does not match the expected nonce")
 
-    claims = validate(sd_cwt_bytes, issuer_pub)
+    claims = match_disclosures(
+        verified.payload,
+        _presented_from_arr(sd_cwt_tag.value),
+        sd_alg=verified.sd_alg,
+    )
     return KBTResult(
         claims=claims,
         aud=kbt_payload.get(AUD),

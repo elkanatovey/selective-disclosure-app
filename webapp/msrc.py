@@ -6,11 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import cbor2
-import requests
-from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +16,6 @@ from pydantic import BaseModel
 
 from .crypto import (
     SD_CLAIMS,
-    ReceiptTrust,
     b64,
     cert,
     issuer_for_ca,
@@ -33,6 +30,7 @@ from .crypto import (
     verify_issuer,
     verify_transparent_statement,
 )
+from .http import CoseBody, receipt_trust
 
 ROOT = Path(__file__).parent
 SCITT_URL = os.getenv("SCITT_URL", "http://127.0.0.1:8000")
@@ -82,15 +80,6 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 
-def receipt_trust() -> ReceiptTrust:
-    if SCITT_CA:
-        ca = x509.load_pem_x509_certificate(Path(SCITT_CA).read_bytes())
-        return ReceiptTrust(real_ca=ca)
-    response = requests.get(f"{SCITT_URL}/api/trust", timeout=5)
-    response.raise_for_status()
-    return ReceiptTrust(mock_key=public_key_from_jwk(response.json()["publicJwk"]))
-
-
 def inspect_statement(statement: bytes, require_all: bool) -> dict[str, Any]:
     payload = verify_issuer(
         statement,
@@ -98,7 +87,7 @@ def inspect_statement(statement: bytes, require_all: bool) -> dict[str, Any]:
         state.issuer,
         state.holder_key.public_key(),
     )
-    receipt = verify_transparent_statement(statement, receipt_trust())
+    receipt = verify_transparent_statement(statement, receipt_trust(SCITT_URL, SCITT_CA))
     presented = parts(statement)[1].get(SD_CLAIMS, [])
     fields = (
         resolve_all(payload, presented) if require_all else resolve_selected(payload, presented)
@@ -110,16 +99,6 @@ def inspect_statement(statement: bytes, require_all: bool) -> dict[str, Any]:
         "fields": fields,
         "merkle": receipt["merkle"],
     }
-
-
-async def cose_body(request: Request) -> bytes:
-    content_type = request.headers.get("content-type", "").partition(";")[0]
-    if content_type.lower() != "application/cose":
-        raise HTTPException(415, "request body must be application/cose")
-    value = await request.body()
-    if not value:
-        raise HTTPException(400, "COSE body is empty")
-    return value
 
 
 @app.get("/")
@@ -160,9 +139,8 @@ def endorse(body: EndorseBody) -> dict[str, str]:
 
 
 @app.post("/deliveries")
-async def deliver(request: Request) -> dict[str, Any]:
+def deliver(statement: CoseBody) -> dict[str, Any]:
     try:
-        statement = await cose_body(request)
         inspected = inspect_statement(statement, require_all=True)
         item = {
             "txid": inspected["txid"],
@@ -179,9 +157,9 @@ async def deliver(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/inspect")
-async def inspect(request: Request) -> dict[str, Any]:
+def inspect(statement: CoseBody) -> dict[str, Any]:
     try:
-        inspected = inspect_statement(await cose_body(request), require_all=True)
+        inspected = inspect_statement(statement, require_all=True)
         return {
             "txid": inspected["txid"],
             "subject": inspected["subject"],
@@ -199,13 +177,6 @@ def disclose(body: DisclosureBody) -> Response:
         statement = unb64(body.statement)
         inspect_statement(statement, require_all=True)
         selected = [unb64(item) for item in body.selected]
-        payload = verify_issuer(
-            statement,
-            state.ca_cert,
-            state.issuer,
-            state.holder_key.public_key(),
-        )
-        resolve_selected(payload, selected)
         token = sign_kbt(statement, selected, state.holder_key, body.audience)
         return Response(token, media_type="application/cose")
     except Exception as exc:
