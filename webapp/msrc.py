@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import cbor2
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import FastAPI, HTTPException
@@ -15,22 +14,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .crypto import (
-    SD_CLAIMS,
     b64,
     cert,
     issuer_for_ca,
-    parts,
-    public_cose_map,
     public_jwk,
     public_key_from_jwk,
-    resolve_all,
-    resolve_selected,
     sign_kbt,
     unb64,
-    verify_issuer,
+    verify_statement,
     verify_transparent_statement,
 )
 from .http import CoseBody, receipt_trust
+from .report import resolve_all
 
 ROOT = Path(__file__).parent
 SCITT_URL = os.getenv("SCITT_URL", "http://127.0.0.1:8000")
@@ -45,10 +40,6 @@ class State:
         self.issuer = issuer_for_ca(self.ca_cert)
         self.holder_key = ec.generate_private_key(ec.SECP256R1())
         self.inbox: list[dict[str, Any]] = []
-
-    @property
-    def holder_cnf(self) -> dict[int, Any]:
-        return {1: public_cose_map(self.holder_key.public_key())}
 
     @property
     def holder_kid(self) -> str:
@@ -80,24 +71,19 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 
-def inspect_statement(statement: bytes, require_all: bool) -> dict[str, Any]:
-    payload = verify_issuer(
+def inspect_statement(statement: bytes) -> dict[str, Any]:
+    verified = verify_statement(
         statement,
         state.ca_cert,
         state.issuer,
         state.holder_key.public_key(),
     )
-    receipt = verify_transparent_statement(statement, receipt_trust(SCITT_URL, SCITT_CA))
-    presented = parts(statement)[1].get(SD_CLAIMS, [])
-    fields = (
-        resolve_all(payload, presented) if require_all else resolve_selected(payload, presented)
-    )
-    protected = cbor2.loads(parts(statement)[0])
+    receipt = verify_transparent_statement(verified.token, receipt_trust(SCITT_URL, SCITT_CA))
+    fields = resolve_all(verified.payload, verified.token.disclosures)
     return {
         "txid": receipt["txid"],
-        "subject": protected.get(15, {}).get(2, ""),
+        "subject": verified.protected.get(15, {}).get(2, ""),
         "fields": fields,
-        "merkle": receipt["merkle"],
     }
 
 
@@ -141,7 +127,7 @@ def endorse(body: EndorseBody) -> dict[str, str]:
 @app.post("/deliveries")
 def deliver(statement: CoseBody) -> dict[str, Any]:
     try:
-        inspected = inspect_statement(statement, require_all=True)
+        inspected = inspect_statement(statement)
         item = {
             "txid": inspected["txid"],
             "subject": inspected["subject"],
@@ -159,7 +145,7 @@ def deliver(statement: CoseBody) -> dict[str, Any]:
 @app.post("/api/inspect")
 def inspect(statement: CoseBody) -> dict[str, Any]:
     try:
-        inspected = inspect_statement(statement, require_all=True)
+        inspected = inspect_statement(statement)
         return {
             "txid": inspected["txid"],
             "subject": inspected["subject"],
@@ -175,7 +161,7 @@ def inspect(statement: CoseBody) -> dict[str, Any]:
 def disclose(body: DisclosureBody) -> Response:
     try:
         statement = unb64(body.statement)
-        inspect_statement(statement, require_all=True)
+        inspect_statement(statement)
         selected = [unb64(item) for item in body.selected]
         token = sign_kbt(statement, selected, state.holder_key, body.audience)
         return Response(token, media_type="application/cose")

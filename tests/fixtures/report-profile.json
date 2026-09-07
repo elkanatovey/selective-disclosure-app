@@ -1,0 +1,66 @@
+[
+  {
+    "name": "unicode-and-references",
+    "report": {
+      "title": "Profile contract",
+      "body": "Cafe\u0301\r\nA\ud83d\ude00B\rC",
+      "fingerprint": "00ff",
+      "references": ["CVE-2026-1042", "https://example.test/advisory"],
+      "patch_date": 1788739200
+    },
+    "bodyChunks": ["Caf\u00e9\nA", "\ud83d\ude00B\nC"],
+    "disclosures": [
+      "g1ACAgICAgICAgICAgICAgICUAEBAQEBAQEBAQEBAQEBAQEZA-g",
+      "g1ADAwMDAwMDAwMDAwMDAwMDcFByb2ZpbGUgY29udHJhY3QZA-k",
+      "g1AEBAQEBAQEBAQEBAQEBAQEZ0NhZsOpCkEA",
+      "g1AFBQUFBQUFBQUFBQUFBQUFZ_CfmIBCCkMB",
+      "g1AGBgYGBgYGBgYGBgYGBgYGofg7glggWPNsP7OLZL9wzVUrEd5Oym3_ySuB6wg2pnW8DjG1oitYIKsrLJnOuGeH-dc1snYjxQUpa3yUGofVRAhuuPIeZhsBGQPq",
+      "g1AICAgICAgICAgICAgICAgIUAcHBwcHBwcHBwcHBwcHBwcZA-s",
+      "g1AKCgoKCgoKCgoKCgoKCgoKUAkJCQkJCQkJCQkJCQkJCQkZA-w",
+      "g1ALCwsLCwsLCwsLCwsLCwsLQgD_GQPt",
+      "glAMDAwMDAwMDAwMDAwMDAwMbUNWRS0yMDI2LTEwNDI",
+      "glANDQ0NDQ0NDQ0NDQ0NDQ0NeB1odHRwczovL2V4YW1wbGUudGVzdC9hZHZpc29yeQ",
+      "g1AODg4ODg4ODg4ODg4ODg4Ogtg8WCDRCG42eGh6W7O7xrrWR3zOdwXeptqs-eJcBlsomFxgp9g8WCABHMexf8bJ-45LEBgboJ8ypOwikDGvIQ4bVZ8J0scXjBkD7g",
+      "g1AQEBAQEBAQEBAQEBAQEBAQUA8PDw8PDw8PDw8PDw8PDw8ZA-8",
+      "g1ARERERERERERERERERERERGmqd_oAZA_A"
+    ],
+    "digests": [
+      "E0lE1JHyYbKdbIc0nESJ5bz6hc-EgxAAawsBFjKOZqg",
+      "Fg6XNlQaESV006Ak8gps-b0Ooywd2HvFTArSFmPUdho",
+      "Nn04DAehjw73rTNnJzAeF7p0zcIOP-NneI7IQuQBP-M",
+      "N4kVDb8fQsd02tPTSWKGgQHPN0igbPW0TyxpoMis2mw",
+      "aFS1Zcv-PKWA7Viu2O0vyaXJ71dZtWY8el9ehXymWH8",
+      "bcOwtFV4DAEqV4A5IZzrqcCZSrw39Xgy52TdWcFzmt8",
+      "g982F0eCMX1yVV8iDsF07z-U9ARj0ui-W5U9r9LASkU",
+      "2yHCjUhah5DdjOjYC4W0WOsUSHsFSFIXwjqgRGOq52I",
+      "4x46fydDqtp3LgTyFaOQAyom2dMzc-Nu4fEM0oKSPtc"
+    ]
+  },
+  {
+    "name": "empty-containers",
+    "report": { "title": "", "body": "", "references": [] },
+    "bodyChunks": [],
+    "disclosures": [
+      "g1ACAgICAgICAgICAgICAgICUAEBAQEBAQEBAQEBAQEBAQEZA-g",
+      "g1ADAwMDAwMDAwMDAwMDAwMDYBkD6Q",
+      "g1AEBAQEBAQEBAQEBAQEBAQEofg7gBkD6g",
+      "g1AGBgYGBgYGBgYGBgYGBgYGUAUFBQUFBQUFBQUFBQUFBQUZA-s",
+      "g1AICAgICAgICAgICAgICAgIUAcHBwcHBwcHBwcHBwcHBwcZA-w",
+      "g1AKCgoKCgoKCgoKCgoKCgoKUAkJCQkJCQkJCQkJCQkJCQkZA-0",
+      "g1ALCwsLCwsLCwsLCwsLCwsLgBkD7g",
+      "g1ANDQ0NDQ0NDQ0NDQ0NDQ0NUAwMDAwMDAwMDAwMDAwMDAwZA-8",
+      "g1APDw8PDw8PDw8PDw8PDw8PUA4ODg4ODg4ODg4ODg4ODg4ZA_A"
+    ],
+    "digests": [
+      "CS1yaOlRjogk_f1Ra8p6XalNgTY6DmYKbbg9ZJeqmJo",
+      "LZ5is3GjgotZi9_c9t6mlcXoXv9tQZaSZGEKYPNltR8",
+      "UpEVEIzDXCKGsS_MZ9vbcSDHH8PMVDCJd-BKsJ5A7Rs",
+      "gQEzPtNZ3KW_MUmL0lxSNmXSTOolrpe2GbbEC2T_VDQ",
+      "g982F0eCMX1yVV8iDsF07z-U9ARj0ui-W5U9r9LASkU",
+      "qzzeQ-cx2i35j-3-A3YCmrww5txvBEB2iqvJ3-nAVyA",
+      "sRjPz1DFmZhmNe6JvaextuJogcWCEA9-t0x_rpgrx2o",
+      "yYLN5GyxPw7fx05vppAES3WFOFSmfa605bups3sFnzI",
+      "-iJUW6Ix2LTQ-s3KFCK9ZZOUMkytgAjub_lhPsLNRmU"
+    ]
+  }
+]

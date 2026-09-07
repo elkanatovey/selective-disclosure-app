@@ -1,0 +1,26 @@
+{
+  "algorithm": -7,
+  "statementType": 293,
+  "hashAlgorithm": -16,
+  "contentType": "application/sd-cwt",
+  "bodyChunkSize": 6,
+  "saltBytes": 16,
+  "paddingBytes": 16,
+  "fields": [
+    { "key": 1000, "name": "parent", "label": "Parent", "type": "padding", "kind": "hidden" },
+    { "key": 1001, "name": "title", "label": "Title", "type": "text", "kind": "field" },
+    { "key": 1002, "name": "body", "label": "Body", "type": "text", "kind": "body" },
+    { "key": 1003, "name": "component", "label": "Component", "type": "text", "kind": "field" },
+    { "key": 1004, "name": "severity", "label": "Severity", "type": "text", "kind": "field" },
+    { "key": 1005, "name": "fingerprint", "label": "Fingerprint", "type": "hex", "kind": "field" },
+    {
+      "key": 1006,
+      "name": "references",
+      "label": "References",
+      "type": "references",
+      "kind": "reference"
+    },
+    { "key": 1007, "name": "patch", "label": "Patch", "type": "text", "kind": "field" },
+    { "key": 1008, "name": "patch_date", "label": "Patch date", "type": "integer", "kind": "field" }
+  ]
+}

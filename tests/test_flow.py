@@ -24,7 +24,6 @@ import webapp.msrc as msrc_service
 import webapp.researcher as researcher_service
 import webapp.verifier as verifier_service
 from webapp.crypto import (
-    RCK,
     SCITT_RECEIPTS,
     SD_CLAIMS,
     ReceiptTrust,
@@ -37,15 +36,15 @@ from webapp.crypto import (
     private_cose,
     public_cose,
     public_cose_map,
-    resolve_all,
     sign_kbt,
-    verify_bundle,
-    verify_issuer,
     verify_standalone_receipt,
+    verify_statement,
     verify_transparent_statement,
     with_uhdr,
 )
 from webapp.http import request_body
+from webapp.report import RCK, resolve_all
+from webapp.verification import verify_bundle
 
 
 @dataclass
@@ -145,7 +144,9 @@ def transparent_statement(owner: Authority):
 def test_report_and_receipts_round_trip_without_shared_state():
     owner = authority()
     redacted, disclosures, body, _, receipt, transparent, trust, txid = transparent_statement(owner)
-    payload = verify_issuer(redacted, owner.ca_cert, owner.issuer, owner.holder_key.public_key())
+    payload = verify_statement(
+        redacted, owner.ca_cert, owner.issuer, owner.holder_key.public_key()
+    ).payload
     assert set(payload) == {1, 6, 8, RCK}
     assert len(payload[RCK]) == 9
     assert b"private title" not in redacted
@@ -160,14 +161,14 @@ def test_report_and_receipts_round_trip_without_shared_state():
 
     foreign = authority()
     with pytest.raises(ValueError, match="MSRC CA"):
-        verify_issuer(redacted, foreign.ca_cert, foreign.issuer)
+        verify_statement(redacted, foreign.ca_cert, foreign.issuer)
 
 
 @pytest.mark.parametrize("missing", ["last_body_chunk", "body", "references", "nested"])
 def test_full_report_requires_all_nested_disclosures(missing):
     owner = authority()
     redacted, disclosures, _, _ = browser_style_report(owner)
-    payload = verify_issuer(redacted, owner.ca_cert, owner.issuer)
+    payload = verify_statement(redacted, owner.ca_cert, owner.issuer).payload
     decoded = [cbor2.loads(encoded) for encoded in disclosures]
     chunk_keys = {item[2] for item in decoded if len(item) == 3 and item[2] < 1000}
     missing_keys = {
@@ -275,6 +276,25 @@ def test_failed_real_receipt_is_not_reported_as_mock(monkeypatch):
     merkle = next(check for check in result["checks"] if check["name"] == "SCITT Merkle inclusion")
     assert merkle["status"] == "skipped"
     assert merkle["detail"] == "Blocked by invalid SCITT receipt"
+
+
+def test_application_pipeline_verifies_issuer_once(monkeypatch):
+    owner = authority()
+    _, disclosures, _, _, _, transparent, trust, _ = transparent_statement(owner)
+    audience = "https://verifier.example"
+    token = sign_kbt(transparent, disclosures, owner.holder_key, audience)
+    original = sd_cwt.verify
+    calls = []
+
+    def verify(parsed, key):
+        calls.append(parsed)
+        return original(parsed, key)
+
+    monkeypatch.setattr(sd_cwt, "verify", verify)
+    result = verify_bundle(token, audience, owner.ca_cert, owner.issuer, trust)
+    assert result["valid"]
+    assert len(calls) == 1
+    assert isinstance(calls[0], sd_cwt.ParsedToken)
 
 
 def test_authority_disclosure_route_checks_selected_openings(monkeypatch):

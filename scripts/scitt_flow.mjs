@@ -1,13 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  b64,
-  decode,
-  encode,
-  inspectStatement,
-  issueReport,
-  present,
-} from "../webapp/static/sdcwt.js";
+import { b64, decode, encode } from "../webapp/static/cbor.js";
+import { inspectStatement } from "../webapp/static/report-profile.js";
+import { issueReport, present } from "../webapp/static/sdcwt.js";
 
 const [mode, output, appUrl = "http://127.0.0.1:8090", msrcUrl = "http://127.0.0.1:8091"] =
   process.argv.slice(2);

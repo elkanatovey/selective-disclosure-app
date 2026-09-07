@@ -1,12 +1,5 @@
-const $ = (id) => document.getElementById(id),
-  LABELS = {
-    title: "Title",
-    component: "Component",
-    severity: "Severity",
-    fingerprint: "Fingerprint",
-    patch: "Patch",
-    patch_date: "Patch date",
-  };
+import { BODY_CHUNK_SIZE, DISPLAY_FIELDS } from "./report-profile.js";
+const $ = (id) => document.getElementById(id);
 let token;
 async function verify(token, audience) {
   const response = await fetch(`/api/verify?audience=${encodeURIComponent(audience)}`, {
@@ -33,7 +26,7 @@ function renderReport(report) {
   $("report-subject").textContent = report?.subject || "Untrusted disclosure";
   $("report-txid").textContent = report?.txid || "Not verified";
   $("field-list").replaceChildren();
-  for (const [name, label] of Object.entries(LABELS))
+  for (const { name, label } of DISPLAY_FIELDS)
     $("field-list").append(field(label, report?.fields?.[name]));
   $("body-preview").replaceChildren();
   if (report?.body?.known)
@@ -41,7 +34,7 @@ function renderReport(report) {
       const span = document.createElement("span");
       if (chunk == null) {
         span.className = "redacted";
-        span.textContent = "██████";
+        span.textContent = "█".repeat(BODY_CHUNK_SIZE);
       } else span.textContent = chunk;
       $("body-preview").append(span);
     }

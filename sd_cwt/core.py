@@ -53,7 +53,7 @@ from __future__ import annotations
 import hashlib
 import math
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Optional, Union
 
@@ -105,8 +105,8 @@ def _cde(obj: Any) -> Any:
     Deterministic Encoding order (RFC 8949 s4.2.1): sorted by the bytewise
     order of their encoded key, recursing into nested maps and arrays.
 
-    Applied to everything the Issuer/Holder emits so this reference oracle
-    stays byte-identical to the deterministic C++ token core. Note: cbor2's
+    Applied to everything the Issuer/Holder emits so map ordering stays
+    consistent with the reference vectors. Note: cbor2's
     ``canonical=True`` uses length-first ordering (RFC 8949 s4.2.3), which
     differs from CDE for maps mixing multi-byte unsigned and negative keys, so
     the ordering is done explicitly here.
@@ -143,13 +143,86 @@ class Disclosure:
     digest: bytes = b""  # sd_alg(bstr .cbor encoded) -- hash of the wrapped disclosure
 
 
-@dataclass
+def _copy_cbor(value: Any) -> Any:
+    """Copy decoded CBOR containers without pickling native tags."""
+    if isinstance(value, CBORTag):
+        return CBORTag(value.tag, _copy_cbor(value.value))
+    if isinstance(value, dict):
+        return {key: _copy_cbor(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return type(value)(_copy_cbor(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class ParsedToken:
+    """Structurally checked COSE/CWT data, without any authenticity guarantee."""
+
+    encoded: bytes
+    _protected: dict = field(init=False, repr=False)
+    _unprotected: dict = field(init=False, repr=False)
+    _payload: Any = field(init=False, repr=False)
+
+    @classmethod
+    def decode(cls, encoded: bytes) -> ParsedToken:
+        return cls(encoded)
+
+    def __post_init__(self) -> None:
+        encoded = self.encoded
+        if not isinstance(encoded, bytes):
+            raise ValueError("COSE encoding must be immutable bytes")
+        _check_cbor(encoded)
+        tagged = cbor2.loads(encoded)
+        if not isinstance(tagged, CBORTag) or tagged.tag != 18:
+            raise ValueError("expected tagged COSE_Sign1")
+        value = tagged.value
+        if not isinstance(value, list) or len(value) != 4:
+            raise ValueError("invalid COSE_Sign1 envelope")
+        protected, unprotected, payload, signature = value
+        if not (
+            isinstance(protected, bytes)
+            and isinstance(unprotected, dict)
+            and isinstance(payload, bytes)
+            and isinstance(signature, bytes)
+        ):
+            raise ValueError("invalid COSE_Sign1 envelope types")
+        if protected:
+            _check_cbor(protected)
+        _check_cbor(payload)
+        headers = cbor2.loads(protected) if protected else {}
+        if not isinstance(headers, dict):
+            raise ValueError("COSE protected headers must be a map")
+        object.__setattr__(self, "_protected", headers)
+        object.__setattr__(self, "_unprotected", unprotected)
+        object.__setattr__(self, "_payload", cbor2.loads(payload))
+
+    @property
+    def protected(self) -> dict:
+        return _copy_cbor(self._protected)
+
+    @property
+    def unprotected(self) -> dict:
+        return _copy_cbor(self._unprotected)
+
+    @property
+    def payload(self) -> Any:
+        return _copy_cbor(self._payload)
+
+    @property
+    def disclosures(self) -> list:
+        if SD_CLAIMS_LABEL in self._unprotected and not self._unprotected[SD_CLAIMS_LABEL]:
+            raise ValueError("empty sd_claims header is invalid (draft-08 s9 step 2)")
+        return _copy_cbor(self._unprotected.get(SD_CLAIMS_LABEL, []))
+
+
+@dataclass(frozen=True)
 class VerifiedToken:
     """Result of signature verification: header + raw (still-redacted) payload."""
 
     protected: dict
     payload: Any
     sd_alg: HashAlg
+    token: Optional[ParsedToken] = None
 
 
 @dataclass
@@ -244,11 +317,6 @@ def _key_from_cnf(cnf: dict) -> EC2Key:
     if crv is None:
         raise ValueError("cnf confirmation key uses an unsupported curve")
     return EC2Key(crv=crv, x=cose_key[-2], y=cose_key[-3])
-
-
-def _cose_array(token: bytes) -> list:
-    """Decode a tagged COSE_Sign1 into its [protected, unprotected, payload, sig] list."""
-    return list(cbor2.loads(token).value)
 
 
 MAX_DEPTH = 16  # draft-08 s5.5: reject Claims Sets nested beyond 16 levels
@@ -520,33 +588,20 @@ def present(token: bytes, selected: list[Disclosure]) -> bytes:
     return cbor2.dumps(CBORTag(tag.tag, arr))
 
 
-def verify(token: bytes, pubkey: Any) -> VerifiedToken:
+def verify(token: bytes | ParsedToken, pubkey: Any) -> VerifiedToken:
     """Verify the COSE_Sign1 signature; return header + redacted payload."""
-    _check_cbor(token)
-    msg = CoseMessage.decode(token)
+    parsed = token if isinstance(token, ParsedToken) else ParsedToken.decode(token)
+    msg = CoseMessage.decode(parsed.encoded)
     if not isinstance(msg, Sign1Message):
         raise ValueError("not a COSE_Sign1 message")
     msg.key = pubkey
     if not msg.verify_signature():
         raise ValueError("COSE signature verification failed")
 
-    arr = _cose_array(token)
-    if arr[0]:
-        _check_cbor(arr[0])  # protected header bytes
-    _check_cbor(msg.payload)  # claims payload (indefinite/dup/depth MUSTs)
-    protected = cbor2.loads(arr[0]) if arr[0] else {}
+    protected, payload = parsed.protected, parsed.payload
     sd_alg = HashAlg(protected.get(SD_ALG_LABEL, int(HashAlg.SHA_256)))
-    payload = cbor2.loads(msg.payload)
     _check_date_claims(payload)
-    return VerifiedToken(protected=protected, payload=payload, sd_alg=sd_alg)
-
-
-def _presented_from_arr(arr: list) -> list:
-    """Extract the `sd_claims` disclosures from a COSE array (reject empty header)."""
-    uhdr = arr[1] if len(arr) > 1 and arr[1] else {}
-    if SD_CLAIMS_LABEL in uhdr and not uhdr[SD_CLAIMS_LABEL]:
-        raise ValueError("empty sd_claims header is invalid (draft-08 s9 step 2)")
-    return uhdr.get(SD_CLAIMS_LABEL, [])
+    return VerifiedToken(protected, payload, sd_alg, parsed)
 
 
 def match_disclosures(
@@ -670,8 +725,7 @@ def validate(token: bytes, pubkey: Any) -> ValidatedClaims:
     disclosure that matches no reachable Redacted Claim Hash.
     """
     verified = verify(token, pubkey)
-    presented = _presented_from_arr(_cose_array(token))
-    return match_disclosures(verified.payload, presented, sd_alg=verified.sd_alg)
+    return match_disclosures(verified.payload, verified.token.disclosures, sd_alg=verified.sd_alg)
 
 
 def validate_trusted(token: bytes) -> ValidatedClaims:
@@ -687,17 +741,10 @@ def validate_trusted(token: bytes) -> ValidatedClaims:
     `token` MUST be exactly the bytes that trust covers. Use `validate()` when
     the Issuer signature is itself the trust anchor.
     """
-    _check_cbor(token)
-    arr = _cose_array(token)
-    if arr[0]:
-        _check_cbor(arr[0])  # protected header bytes
-    _check_cbor(arr[2])  # claims payload (indefinite/dup/depth/key MUSTs)
-    protected = cbor2.loads(arr[0]) if arr[0] else {}
-    sd_alg = HashAlg(protected.get(SD_ALG_LABEL, int(HashAlg.SHA_256)))
-    payload = cbor2.loads(arr[2])
-    _check_date_claims(payload)
-    presented = _presented_from_arr(arr)
-    return match_disclosures(payload, presented, sd_alg=sd_alg)
+    parsed = ParsedToken.decode(token)
+    sd_alg = HashAlg(parsed.protected.get(SD_ALG_LABEL, int(HashAlg.SHA_256)))
+    _check_date_claims(parsed.payload)
+    return match_disclosures(parsed.payload, parsed.disclosures, sd_alg=sd_alg)
 
 
 def kbt_sign(
@@ -748,6 +795,59 @@ def kbt_sign(
     return msg.encode()
 
 
+@dataclass(frozen=True)
+class ParsedKBT:
+    """An untrusted presentation and the exact statement embedded in it."""
+
+    token: ParsedToken
+    statement: ParsedToken
+
+    @classmethod
+    def decode(cls, encoded: bytes) -> ParsedKBT:
+        token = ParsedToken.decode(encoded)
+        if token.protected.get(TYP_LABEL) != KB_CWT_TYP:
+            raise ValueError("KBT typ header is not application/kb+cwt (294)")
+        embedded = token.protected.get(KCWT_LABEL)
+        if not isinstance(embedded, CBORTag):
+            raise ValueError("KBT kcwt header does not contain an embedded SD-CWT")
+        return cls(token, ParsedToken.decode(cbor2.dumps(embedded)))
+
+    def verify(
+        self,
+        issuer: VerifiedToken,
+        *,
+        expected_aud: Any,
+        expected_cnonce: Optional[bytes] = None,
+    ) -> KBTResult:
+        """Verify holder proof and disclosures using this statement's issuer result."""
+        if issuer.token is None or issuer.token.encoded != self.statement.encoded:
+            raise ValueError("issuer verification belongs to a different statement")
+        cnf = issuer.payload.get(CNF)
+        if cnf is None:
+            raise ValueError("embedded SD-CWT has no cnf claim (draft-08 requires it)")
+        message = CoseMessage.decode(self.token.encoded)
+        message.key = _key_from_cnf(cnf)
+        if not message.verify_signature():
+            raise ValueError("KBT signature verification failed (cnf key mismatch)")
+
+        payload = self.token.payload
+        _check_date_claims(payload)
+        if ISS in payload or SUB in payload:
+            raise ValueError("KBT payload MUST NOT contain iss or sub (draft-08 s8.1)")
+        if IAT not in payload and CTI not in payload:
+            raise ValueError("KBT payload MUST contain iat or cti (draft-08 s8.1)")
+        if payload.get(AUD) != expected_aud:
+            raise ValueError("KBT audience does not match the intended verifier")
+        audience = issuer.payload.get(AUD)
+        if audience is not None and audience != expected_aud:
+            raise ValueError("SD-CWT audience does not match the intended verifier")
+        nonce = payload.get(CNONCE)
+        if expected_cnonce is not None and nonce != expected_cnonce:
+            raise ValueError("KBT cnonce does not match the expected nonce")
+        claims = match_disclosures(issuer.payload, self.statement.disclosures, sd_alg=issuer.sd_alg)
+        return KBTResult(claims, payload.get(AUD), nonce, payload)
+
+
 def kbt_verify(
     kbt: bytes,
     issuer_pub: Any,
@@ -755,73 +855,7 @@ def kbt_verify(
     expected_aud: Any,
     expected_cnonce: Optional[bytes] = None,
 ) -> KBTResult:
-    """Verify a Key Binding Token and its embedded SD-CWT (draft-08 s9).
-
-    Steps: parse the KBT; extract the embedded SD-CWT from the `kcwt` header and
-    verify the issuer signature over it; recover the `cnf` key from the SD-CWT
-    payload and verify the KBT signature against it (proof of possession); check
-    both the KBT and SD-CWT audiences (s9 step 9), time-claim presence, and
-    optional `cnonce`; finally hash-match the presented disclosures into the
-    validated claim set.
-    """
-    _check_cbor(kbt)
-    outer = cbor2.loads(kbt)
-    if not isinstance(outer, CBORTag) or not isinstance(outer.value, list):
-        raise ValueError("KBT is not a tagged COSE_Sign1")
-    kbt_arr = outer.value
-    if kbt_arr[0]:
-        _check_cbor(kbt_arr[0])  # KBT protected header (embeds the SD-CWT)
-    _check_cbor(kbt_arr[2])  # KBT payload
-    kbt_phdr = cbor2.loads(kbt_arr[0]) if kbt_arr[0] else {}
-    if kbt_phdr.get(TYP_LABEL) != KB_CWT_TYP:
-        raise ValueError("KBT typ header is not application/kb+cwt (294)")
-
-    sd_cwt_tag = kbt_phdr.get(KCWT_LABEL)
-    if not isinstance(sd_cwt_tag, CBORTag):
-        raise ValueError("KBT kcwt header does not contain an embedded SD-CWT")
-    sd_cwt_bytes = cbor2.dumps(sd_cwt_tag)
-
-    # Issuer signature + cnf recovery come from validating the embedded SD-CWT.
-    verified = verify(sd_cwt_bytes, issuer_pub)
-    cnf = verified.payload.get(CNF)
-    if cnf is None:
-        raise ValueError("embedded SD-CWT has no cnf claim (draft-08 requires it)")
-    holder_pub = _key_from_cnf(cnf)
-
-    # Proof of possession: the KBT signature MUST verify under the cnf key.
-    kbt_msg = CoseMessage.decode(kbt)
-    if not isinstance(kbt_msg, Sign1Message):
-        raise ValueError("KBT is not a COSE_Sign1 message")
-    kbt_msg.key = holder_pub
-    if not kbt_msg.verify_signature():
-        raise ValueError("KBT signature verification failed (cnf key mismatch)")
-
-    kbt_payload = cbor2.loads(kbt_arr[2]) if kbt_arr[2] else {}
-    _check_date_claims(kbt_payload)
-    if ISS in kbt_payload or SUB in kbt_payload:
-        raise ValueError("KBT payload MUST NOT contain iss or sub (draft-08 s8.1)")
-    if IAT not in kbt_payload and CTI not in kbt_payload:
-        raise ValueError("KBT payload MUST contain iat or cti (draft-08 s8.1)")
-    if kbt_payload.get(AUD) != expected_aud:
-        raise ValueError("KBT audience does not match the intended verifier")
-    # draft-08 s9 step 9: an SD-CWT audience, if the Issuer set one, MUST also
-    # correspond to the intended recipient (it need not equal the KBT audience).
-    sd_cwt_aud = verified.payload.get(AUD)
-    if sd_cwt_aud is not None and sd_cwt_aud != expected_aud:
-        raise ValueError("SD-CWT audience does not match the intended verifier")
-
-    cnonce = kbt_payload.get(CNONCE)
-    if expected_cnonce is not None and cnonce != expected_cnonce:
-        raise ValueError("KBT cnonce does not match the expected nonce")
-
-    claims = match_disclosures(
-        verified.payload,
-        _presented_from_arr(sd_cwt_tag.value),
-        sd_alg=verified.sd_alg,
-    )
-    return KBTResult(
-        claims=claims,
-        aud=kbt_payload.get(AUD),
-        cnonce=cnonce,
-        kbt_claims=kbt_payload,
-    )
+    """Verify the embedded issuer signature, holder proof, and disclosures."""
+    parsed = ParsedKBT.decode(kbt)
+    issuer = verify(parsed.statement, issuer_pub)
+    return parsed.verify(issuer, expected_aud=expected_aud, expected_cnonce=expected_cnonce)

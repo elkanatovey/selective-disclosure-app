@@ -55,6 +55,17 @@ may omit openings. The Independent Verifier derives the holder key from the
 signed statement's `cnf` claim. The MSRC private key is never returned by an HTTP
 endpoint.
 
+The [verification pipeline](webapp/verification.py) passes parsed and verified
+results between explicit stages; issuer verification is reused only for the
+exact embedded statement. The live report profile is owned by
+[webapp/report.py](webapp/report.py) and
+[report-profile.js](webapp/static/report-profile.js), using one
+[field definition](webapp/static/report-profile.json). The browser's
+[review model](webapp/static/review-model.js) owns selection and signing state
+without DOM references, and ignores responses for superseded requests.
+Shared [contract fixtures](tests/fixtures/report-profile.json) pin the browser's
+disclosure bytes and their Python reconstruction.
+
 Browser issuance remains in JavaScript so the Researcher private key can stay
 non-exportable in WebCrypto. CI verifies those browser-generated artifacts with
 the Python reference. MST receipt verification uses the official
@@ -64,7 +75,7 @@ environment.
 
 ## Development
 
-Local checks require Python 3.11 or newer, Node.js, and ShellCheck. Create the
+Local checks require Python 3.11 or newer, Node.js 22.12 or newer, and ShellCheck. Create the
 Python environment and run all checks with:
 
 ```bash
@@ -73,7 +84,7 @@ PYTHON=.venv/bin/python ./scripts/check.sh
 ```
 
 The check script runs Ruff linting and formatting checks (including `sd_cwt`),
-Biome JavaScript linting and JavaScript/CSS formatting checks, Python and Node.js
+Biome JavaScript linting and JavaScript/CSS/JSON formatting checks, Python and Node.js
 unit tests, JavaScript syntax checks, Bash syntax checks, and ShellCheck.
 
 For an Azure Linux 3 environment with the MST system dependencies, reopen the
@@ -101,7 +112,7 @@ MSRC or displaying **Submission complete**.
 
 ## Mock demo
 
-Requires Python 3.11 or newer and a browser with WebCrypto support.
+Requires Python 3.11 or newer and a current browser with WebCrypto and JSON-module support.
 
 ```bash
 ./scripts/setup-dev.sh

@@ -1,4 +1,5 @@
-import { b64, importSigner, issueReport, present } from "./sdcwt.js";
+import { b64 } from "./cbor.js";
+import { importSigner, issueReport, present } from "./sdcwt.js";
 import { register } from "./registration.js";
 const $ = (id) => document.getElementById(id);
 const defaults = {

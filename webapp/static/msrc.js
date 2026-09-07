@@ -1,17 +1,8 @@
-import { b64, inspectStatement } from "./sdcwt.js";
-const $ = (id) => document.getElementById(id),
-  NAMES = {
-    1001: "Title",
-    1003: "Component",
-    1004: "Severity",
-    1005: "Fingerprint",
-    1007: "Patch",
-    1008: "Patch date",
-  };
-let model,
-  kbt,
-  verified,
-  choices = [];
+import { b64 } from "./cbor.js";
+import { ReviewModel } from "./review-model.js";
+import { BODY_CHUNK_SIZE, inspectStatement } from "./report-profile.js";
+const $ = (id) => document.getElementById(id);
+const review = new ReviewModel();
 let bodyPaint;
 async function inspect(statement) {
   const response = await fetch("/api/inspect", {
@@ -38,8 +29,8 @@ async function sign(statement, selected, audience) {
 const hex = (bytes) => [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 function display(field) {
   if (field.value instanceof Uint8Array)
-    return field.key === 1005 ? hex(field.value) : "Not provided";
-  if (field.key === 1008 && Number.isInteger(field.value))
+    return field.type === "hex" ? hex(field.value) : "Not provided";
+  if (field.name === "patch_date" && Number.isInteger(field.value))
     return new Date(field.value * 1000).toISOString().slice(0, 10);
   return String(field.value);
 }
@@ -48,129 +39,120 @@ function status(state, title, detail) {
   $("sign-title").textContent = title;
   $("sign-detail").textContent = detail;
 }
-function invalidate() {
-  kbt = undefined;
-  $("export").disabled = true;
-  $("kbt-size").textContent = "Not signed";
-  status("idle", "Ready to sign", "KBT uses the key bound in cnf");
-  updateCount();
+function update() {
+  for (const input of document.querySelectorAll("[data-choice]")) {
+    input.checked = review.selected.has(input.dataset.choice);
+  }
+  $("body-all").checked = review.allSelected("body");
+  $("references-all").checked = review.allSelected("reference");
+  const count = review.selected.size;
+  $("selection-count").textContent = `${count} item${count === 1 ? "" : "s"} selected`;
+  $("sign").disabled = !review.canSign;
+  $("export").disabled = !review.canExport;
+  $("sign-error").textContent = review.error;
+  $("kbt-size").textContent = review.canExport
+    ? `${review.token.length.toLocaleString()} B`
+    : review.phase === "signing"
+      ? "Signing"
+      : "Not signed";
+  if (review.phase === "signing")
+    status("working", "Signing disclosure", "Creating Key Binding Token");
+  else if (review.canExport)
+    status("success", "Disclosure signed", `Verified against ${review.verified.txid}`);
+  else if (review.error) status("error", "Signing failed", "No token was created");
+  else status("idle", "Ready to sign", "KBT uses the key bound in cnf");
 }
-function checkbox(choice, label, value, absent = false) {
-  const row = document.createElement("div");
-  row.className = `field-row${absent ? " absent" : ""}`;
+
+function selectionInput(choice) {
   const input = document.createElement("input");
   input.type = "checkbox";
-  input.checked = !absent;
-  input.disabled = absent;
-  input.onchange = invalidate;
-  choice.input = input;
-  choices.push(choice);
+  input.dataset.choice = choice.id;
+  input.disabled = choice.disabled;
+  input.onchange = () => {
+    review.setSelected(choice.id, input.checked);
+    update();
+  };
+  return input;
+}
+
+function checkbox(choice) {
+  const row = document.createElement("div");
+  row.className = `field-row${choice.disabled ? " absent" : ""}`;
   const name = document.createElement("label");
-  name.textContent = label;
+  name.textContent = choice.label;
+  const value = display(choice);
   const content = document.createElement(value.length > 80 ? "span" : "code");
   content.textContent = value;
-  row.append(input, name, content);
+  row.append(selectionInput(choice), name, content);
   return row;
 }
-function paintBody(body, child, value) {
-  if (child.input.checked === value) return;
-  child.input.checked = value;
-  $("body-all").checked = body.children.every((item) => item.input.checked);
-  invalidate();
+function paintBody(id, value) {
+  review.setSelected(id, value);
+  update();
 }
 function render() {
-  choices = [];
   $("field-list").replaceChildren();
-  for (const key of [1001, 1003, 1004, 1005, 1007, 1008]) {
-    const field = model.fields.get(key),
-      absent = field.value instanceof Uint8Array && key !== 1005;
-    $("field-list").append(checkbox({ kind: "field", field }, NAMES[key], display(field), absent));
+  for (const choice of review.choices.filter((choice) => choice.kind === "field")) {
+    $("field-list").append(checkbox(choice));
   }
-  const body = model.fields.get(1002);
-  $("body-review").hidden = !body.children.length;
+  const body = review.choices.filter((choice) => choice.kind === "body");
+  $("body-review").hidden = !body.length;
   $("body-chunks").replaceChildren();
-  for (const child of body.children) {
+  for (const choice of body) {
     const label = document.createElement("label");
     label.className = "chunk";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = true;
-    input.onchange = () => {
-      $("body-all").checked = body.children.every((item) => item.input.checked);
-      invalidate();
-    };
+    const input = selectionInput(choice);
     input.onkeydown = (event) => {
       if (event.key === " ") {
         event.preventDefault();
-        paintBody(body, child, !input.checked);
+        paintBody(choice.id, !review.selected.has(choice.id));
       }
     };
     label.onclick = (event) => event.preventDefault();
     label.onpointerdown = (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
-      bodyPaint = !input.checked;
+      bodyPaint = !review.selected.has(choice.id);
       $("body-chunks").classList.add("dragging");
-      paintBody(body, child, bodyPaint);
+      paintBody(choice.id, bodyPaint);
     };
     label.onpointerenter = (event) => {
-      if (bodyPaint !== undefined && event.buttons & 1) paintBody(body, child, bodyPaint);
+      if (bodyPaint !== undefined && event.buttons & 1) paintBody(choice.id, bodyPaint);
     };
-    child.input = input;
-    choices.push({ kind: "body", field: body, child, input });
     const span = document.createElement("span");
-    span.textContent = child.value;
+    span.textContent = choice.value;
     label.append(input, span);
     $("body-chunks").append(label);
   }
-  $("body-count").textContent = `${body.children.length} × 6-character chunks`;
-  const refs = model.fields.get(1006);
-  $("reference-review").hidden = !refs.children.length;
+  $("body-count").textContent = `${body.length} × ${BODY_CHUNK_SIZE}-character chunks`;
+  const refs = review.choices.filter((choice) => choice.kind === "reference");
+  $("reference-review").hidden = !refs.length;
   $("reference-list").replaceChildren();
-  for (const child of refs.children) {
+  for (const choice of refs) {
     const label = document.createElement("label");
     label.className = "reference-option";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = true;
-    input.onchange = () => {
-      $("references-all").checked = refs.children.every((item) => item.input.checked);
-      invalidate();
-    };
-    child.input = input;
-    choices.push({ kind: "reference", field: refs, child, input });
-    label.append(input, document.createTextNode(child.value));
+    label.append(selectionInput(choice), document.createTextNode(choice.value));
     $("reference-list").append(label);
   }
-  updateCount();
-}
-function updateCount() {
-  const selected = choices.filter((choice) => choice.input.checked).length;
-  $("selection-count").textContent = `${selected} item${selected === 1 ? "" : "s"} selected`;
-}
-function selectedOpenings() {
-  const selected = [],
-    parents = new Set();
-  for (const choice of choices.filter((item) => item.input.checked)) {
-    if (choice.kind === "field") selected.push(choice.field.opening);
-    else {
-      if (!parents.has(choice.field.key)) {
-        selected.push(choice.field.opening);
-        parents.add(choice.field.key);
-      }
-      selected.push(choice.child.opening);
-    }
-  }
-  return selected;
+  update();
 }
 async function load(file) {
+  if (!file) return;
   $("load-error").textContent = "";
-  const statement = new Uint8Array(await file.arrayBuffer());
-  verified = await inspect(statement);
-  if (!verified.receiptVerified) throw new Error("SCITT receipt was not verified");
-  model = await inspectStatement(statement);
-  $("report-subject").textContent = verified.subject || file.name;
-  $("report-txid").textContent = verified.txid;
+  $("review").hidden = true;
+  $("import-view").hidden = false;
+  const loaded = await review.load(async () => {
+    const statement = new Uint8Array(await file.arrayBuffer());
+    const verified = await inspect(statement);
+    if (!verified.receiptVerified) throw new Error("SCITT receipt was not verified");
+    return { report: await inspectStatement(statement), verified };
+  });
+  if (!loaded) {
+    if (!review.report) $("load-error").textContent = review.error;
+    return;
+  }
+  $("report-subject").textContent = review.verified.subject || file.name;
+  $("report-txid").textContent = review.verified.txid;
   render();
   $("import-view").hidden = true;
   $("review").hidden = false;
@@ -193,54 +175,42 @@ $("drop-zone").ondrop = (event) => {
 };
 $("drop-zone").ondragover = (event) => event.preventDefault();
 $("select-all").onclick = () => {
-  for (const choice of choices) if (!choice.input.disabled) choice.input.checked = true;
-  $("body-all").checked = $("references-all").checked = true;
-  invalidate();
+  review.selectAll(true);
+  update();
 };
 $("clear-all").onclick = () => {
-  for (const choice of choices) choice.input.checked = false;
-  $("body-all").checked = $("references-all").checked = false;
-  invalidate();
+  review.selectAll(false);
+  update();
 };
 for (const [master, kind] of [
   ["body-all", "body"],
   ["references-all", "reference"],
 ])
   $(master).onchange = (event) => {
-    for (const choice of choices.filter((item) => item.kind === kind))
-      choice.input.checked = event.target.checked;
-    invalidate();
+    review.selectAll(event.target.checked, kind);
+    update();
   };
-$("audience").oninput = invalidate;
+$("audience").oninput = () => {
+  review.setAudience($("audience").value);
+  update();
+};
 $("sign").onclick = async () => {
-  try {
-    $("sign").disabled = true;
-    $("export").disabled = true;
-    $("kbt-size").textContent = "Signing";
-    $("sign-error").textContent = "";
-    status("working", "Signing disclosure", "Creating Key Binding Token");
-    const audience = $("audience").value;
-    kbt = await sign(model.statement, selectedOpenings(), audience);
-    status("success", "Disclosure signed", `Verified against ${verified.txid}`);
-    $("kbt-size").textContent = `${kbt.length.toLocaleString()} B`;
-    $("export").disabled = false;
-  } catch (error) {
-    kbt = undefined;
-    $("kbt-size").textContent = "Not signed";
-    $("sign-error").textContent = error.message;
-    status("error", "Signing failed", "No token was created");
-  } finally {
-    $("sign").disabled = false;
-  }
+  const signing = review.sign(sign);
+  update();
+  await signing;
+  update();
 };
 $("export").onclick = () => {
-  const url = URL.createObjectURL(new Blob([kbt], { type: "application/kb+cwt" })),
+  if (!review.canExport) return;
+  const url = URL.createObjectURL(new Blob([review.token], { type: "application/kb+cwt" })),
     link = document.createElement("a");
   link.href = url;
-  link.download = `disclosure-${verified.txid}.kbt.cose`;
+  link.download = `disclosure-${review.verified.txid}.kbt.cose`;
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 };
+review.setAudience($("audience").value);
+update();
 lucide.createIcons();

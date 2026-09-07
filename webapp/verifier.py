@@ -9,8 +9,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .crypto import unb64, verify_bundle
+from .crypto import unb64
 from .http import CoseBody, msrc_public, receipt_trust
+from .verification import verify_bundle
 
 ROOT = Path(__file__).parent
 MSRC_URL = os.getenv("MSRC_URL", "http://127.0.0.1:8091")

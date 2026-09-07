@@ -17,7 +17,7 @@ from .crypto import (
     public_jwk,
     public_key_from_jwk,
     unb64,
-    verify_issuer,
+    verify_statement,
     with_uhdr,
 )
 from .http import CoseBody, msrc_public
@@ -57,7 +57,7 @@ def register(
         if parts(token)[1]:
             raise ValueError("SCITT only accepts the fully redacted envelope")
         public = msrc_public(MSRC_URL)
-        verify_issuer(
+        verify_statement(
             token,
             x509.load_der_x509_certificate(unb64(public["ca"])),
             public["issuer"],

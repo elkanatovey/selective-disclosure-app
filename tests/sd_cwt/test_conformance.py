@@ -75,6 +75,18 @@ def test_kbt_verifies_issuer_signature_once(signer, holder):
     assert result.claims.disclosed == {501: "secret"}
 
 
+def test_kbt_rejects_verification_from_another_statement(signer, holder):
+    token, disclosures = sd_cwt.issue({1: "iss", 501: "secret"}, [(501,)], signer, cnf=holder)
+    other, _ = sd_cwt.issue({1: "iss", 501: "other"}, [(501,)], signer, cnf=holder)
+    presentation = sd_cwt.ParsedKBT.decode(
+        sd_cwt.kbt_sign(token, disclosures, holder, aud=AUD, iat=1725244237)
+    )
+    with pytest.raises(ValueError, match="different statement"):
+        presentation.verify(sd_cwt.verify(other, signer), expected_aud=AUD)
+    verified = sd_cwt.verify(presentation.statement, signer)
+    assert presentation.verify(verified, expected_aud=AUD).claims.disclosed == {501: "secret"}
+
+
 def test_kbt_rejects_wrong_holder_key(signer, holder):
     """A KBT signed by a key other than the cnf key MUST fail."""
     claims = {1: "iss", 2: "sub", 501: "RCE"}
@@ -198,6 +210,37 @@ def test_conformant_token_still_validates(signer, holder):
     presented = sd_cwt.present(token, discs)
     out = sd_cwt.validate(presented, signer)
     assert out.disclosed[501] == "RCE"
+
+
+def test_parsed_token_still_requires_signature_verification(signer):
+    token, _ = sd_cwt.issue({1: "iss", 501: "secret"}, [], signer)
+    value = list(cbor2.loads(token).value)
+    value[2] = cbor2.dumps({1: "iss", 501: "changed"})
+    parsed = sd_cwt.core.ParsedToken.decode(cbor2.dumps(CBORTag(18, value)))
+    assert parsed.payload[501] == "changed"
+    with pytest.raises(ValueError, match="signature verification failed"):
+        sd_cwt.verify(parsed, signer)
+
+
+def test_validate_reuses_parsed_token(signer, holder):
+    token, disclosures = sd_cwt.issue({1: "iss", 501: "secret"}, [(501,)], signer, cnf=holder)
+    presented = sd_cwt.present(token, disclosures)
+    with patch.object(
+        sd_cwt.core.ParsedToken, "decode", wraps=sd_cwt.core.ParsedToken.decode
+    ) as decode:
+        result = sd_cwt.validate(presented, signer)
+    decode.assert_called_once()
+    assert result.disclosed == {501: "secret"}
+
+
+def test_parsed_views_cannot_change_the_claims_being_verified(signer, holder):
+    token, _ = sd_cwt.issue({1: "iss", 501: {"nested": "original"}}, [], signer, cnf=holder)
+    parsed = sd_cwt.ParsedToken.decode(token)
+    parsed.payload[501]["nested"] = "changed"
+    parsed.protected[16] = 0
+    verified = sd_cwt.verify(parsed, signer)
+    assert verified.payload[501] == {"nested": "original"}
+    assert verified.protected[16] == 293
 
 
 # --- Step 4: SD-CWT audience (draft-08 s9 step 9) --------------------------

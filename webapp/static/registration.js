@@ -1,4 +1,4 @@
-import { b64 } from "./sdcwt.js";
+import { b64 } from "./cbor.js";
 
 async function responseError(response) {
   const fallback = response.statusText || `HTTP ${response.status}`;
